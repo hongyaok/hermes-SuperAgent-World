@@ -1,0 +1,131 @@
+Work in C:\Users\hongy\Desktop\hermes-superagent.
+
+Change Superagent’s desktop experience from a conventional chat dashboard into “Superagent Towns”: a pixel-art town that visualizes real router and worker sessions. Implement a working vertical slice, not a static mockup or design proposal.
+
+ASSET SOURCE
+
+Use https://github.com/cayden970207/eliza-town as the source for sprites and visual assets.
+
+Useful candidates include public/assets/characters/, public/assets/spritesheets/, magecity.png, gentle-obj.png, rpg-tileset.png, and 32x32folk.png. Select only the assets needed for houses, terrain, decorations, and people.
+
+Vendor the selected assets locally. Do not hotlink GitHub, import Eliza Town’s application, adopt Convex/ElizaOS, or copy its architecture. Verify third-party asset licenses individually—the repository’s MIT license does not automatically cover every artwork—and include the required copyright and attribution notices.
+
+CURRENT ARCHITECTURE
+
+First inspect README.md, DESIGN.md, desktop/plugin.js, dashboard/plugin_api.py, sa_chats.py, sa_runner.py, sa_cli.py, and the relevant tests.
+
+Important constraints:
+
+- The desktop UI is uncompiled ESM using jsx()/jsxs(), not JSX syntax.
+- Only @hermes/plugin-sdk, react, and react/jsx-runtime may be imported.
+- desktop/plugin.js currently renders a session rail, central transcript, and live-worker strip.
+- Chat sessions are currently flat S-… records with no parent/root relationship.
+- Chat workers run through sa_runner.Runner as headless Hermes subprocesses.
+- Preserve the existing FastAPI, SQLite, runner, review, GitHub, ticket, and CLI architecture.
+- There is uncommitted pin/unpin work in the checkout. Preserve and integrate it; never reset, discard, or overwrite it.
+
+PRODUCT BEHAVIOR
+
+1. One root Superagent session represents one town.
+2. Every town begins with:
+   - One “Router” house in the center.
+   - One pixel-art person associated with the router.
+3. When that router spawns a worker session:
+   - Create one new house for that exact worker session.
+   - Animate the house being constructed or appearing.
+   - Add one new person associated with that worker.
+4. Support multiple simultaneous worker sessions, each with its own house and person.
+5. Clicking the Router house opens the root session’s chat.
+6. Clicking a worker house opens that worker session’s chat in a popup.
+7. Users can switch towns using a visible town selector and previous/next controls. Switching towns changes only the displayed town; it must not stop or modify any session.
+8. Provide a clear “New town” action that creates a real root/router session.
+9. Preserve live session states visually. At minimum, distinguish queued, running, review, failed, and cancelled states using badges or small indicators rather than relying only on animation.
+
+SESSION MODEL
+
+Define “one session per town” as one ROOT session per town. Workers belong to that town and must not appear as separate towns.
+
+Add an explicit, additive parent relationship to the chat store, such as parent_session_id:
+
+- NULL means a root/router session and therefore a town.
+- A root session ID means a worker belonging to that town.
+- Treat existing parentless sessions as root towns during migration.
+- Do not infer relationships from creation time, ordering, titles, or repository paths.
+- Initially restrict the hierarchy to one level: workers cannot create more towns or nested worker trees.
+- Reject unknown parents, invalid parent types, cycles, and malformed identifiers.
+- Keep existing /chats consumers compatible. Add fields or a read model such as /towns rather than breaking the current API.
+
+Implement the smallest safe API/runner/tool support needed for a router session to spawn REAL child worker sessions. Reuse sa_runner.Runner and the existing worker limits, containment checks, cancellation, timeout, transcript, and review behavior. Do not build a second execution engine.
+
+A decorative “Add house” button or randomly generated workers is not an acceptable substitute for actual worker creation.
+
+DESKTOP EXPERIENCE
+
+Make the town the primary page content instead of adding it as another card beside the existing chat interface.
+
+- Replace the large session-rail/transcript layout with the selected town.
+- Move town/session navigation into a compact town switcher.
+- Reuse the existing Transcript, Composer, ChatHeader, mutations, and query hooks inside an accessible chat dialog rather than duplicating their behavior.
+- The dialog must support the existing transcript, follow-ups, stop, retry, model display, and relevant review/export actions.
+- Closing the dialog must not stop the worker.
+- Escape closes the dialog; focus is trapped while open and restored to the house afterward.
+- Clicking a different house must never show a stale transcript from the previously selected session.
+- Preserve Settings, GitHub, Usage, completion notifications, ticket attention, and the status-bar chip.
+- Keep rename/archive/delete/search/pin functionality available through suitable town or house controls rather than silently removing it.
+
+Use deterministic house positions or allocated slots so houses do not jump around when polling refreshes. House and avatar identity must be based on stable session IDs.
+
+Animate construction only when a new worker ID appears after the initial town snapshot. Do not replay every construction animation on each poll, town switch, or page mount. Respect reduced-motion preferences and clean up every animation timer or requestAnimationFrame handle.
+
+RENDERING AND ASSETS
+
+Prefer a straightforward DOM/CSS or native 2D-canvas renderer. Do not add PixiJS, a game engine, a bundler, or another third-party dependency.
+
+Use pixelated rendering for sprites. If using canvas, handle container resizing with ResizeObserver and account for device pixel ratio.
+
+First determine the supported way for this packaged Hermes desktop plugin to ship static assets, and verify that the assets load through the INSTALLED plugin. If no static-asset mechanism exists, use a small read-only backend asset route with an explicit allowlist, correct MIME types, and no arbitrary file-path serving. Do not embed large spritesheets as base64 in plugin.js.
+
+Keep the UI responsive at approximately 1024px and provide accessible button labels and non-animated status text alongside the visual scene.
+
+NON-NEGOTIABLE SAFETY AND COMPATIBILITY
+
+- No mock sessions or fabricated worker activity.
+- No automatic commits, pushes, merges, PR creation, or PR comments.
+- Preserve repository containment, prompt limits, redaction, worker caps, watchdogs, and observe-first GitHub behavior.
+- Do not use ctx.subagent_lifecycle from REST handlers.
+- Do not poll faster than the existing chat board merely to animate sprites.
+- Keep code approachable and avoid unnecessary abstractions.
+- Update README.md, DESIGN.md, and relevant manifest descriptions. Do not add separate handover or design-note documents.
+
+ACCEPTANCE CRITERIA
+
+Demonstrate all of the following with real session data:
+
+1. Existing parentless sessions appear as individual towns with one central Router house and one person.
+2. Creating a new root session creates a new selectable town.
+3. Spawning two or more workers from one router creates exactly one house and one person per worker.
+4. Worker houses do not appear as additional towns.
+5. Switching towns preserves all worker state and displays the correct houses.
+6. Every house opens the correct session’s transcript and composer.
+7. A follow-up sent from a house popup reaches that same session.
+8. House positions remain stable across polling and town switches.
+9. Construction animations run once for genuinely new workers, not on every refresh.
+10. Reloading the desktop plugin preserves the selected town and does not duplicate houses or people.
+11. Archived, deleted, failed, and unknown/orphaned sessions behave intentionally and do not produce phantom buildings.
+
+VERIFICATION
+
+Add focused backend tests for migration, parent validation, worker-to-town grouping, spawning, and API compatibility. Add UI/render-probe coverage for town switching, house selection, popup wiring, and one-shot spawn animations where practical.
+
+Run and report the actual results of:
+
+    python -m pytest -q
+    node --check desktop/plugin.js
+    hermes plugins validate .
+    hermes plugins doctor --ci .
+
+Also exercise the installed desktop UI: create at least two towns, spawn multiple workers in one town, switch towns, open both router and worker chats, and send a real follow-up. Verify that the packaged sprites load without remote URLs or console errors.
+
+Do not restart the gateway from inside a chat session that the gateway is hosting. If a restart is required, report that clearly.
+
+Finish with a concise report of the architecture changes, files changed, exact test results, real desktop verification performed, and anything still unverified. Do not commit, push, or merge.
