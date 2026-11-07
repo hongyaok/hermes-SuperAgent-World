@@ -12,8 +12,10 @@ database. The tables here are additive; nothing in the ticket schema changes.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import time
+from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -38,6 +40,8 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     duration_ms       INTEGER,
     error             TEXT,
     last_event        TEXT,
+    parent_session_id TEXT,
+    town_slot         INTEGER,
     created_at        REAL NOT NULL,
     updated_at        REAL NOT NULL,
     started_at        REAL,
@@ -142,6 +146,21 @@ SEARCH_SNIPPET_CHARS = 160
 # A transcript export is for humans and diff review, not an archive: cap it so
 # one runaway chat cannot produce a multi-megabyte download.
 MAX_EXPORT_CHARS = 400_000
+
+# Session ids are allocated by this module (`S-0001`). The same shape is
+# required of a parent reference: a request may not smuggle in an arbitrary
+# string as a relationship. The bound keeps a pathological id out of indexes.
+_SESSION_ID = re.compile(r"^S-\d{4,12}$")
+# One level only: a root may own workers, a worker owns nothing. The cap is a
+# containment guard, not a UI target; the Runner's semaphore still decides how
+# many actually run at once.
+MAX_TOWN_WORKERS = 12
+
+
+def is_session_id(value: object) -> bool:
+    """True for a well-formed chat id (`S-0001`, `S-10000`)."""
+    return isinstance(value, str) and bool(_SESSION_ID.match(value))
+
 
 
 def derive_title(prompt: str, limit: int = MAX_TITLE_CHARS) -> str:
@@ -348,21 +367,53 @@ class ChatStore:
         """Bring a pre-existing chat_sessions table up to this schema.
 
         ``CREATE TABLE IF NOT EXISTS`` leaves an old table untouched, so a
-        column added after the first install (``archived_at``) has to be
-        altered in place. The archived index is created here rather than in
-        :data:`SCHEMA`: it names the new column, and ``executescript`` would
-        fail on an old table before the ALTER had a chance to run. Idempotent,
-        and every open calls it, so an upgrade is just "open the store once".
+        column added after the first install has to be altered in place. This
+        is idempotent, and every open calls it, so an upgrade is just "open the
+        store once".
+
+        The town hierarchy is additive: every row that predates
+        ``parent_session_id`` is NULL and therefore a root town, which is
+        exactly the old behaviour. Existing children (there are none before
+        this release) get a stable ``town_slot`` so house positions never move
+        just because a migration ran.
         """
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(chat_sessions)")}
         if "archived_at" not in columns:
             conn.execute("ALTER TABLE chat_sessions ADD COLUMN archived_at REAL")
         if "pinned_at" not in columns:
             conn.execute("ALTER TABLE chat_sessions ADD COLUMN pinned_at REAL")
+        if "parent_session_id" not in columns:
+            conn.execute("ALTER TABLE chat_sessions ADD COLUMN parent_session_id TEXT")
+        if "town_slot" not in columns:
+            conn.execute("ALTER TABLE chat_sessions ADD COLUMN town_slot INTEGER")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS chat_sessions_archived"
             " ON chat_sessions(archived_at)"
         )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS chat_sessions_parent"
+            " ON chat_sessions(parent_session_id)"
+        )
+
+        existing = {
+            row["parent_session_id"]: int(row["slot"] or -1)
+            for row in conn.execute(
+                "SELECT parent_session_id, MAX(town_slot) AS slot FROM chat_sessions"
+                " WHERE parent_session_id IS NOT NULL GROUP BY parent_session_id"
+            )
+        }
+        pending = conn.execute(
+            "SELECT id, parent_session_id FROM chat_sessions"
+            " WHERE parent_session_id IS NOT NULL AND town_slot IS NULL"
+            " ORDER BY parent_session_id, created_at, id"
+        ).fetchall()
+        for row in pending:
+            parent = row["parent_session_id"]
+            slot = existing.get(parent, -1) + 1
+            existing[parent] = slot
+            conn.execute(
+                "UPDATE chat_sessions SET town_slot = ? WHERE id = ?", (slot, row["id"])
+            )
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -402,9 +453,28 @@ class ChatStore:
         pr_number: Optional[int] = None,
         pr_url: Optional[str] = None,
         status: str = QUEUED,
+        parent_session_id: Optional[str] = None,
     ) -> dict:
+        """Create a chat session, optionally as a worker under a root town.
+
+        ``parent_session_id`` is the only way a hierarchy is formed: there is
+        no inference from titles, timestamps or repositories. NULL is a root
+        (a town); a root id is a worker. Unknown parents, malformed ids,
+        archived parents and second-level nesting are rejected here so every
+        caller — REST, CLI, or the ``superagent_spawn`` tool — shares one rule
+        set. The worker slot is allocated inside the same transaction as the
+        insert, so two simultaneous spawns cannot land on one plot.
+        """
         now = time.time()
+        if parent_session_id is not None and not isinstance(parent_session_id, str):
+            raise ValueError("parent_session_id must be a string or null")
+        if parent_session_id is not None and not str(parent_session_id).strip():
+            raise ValueError("parent_session_id must be a non-empty string or null")
+        parent = (parent_session_id or "").strip() if parent_session_id is not None else ""
+        if parent and not is_session_id(parent):
+            raise ValueError(f"malformed parent session id: {parent!r}")
         session_id = self.new_session_id()
+        slot: Optional[int] = None
         row = {
             "id": session_id,
             "title": _clip(title.strip() or derive_title(prompt), MAX_TITLE_CHARS),
@@ -423,23 +493,64 @@ class ChatStore:
             "duration_ms": None,
             "error": None,
             "last_event": None,
+            "parent_session_id": parent or None,
+            "town_slot": None,
             "created_at": now,
             "updated_at": now,
             "started_at": None,
             "finished_at": None,
         }
         with self._connect() as conn:
+            if parent:
+                conn.execute("BEGIN IMMEDIATE")
+                parent_row = conn.execute(
+                    "SELECT id, parent_session_id, archived_at FROM chat_sessions WHERE id = ?",
+                    (parent,),
+                ).fetchone()
+                if parent_row is None:
+                    raise ValueError(f"unknown parent session {parent}")
+                if parent_row["parent_session_id"] is not None:
+                    raise ValueError(
+                        f"session {parent} is a worker; workers cannot spawn workers"
+                    )
+                if parent_row["archived_at"] is not None:
+                    raise ValueError(f"parent session {parent} is archived")
+                children = int(
+                    conn.execute(
+                        "SELECT COUNT(*) AS n FROM chat_sessions WHERE parent_session_id = ?",
+                        (parent,),
+                    ).fetchone()["n"]
+                )
+                if children >= MAX_TOWN_WORKERS:
+                    raise ValueError(
+                        f"town {parent} already has {children} workers"
+                        f" (max {MAX_TOWN_WORKERS})"
+                    )
+                slot = int(
+                    conn.execute(
+                        "SELECT COALESCE(MAX(town_slot), -1) + 1 AS slot"
+                        " FROM chat_sessions WHERE parent_session_id = ?",
+                        (parent,),
+                    ).fetchone()["slot"]
+                )
+                row["town_slot"] = slot
             conn.execute(
                 """INSERT INTO chat_sessions
                    (id, title, prompt, status, model, provider, repo, hermes_session_id,
                     source, github_repo, pr_number, pr_url, pid, tokens, duration_ms, error,
-                    last_event, created_at, updated_at, started_at, finished_at)
-                   VALUES (:id, :title, :prompt, :status, :model, :provider, :repo, :hermes_session_id,
-                           :source, :github_repo, :pr_number, :pr_url, :pid, :tokens, :duration_ms, :error,
-                           :last_event, :created_at, :updated_at, :started_at, :finished_at)""",
+                    last_event, parent_session_id, town_slot, created_at, updated_at,
+                    started_at, finished_at)
+                   VALUES (:id, :title, :prompt, :status, :model, :provider, :repo,
+                           :hermes_session_id, :source, :github_repo, :pr_number, :pr_url,
+                           :pid, :tokens, :duration_ms, :error, :last_event,
+                           :parent_session_id, :town_slot, :created_at, :updated_at,
+                           :started_at, :finished_at)""",
                 row,
             )
-        self.add_event(session_id, "created", f"{row['source']} chat -> {status}")
+        detail = f"{row['source']} chat -> {status}"
+        if parent:
+            detail += f" under {parent} (slot {slot})"
+        self.add_event(session_id, "created", detail)
         return self.get_session(session_id, message_limit=0)  # type: ignore[return-value]
 
     def update_session(self, session_id: str, **fields: Any) -> Optional[dict]:
@@ -608,6 +719,114 @@ class ChatStore:
             "sessions": sessions,
             "counts": counts,
             "running": counts.get(RUNNING, 0),
+            "archived_count": archived_count,
+        }
+
+    def list_towns(self, limit: int = 200, archived: str = "hide") -> dict:
+        """Root sessions as towns, each with the workers that belong to it.
+
+        The hierarchy is one level: a root has ``parent_session_id IS NULL``
+        and every worker points at that root. A worker is never returned as a
+        town, even when its parent was deleted — such rows are reported under
+        ``orphaned`` instead of becoming phantom buildings.
+
+        Ordering is pinned roots first, then newest activity, the same rule the
+        chat board uses. Worker rows carry their allocated ``town_slot`` (a
+        stable plot number assigned at creation), so the desktop can draw the
+        same house in the same place across polls and town switches.
+        """
+        limit = max(1, int(limit))
+        mode = str(archived or "hide").strip().lower()
+        if mode not in ARCHIVED_MODES:
+            raise ValueError(
+                f"archived must be one of {', '.join(ARCHIVED_MODES)} (got {archived!r})"
+            )
+        root_clauses = ["s.parent_session_id IS NULL"]
+        if mode == "hide":
+            root_clauses.append("s.archived_at IS NULL")
+        elif mode == "only":
+            root_clauses.append("s.archived_at IS NOT NULL")
+        worker_clauses = []
+        if mode == "hide":
+            worker_clauses.append("s.archived_at IS NULL")
+        elif mode == "only":
+            worker_clauses.append("s.archived_at IS NOT NULL")
+        with self._connect() as conn:
+            roots = [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT s.* FROM chat_sessions s WHERE "
+                    + " AND ".join(root_clauses)
+                    + " ORDER BY (s.pinned_at IS NOT NULL) DESC, s.updated_at DESC LIMIT ?",
+                    (limit,),
+                )
+            ]
+            root_ids = [row["id"] for row in roots]
+            workers: dict[str, list[dict]] = {root_id: [] for root_id in root_ids}
+            if root_ids:
+                placeholders = ", ".join("?" for _ in root_ids)
+                clause = f" WHERE s.parent_session_id IN ({placeholders})"
+                if worker_clauses:
+                    clause += " AND " + " AND ".join(worker_clauses)
+                for row in conn.execute(
+                    "SELECT s.* FROM chat_sessions s" + clause
+                    + " ORDER BY s.town_slot, s.created_at, s.id",
+                    root_ids,
+                ):
+                    workers.setdefault(row["parent_session_id"], []).append(dict(row))
+            orphaned = [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT s.id, s.parent_session_id, s.title, s.status, s.updated_at,"
+                    " s.archived_at FROM chat_sessions s"
+                    " LEFT JOIN chat_sessions p ON p.id = s.parent_session_id"
+                    " WHERE s.parent_session_id IS NOT NULL AND p.id IS NULL"
+                    " ORDER BY s.updated_at DESC LIMIT 20"
+                )
+            ]
+            orphaned_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) AS n FROM chat_sessions s"
+                    " LEFT JOIN chat_sessions p ON p.id = s.parent_session_id"
+                    " WHERE s.parent_session_id IS NOT NULL AND p.id IS NULL"
+                ).fetchone()["n"]
+            )
+            archived_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) AS n FROM chat_sessions"
+                    " WHERE parent_session_id IS NULL AND archived_at IS NOT NULL"
+                ).fetchone()["n"]
+            )
+
+        now = time.time()
+        counts: Counter[str] = Counter()
+        for town in roots:
+            used: set[int] = set()
+            next_slot = 0
+            town_workers = workers.get(town["id"], [])
+            for worker in town_workers:
+                slot = worker.get("town_slot")
+                if slot is None or int(slot) in used:
+                    while next_slot in used:
+                        next_slot += 1
+                    slot = next_slot
+                slot = int(slot)
+                used.add(slot)
+                worker["town_slot"] = slot
+                worker["elapsed_seconds"] = _elapsed_seconds(worker, now)
+                counts[worker["status"]] += 1
+            town["workers"] = town_workers
+            town["worker_count"] = len(town_workers)
+            town["elapsed_seconds"] = _elapsed_seconds(town, now)
+            counts[town["status"]] += 1
+        return {
+            "towns": roots,
+            "counts": dict(counts),
+            "running": counts.get(RUNNING, 0),
+            "town_count": len(roots),
+            "worker_count": sum(town["worker_count"] for town in roots),
+            "orphaned": orphaned,
+            "orphaned_count": orphaned_count,
             "archived_count": archived_count,
         }
 

@@ -36,6 +36,7 @@ def register(ctx: Any) -> None:
         (sa_schemas.TICK, sa_tools.superagent_tick),
         (sa_schemas.STATUS, sa_tools.superagent_status),
         (sa_schemas.RUN, sa_tools.superagent_run),
+        (sa_schemas.SPAWN, sa_tools.superagent_spawn),
     ):
         ctx.register_tool(
             name=schema["name"],

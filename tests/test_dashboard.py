@@ -902,9 +902,9 @@ def test_list_chats_treats_an_empty_archived_mode_as_hide(chat_api):
 
 def test_health_reports_the_api_shape(api):
     body = api.health()
-    assert body["api_version"] == 2
+    assert body["api_version"] == 3
     assert body["features"] == [
-        "chats", "settings", "github", "diff", "session_management",
+        "chats", "settings", "github", "diff", "session_management", "towns",
     ]
     assert isinstance(body["pid"], int) and body["pid"] > 0
     assert isinstance(body["started_at"], float)

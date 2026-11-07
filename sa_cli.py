@@ -477,6 +477,7 @@ def _get_runner(store: Any) -> Any:
                 hermes_bin=os.environ.get("SUPERAGENT_HERMES_BIN") or None,
                 max_workers=_env_int("SUPERAGENT_MAX_WORKERS", 2),
                 toolsets=tuple(_env_list("SUPERAGENT_WORKER_TOOLSETS", ["file", "terminal"])),
+                router_toolset="superagent",
                 yolo=_env_bool("SUPERAGENT_WORKER_YOLO", True),
                 model=_env("SUPERAGENT_DEFAULT_MODEL"),
                 provider=_env("SUPERAGENT_DEFAULT_PROVIDER"),
