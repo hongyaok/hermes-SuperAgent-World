@@ -164,13 +164,35 @@ def parse_event(line: str) -> Optional[dict]:
     return data
 
 
-def build_prompt(request: str, *, repo: str, session_id: str, source: str = "desktop") -> str:
-    """Instructions for the first turn of a session (resume turns send raw text)."""
+def build_prompt(
+    request: str,
+    *,
+    repo: str,
+    session_id: str,
+    source: str = "desktop",
+    can_spawn: bool = False,
+) -> str:
+    """Instructions for the first turn of a session (resume turns send raw text).
+
+    A root session is the town's Router. When it is launched with the plugin's
+    toolset, it gets one extra, explicit affordance: spawn real workers with
+    ``superagent_spawn``. Workers never get this section, so the prompt and the
+    toolset agree that the hierarchy is one level.
+    """
+    town = ""
+    if can_spawn:
+        town = f"""
+Town mode:
+- You are the Router for this town. Split the request into independent jobs when that is the honest reading; do not invent parallel work.
+- For each job, call the superagent_spawn tool with parent_session_id="{session_id}" and a self-contained prompt. Each call creates one real worker session, one house, and one person.
+- Spawn at most {sa_chats.MAX_TOWN_WORKERS} workers. Workers cannot spawn more workers.
+- Do not do the delegated jobs yourself. Finish with a short summary of what you delegated and why.
+"""
     return f"""You are one Superagent worker session ({session_id}), started from {source}.
 
 Request:
 {(request or "").strip()}
-
+{town}
 Rules:
 - Work only inside the repository: {repo or "the current working directory"}. Do not touch files outside it.
 - Make the smallest change that satisfies the request; follow the repository's existing style.
@@ -340,6 +362,7 @@ class Runner:
         hermes_bin: Optional[str] = None,
         max_workers: int = 2,
         toolsets: tuple[str, ...] = ("file", "terminal"),
+        router_toolset: str = "",
         yolo: bool = True,
         model: str = "",
         provider: str = "",
@@ -357,6 +380,10 @@ class Runner:
         self.hermes_bin = hermes_bin or ""
         self.max_workers = max(1, int(max_workers or 1))
         self.toolsets = tuple(toolsets or ("file", "terminal"))
+        # Only root sessions get the plugin toolset; that is what makes a
+        # router able to call superagent_spawn without giving every worker the
+        # same power. Empty means "this Runner never spawns towns" (tests).
+        self.router_toolset = (router_toolset or "").strip()
         self.yolo = bool(yolo)
         self.model = model or ""
         self.provider = provider or ""
@@ -421,6 +448,11 @@ class Runner:
         )
 
         session = self.chat.get_session(session_id, message_limit=0) or {}
+        is_router = session.get("parent_session_id") is None
+        can_spawn = bool(is_router and self.router_toolset)
+        toolsets = self.toolsets
+        if can_spawn and self.router_toolset not in toolsets:
+            toolsets = toolsets + (self.router_toolset,)
         resume = (resume_session_id or "").strip() or None
         if resume:
             worker_prompt = prompt
@@ -430,6 +462,7 @@ class Runner:
                 repo=repo_path,
                 session_id=session_id,
                 source=session.get("source") or "desktop",
+                can_spawn=can_spawn,
             )
 
         fields: dict[str, Any] = {"status": sa_chats.QUEUED, "error": None, "pid": None}
@@ -453,6 +486,7 @@ class Runner:
                 "model": model or self.model,
                 "provider": provider or self.provider,
                 "repo": repo_path,
+                "toolsets": toolsets,
             },
             name=f"superagent-{session_id}",
             daemon=True,
@@ -469,6 +503,7 @@ class Runner:
                 model=model or self.model,
                 provider=provider or self.provider,
                 repo=repo_path,
+                toolsets=toolsets,
             )
             return {
                 "session_id": session_id,
@@ -595,6 +630,7 @@ class Runner:
         model: str,
         provider: str,
         repo: str,
+        toolsets: tuple[str, ...],
     ) -> None:
         with self._sem:
             if self._take_cancelled(session_id):
@@ -610,6 +646,7 @@ class Runner:
                     model=model,
                     provider=provider,
                     repo=repo,
+                    toolsets=toolsets,
                 )
             except Exception as exc:  # never leak a dead thread
                 self._finish(session_id, sa_chats.FAILED, error=f"runner error: {exc}")
@@ -624,9 +661,11 @@ class Runner:
         model: str,
         provider: str,
         repo: str,
+        toolsets: tuple[str, ...],
     ) -> None:
         argv = self._build_argv(
-            binary, prompt, resume_session_id=resume, model=model, provider=provider, repo=repo
+            binary, prompt, resume_session_id=resume, model=model, provider=provider,
+            repo=repo, toolsets=toolsets,
         )
         self._add_event(session_id, "started", " ".join(argv))
 
@@ -791,6 +830,7 @@ class Runner:
         model: str = "",
         provider: str = "",
         repo: str = "",
+        toolsets: Optional[tuple[str, ...]] = None,
     ) -> list[str]:
         argv = [
             binary,
@@ -803,7 +843,7 @@ class Runner:
             "--source",
             self.source_tag,
             "-t",
-            ",".join(self.toolsets),
+            ",".join(toolsets or self.toolsets),
         ]
         if self.yolo:
             argv.append("--yolo")

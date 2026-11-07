@@ -80,7 +80,10 @@ def test_register_wires_tools_commands_blueprint_skill_and_docs(sa):
     ctx = RecordingCtx()
     sa.register(ctx)
 
-    assert set(ctx.tools) == {"superagent_ask", "superagent_tick", "superagent_status", "superagent_run"}
+    assert set(ctx.tools) == {
+        "superagent_ask", "superagent_tick", "superagent_status",
+        "superagent_run", "superagent_spawn",
+    }
     assert all(toolset == "superagent" for toolset, _, _ in ctx.tools.values())
     assert "superagent" in ctx.commands
     assert "superagent" in ctx.cli_commands

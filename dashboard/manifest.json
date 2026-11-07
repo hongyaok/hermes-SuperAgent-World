@@ -1,1 +1,1 @@
-{"api": "plugin_api.py", "description": "Chat sessions with a live worker grid, model presets, GitHub PR watch, and diff/comment review — only what needs a human.", "icon": "Bot", "label": "Superagent", "name": "superagent", "version": "0.4.0"}
+{"api": "plugin_api.py", "description": "Superagent Towns: real router and worker sessions as a pixel-art town, each session a house with its own transcript, composer and live status.", "icon": "Bot", "label": "Superagent", "name": "superagent", "version": "0.5.0"}

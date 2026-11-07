@@ -3,6 +3,42 @@
 All notable changes to the `superagent` Hermes plugin. Plain bullets, newest
 first.
 
+## 0.5.0 — 2026-11-07
+
+Superagent Towns: a root chat is a town, a spawned worker is a house, and the
+desktop page draws the real session hierarchy instead of a session rail.
+
+### Added
+
+- **Town hierarchy.** `chat_sessions` gains an additive `parent_session_id`
+  and a stable `town_slot`. NULL is a root town; a root id is one worker. The
+  migration treats every pre-existing parentless session as a root and never
+  infers a relationship from time, title or repository.
+- **`GET /towns`.** A read-only grouping of roots with their workers, status
+  counts, stable plot numbers and an `orphaned` report for workers whose parent
+  was deleted. `/chats` keeps its flat contract.
+- **`superagent_spawn`.** A root/router chat can create and launch a real
+  headless worker through the shared `sa_runner.Runner`, inheriting the router's
+  model, provider and repository. One level only, with the existing worker cap.
+- **Town desktop page.** A grass-and-houses scene whose router house sits in
+  the centre and one worker house/person appears per child session, with
+  text status badges, a town switcher, a new-town composer and a chat dialog
+  that reuses the existing transcript and composer.
+
+### Changed
+
+- **Root chats are routers.** A root session is launched with the plugin's
+  toolset so it can call `superagent_spawn`; worker sessions keep the narrow
+  `file,terminal` toolsets and cannot spawn more workers.
+- **One Runner per process.** The dashboard and the spawn tool now share
+  `sa_runtime.shared_runner`, so `max_workers` remains a single semaphore.
+
+### Fixed
+
+- **No phantom towns.** Archived roots hide their town, archived workers hide
+  their house, and a deleted root never promotes its remaining workers into
+  towns; they are reported as orphaned sessions.
+
 ## 0.4.0 — 2026-11-06
 
 The first release that ships the whole surface together: a chat workspace you

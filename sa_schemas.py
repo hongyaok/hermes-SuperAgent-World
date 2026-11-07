@@ -68,3 +68,34 @@ RUN = {
         "required": ["ticket_id"],
     },
 }
+
+SPAWN = {
+    "name": "superagent_spawn",
+    "description": (
+        "Spawn one real Superagent worker session underneath the current router town. Each call "
+        "creates exactly one new chat worker, one new house and one new person. Use one call per "
+        "independent job, with a self-contained prompt; workers cannot spawn more workers. Only a "
+        "root/router session may call this."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "parent_session_id": {
+                "type": "string",
+                "description": "The router session id that owns the town, e.g. S-0001.",
+            },
+            "prompt": {
+                "type": "string",
+                "description": (
+                    "A complete, self-contained task for the worker: what to change, where, and "
+                    "which checks to run. The worker does not see this conversation."
+                ),
+            },
+            "title": {
+                "type": "string",
+                "description": "Optional short label for the house; defaults to the first prompt line.",
+            },
+        },
+        "required": ["parent_session_id", "prompt"],
+    },
+}

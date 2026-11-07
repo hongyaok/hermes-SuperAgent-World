@@ -52,23 +52,34 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 try:  # loaded as part of the plugin package
-    from .. import sa_assessor, sa_chats, sa_diff, sa_github, sa_runner, sa_settings, sa_watcher
+    from .. import (
+        sa_assessor,
+        sa_chats,
+        sa_diff,
+        sa_github,
+        sa_runner,
+        sa_runtime,
+        sa_settings,
+        sa_watcher,
+    )
 except ImportError:  # loaded standalone by the gateway / pytest
     import sa_assessor  # type: ignore[no-redef]
     import sa_chats  # type: ignore[no-redef]
     import sa_diff  # type: ignore[no-redef]
     import sa_github  # type: ignore[no-redef]
     import sa_runner  # type: ignore[no-redef]
+    import sa_runtime  # type: ignore[no-redef]
     import sa_settings  # type: ignore[no-redef]
     import sa_watcher  # type: ignore[no-redef]
 
 router = APIRouter()
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 # Contract generation for the desktop: bumped when a release adds routes the
-# panel feature-detects (v2 = session management: rename/archive/delete).
-API_VERSION = 2
-FEATURES = ("chats", "settings", "github", "diff", "session_management")
+# panel feature-detects (v2 = session management; v3 = towns and worker
+# spawning).
+API_VERSION = 3
+FEATURES = ("chats", "settings", "github", "diff", "session_management", "towns")
 # Module import time: when the gateway loaded this plugin, not the request time.
 STARTED_AT = time.time()
 
@@ -123,10 +134,11 @@ MIN_WORKERS, MAX_WORKERS_SETTING = 1, 8
 MIN_CHAT_TURNS, MAX_CHAT_TURNS = 1, 500
 SETTINGS_STRING_LIMIT = 200
 
-# One Runner per database path, created on first use so repeated requests reuse
-# the same worker threads and semaphore. Tests patch `_get_runner`.
-_RUNNERS: dict[str, Any] = {}
-_RUNNERS_LOCK = threading.Lock()
+# One Runner per database path, owned by sa_runtime so the dashboard and the
+# superagent_spawn tool share one semaphore. Tests patch `_get_runner`; the
+# aliases keep the historical registry names visible to existing tests.
+_RUNNERS = sa_runtime.RUNNERS
+_RUNNERS_LOCK = sa_runtime.LOCK
 # One GitHub watcher per database path (same reasoning); tests patch
 # `_get_watcher`. Kept separate from _RUNNERS so a disconnect can drop the
 # watcher without losing the worker pool.
@@ -347,30 +359,7 @@ def _ensure_ticket_schema(path: Path) -> None:
 
 def _get_runner() -> Any:
     """Lazy Runner singleton keyed by database path (patched in tests)."""
-    path = _db_path()
-    key = str(path)
-    with _RUNNERS_LOCK:
-        runner = _RUNNERS.get(key)
-        if runner is None:
-            settings = sa_settings.load_settings()
-            repo = str(settings.get("repo_path") or "")
-            runner = sa_runner.Runner(
-                _chat_store(),
-                hermes_bin=os.environ.get("SUPERAGENT_HERMES_BIN") or None,
-                max_workers=int(settings.get("max_workers") or 2),
-                toolsets=tuple(_env_list("SUPERAGENT_WORKER_TOOLSETS", ["file", "terminal"])),
-                yolo=bool(settings.get("worker_yolo", True)),
-                model=str(settings.get("default_model") or ""),
-                provider=str(settings.get("default_provider") or ""),
-                repo=repo,
-                repo_root=_runner_root(repo),
-                max_turns=int(settings.get("chat_max_turns") or 120),
-                turn_timeout_seconds=_env_int(
-                    "SUPERAGENT_TURN_TIMEOUT_SECONDS", sa_runner.DEFAULT_TURN_TIMEOUT_SECONDS
-                ),
-            )
-            _RUNNERS[key] = runner
-        return runner
+    return sa_runtime.shared_runner(_chat_store())
 
 
 def _reset_runner() -> None:
@@ -380,9 +369,7 @@ def _reset_runner() -> None:
     next resumed turn) builds a Runner with the saved worker cap, yolo flag,
     model defaults and turn limit.
     """
-    key = str(_db_path())
-    with _RUNNERS_LOCK:
-        _RUNNERS.pop(key, None)
+    sa_runtime.reset_runner(str(_db_path()))
 
 
 def _get_watcher() -> Any:
@@ -926,6 +913,34 @@ def list_chats(
     return {"db_exists": True, **data}
 
 
+@router.get("/towns")
+def list_towns(limit: int = 200, archived: str = "hide") -> dict[str, Any]:
+    """Root sessions as towns, with their workers grouped underneath.
+
+    Additive read model: ``/chats`` keeps its flat newest-first contract, while
+    this endpoint answers the one question the town view asks — which root owns
+    which workers, and which plot each worker was allocated. A worker is never
+    returned as a separate town. Rows whose parent was deleted are reported
+    under ``orphaned`` instead of becoming phantom buildings.
+    """
+    path = _db_path()
+    if not path.is_file():
+        return {
+            "db_exists": False, "towns": [], "counts": {}, "running": 0,
+            "town_count": 0, "worker_count": 0, "orphaned": [],
+            "orphaned_count": 0, "archived_count": 0,
+        }
+    limit = max(1, min(int(limit or 200), 500))
+    mode = str(archived if archived is not None else "hide").strip().lower() or "hide"
+    if mode not in sa_chats.ARCHIVED_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"archived must be one of {', '.join(sa_chats.ARCHIVED_MODES)}",
+        )
+    _reap_turns()
+    return {"db_exists": True, **_chat_store().list_towns(limit=limit, archived=mode)}
+
+
 @router.get("/chats/{session_id}")
 def get_chat(session_id: str) -> dict[str, Any]:
     session_id = _check_session_id(session_id)
@@ -1084,16 +1099,64 @@ def create_chat(body: dict) -> dict[str, Any]:
     title = _scrub(str(data.get("title") or "").strip())
     source = str(data.get("source") or "desktop").strip() or "desktop"
 
+    # An additive relationship, never inferred. A missing/null key is a root;
+    # any other value must be a well-formed id naming an existing root.
+    raw_parent = data.get("parent_session_id")
+    if raw_parent is not None and not isinstance(raw_parent, str):
+        raise HTTPException(status_code=400, detail="parent_session_id must be a string or null")
+    parent = str(raw_parent).strip() if raw_parent is not None else ""
+    if raw_parent is not None and not parent:
+        raise HTTPException(
+            status_code=400, detail="parent_session_id must be a non-empty string or null"
+        )
+    if parent and not sa_chats.is_session_id(parent):
+        raise HTTPException(status_code=400, detail=f"malformed parent session id: {parent!r}")
+    if parent and preset_name:
+        raise HTTPException(
+            status_code=400,
+            detail="a worker inherits its router's model; do not pass a preset",
+        )
+
     store = _chat_store()
-    session = store.create_session(
-        prompt,
-        title=title[:200],
-        model=model[:200],
-        provider=provider[:200],
-        repo=repo[:1000],
-        source=source[:40],
-    )
+    if parent:
+        parent_session = store.get_session(parent, message_limit=0)
+        if parent_session is None:
+            raise HTTPException(status_code=400, detail=f"unknown parent session {parent}")
+        if parent_session.get("parent_session_id") is not None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"session {parent} is a worker; workers cannot spawn workers",
+            )
+        if parent_session.get("archived_at") is not None:
+            raise HTTPException(status_code=400, detail=f"parent session {parent} is archived")
+        parent_repo = str(parent_session.get("repo") or "")
+        if repo and parent_repo and repo != parent_repo:
+            raise HTTPException(
+                status_code=400,
+                detail="a worker inherits its router's repository; do not pass a different repo",
+            )
+        repo = parent_repo
+        if not explicit_model:
+            model = _scrub(str(parent_session.get("model") or "")).strip() or model
+        if not explicit_provider:
+            provider = _scrub(str(parent_session.get("provider") or "")).strip() or provider
+        source = "worker"
+
+    try:
+        session = store.create_session(
+            prompt,
+            title=title[:200],
+            model=model[:200],
+            provider=provider[:200],
+            repo=repo[:1000],
+            source=source[:40],
+            parent_session_id=parent or None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     session_id = session["id"]
+    if parent:
+        store.add_event(parent, "spawned", f"{session_id}: {session.get('title') or ''}")
     if preset is not None:
         label = f"{provider}: {model}" if provider and model else (model or provider or "default")
         store.add_event(session_id, "preset", f"{preset_name} -> {label}")
