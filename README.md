@@ -19,13 +19,15 @@ It separates **routing** from **execution**, and keeps every result behind one r
 
 ## What you get
 
-- **A town, not a dashboard** — the page draws one pixel-art town per root chat: a central Router house, one house and person per real worker, stable plots and text status badges. Clicking a house opens that session's transcript and composer in a dialog.
-- **Real workers, not decorations** — a Router can call `superagent_spawn` to create and launch child sessions; the town is a projection of the chat rows, so a failed or vanished session cannot leave a phantom building.
+- **A living pixel-art town, not a dashboard** — the page draws one pixel-art town per root chat: a central Router Town Hall on a paved cobblestone plaza, 7 distinct worker building archetypes (`house-a` through `house-g`: cottage, tavern, workshop, forge, library, post office, observatory) connected by stone roads, a stream with a wooden bridge, wishing well, benches, wildflowers, and glowing streetlamps.
+- **Randomised Petdex characters that walk and talk** — each Router and worker gets a durable character/creature sprite from [petdex.dev](https://petdex.dev/) (proxied and 4× downsampled to `384×468` WebP with 8 bundled offline sheets). Characters wander autonomously along town roads, visit the plaza and Router Hall, wave to passing neighbours, and display clickable speech bubbles with live tool telemetry (`🔧 read_file`, `▶ Running: pytest…`) and status banter.
+- **Real workers & Router↔Worker coordination** — a Router can call `superagent_spawn` to create and launch child sessions (with isolated per-worker `git worktree` checkouts), inspect progress via `superagent_town_status`, and send follow-up instructions or PR tasks to existing workers via `superagent_message_worker`.
+- **Opt-in PR creation & PR review/approval** — by default nothing is committed or pushed. When you explicitly enable `allow_worker_pr_create` or `allow_router_pr_approve` in **⚙ Settings**, workers and the Router can commit worktree changes, push a `superagent/<session_id>` branch, open a Pull Request (`superagent_pr_create` / **Create PR**), and submit `APPROVE`, `REQUEST_CHANGES`, or `COMMENT` reviews (`superagent_pr_review` / **Comment on PR**).
 - **Model presets, thinking levels and defaults** — named `(model, provider)` pairs saved from the Settings panel, CLI or `config.yaml`, offered as composer chips; the picker and Settings expose `none … high, xhigh, max, ultra`, and the chosen level reaches the headless turn as `--reasoning`.
 - **Completion toasts** — one desktop notification per turn that ends in `review` or `failed` (no replay on page load, silent for cancelled turns).
 - **A usage report** — the header's **Usage** drawer shows chats, turns, tokens, review/failed counts, a 14-day token bar chart and the per-model split, all from one read-only `GET /usage` (`hermes superagent usage`).
 - **GitHub connect & PR watch** — one repository, an allow-list, `observe` or `auto` mode, open-PR list with **Work on this PR**, and one isolated `git worktree` per pull request.
-- **Review handoff** — a lazy diff panel and a human-confirmed PR comment, plus `hermes superagent diff|comment`.
+- **Review handoff** — a lazy diff panel, a human-confirmed PR comment/review, an optional **Create PR** sheet, plus `hermes superagent diff|comment`.
 - **Tickets for everything else** — deterministic zero-token triage, `superagent_ask/tick/status/run` tools, `/superagent`, and the **Superagent watch** cron blueprint.
 - **A CLI for the same state** — `hermes superagent status|chat|sessions|search|retry|export|usage|pin|unpin|show|stop|models|settings|github|diff|comment|doctor`, all with `--json` and stable exit codes.
 
@@ -118,6 +120,12 @@ At most **12** presets are kept, names must be unique (case-insensitive), and ev
 | `github_poll_seconds` | `int` | `90` | Seconds between background GitHub polls (minimum `5`). Env: `SUPERAGENT_GITHUB_POLL_SECONDS`. |
 | `github_pr_limit` | `int` | `10` | Maximum open pull requests checked per poll (`1`–`100`). Env: `SUPERAGENT_GITHUB_PR_LIMIT`. |
 | `turn_timeout_seconds` | `int` | `1800` | A queued or running chat turn older than this is cancelled by the next reap or chat-list read. `0` disables the guard. Env: `SUPERAGENT_TURN_TIMEOUT_SECONDS`. |
+| `allow_worker_git_worktree` | `bool` | `true` | Isolate each spawned town worker into its own git worktree (`<data_dir>/workspaces/worker-<session_id>`) so parallel workers do not collide. Env: `SUPERAGENT_ALLOW_WORKER_WORKTREE`. |
+| `allow_worker_pr_create` | `bool` | `false` | Allow workers/Router to commit worktree changes, push a `superagent/<session_id>` branch, and open a GitHub PR via `superagent_pr_create` or **Create PR**. Env: `SUPERAGENT_ALLOW_WORKER_PR_CREATE`. |
+| `allow_router_pr_approve` | `bool` | `false` | Allow Router/workers to submit `APPROVE` and `REQUEST_CHANGES` reviews on GitHub PRs via `superagent_pr_review` or the review panel. Env: `SUPERAGENT_ALLOW_ROUTER_PR_APPROVE`. |
+| `github_pr_base_branch` | `str` | `""` | Base branch for worker-created PRs (empty uses the repository's `default_branch`). Env: `SUPERAGENT_GITHUB_PR_BASE_BRANCH`. |
+| `github_pr_draft_by_default` | `bool` | `false` | Open worker-created PRs as drafts by default. Env: `SUPERAGENT_GITHUB_PR_DRAFT`. |
+| `petdex_enabled` | `bool` | `true` | Fetch and cache random character sprites from `petdex.dev` (falls back to bundled offline sheets when `false` or offline). Env: `SUPERAGENT_PETDEX_ENABLED`. |
 
 ### Environment overrides
 
@@ -146,6 +154,12 @@ The dashboard backend is loaded outside the plugin package, so it reads these va
 | `SUPERAGENT_GITHUB_WATCH_NEW_PRS` | `1`/`true` to review every new PR head commit. |
 | `SUPERAGENT_GITHUB_POLL_SECONDS` | Background poll interval (minimum `5`). |
 | `SUPERAGENT_GITHUB_PR_LIMIT` | Open pull requests checked per poll (`1`–`100`). |
+| `SUPERAGENT_ALLOW_WORKER_WORKTREE` | `1`/`true` to create an isolated git worktree per spawned worker. |
+| `SUPERAGENT_ALLOW_WORKER_PR_CREATE` | `1`/`true` to allow workers/Router to commit, push feature branches, and open GitHub PRs. |
+| `SUPERAGENT_ALLOW_ROUTER_PR_APPROVE` | `1`/`true` to allow Router/workers to submit `APPROVE`/`REQUEST_CHANGES` PR reviews. |
+| `SUPERAGENT_GITHUB_PR_BASE_BRANCH` | Default base branch for worker-created PRs. |
+| `SUPERAGENT_GITHUB_PR_DRAFT` | `1`/`true` to open worker-created PRs as drafts by default. |
+| `SUPERAGENT_PETDEX_ENABLED` | `1`/`true` to enable live `petdex.dev` manifest and sprite fetching. |
 
 ---
 
@@ -155,12 +169,17 @@ The dashboard backend is loaded outside the plugin package, so it reads these va
 
 ### 1. Agent Tools (Chat Session or Cron Turn)
 
-Inside a Hermes session, the agent has four tools in the `superagent` toolset:
+Inside a Hermes session, the agent has nine tools in the `superagent` toolset (four for tickets, five for chat towns and GitHub PR workflows):
 
 - **`superagent_ask(request)`**: Record a coding request as a ticket (`observed` in `observe` mode, `queued` in `auto` mode, or `blocked` if it looks like a design question).
 - **`superagent_tick(wait=false)`**: Run one full routing pass: poll GitHub (if configured), deduplicate and assess new comments, launch worker subagents for `queued` tickets (in `auto` mode, up to `max_workers`), reap finished workers into `review` or `failed`, and cancel timed-out workers. Pass `wait=true` to block until active workers finish.
 - **`superagent_status(ticket_id=None)`**: Show summary counts, recent tickets, and the `"Needs you"` attention queue (`observed`, `blocked`, `review`, `failed`). Pass `ticket_id` (e.g. `"T-0001"`) to inspect full ticket details and its audit event log.
 - **`superagent_run(ticket_id, wait=false)`**: Human-in-the-loop promotion. Approves an `observed`, `blocked`, or `failed` ticket, moves it to `queued`, and immediately attempts to launch a worker subagent for it.
+- **`superagent_spawn(parent_session_id, prompt, title=None, pr_number=None, use_worktree=None)`**: Spawn a real child worker session under a root/Router session (`parent_session_id`), allocating a random free town plot (`0…11`), a Petdex `avatar_slug`, and (when `allow_worker_git_worktree` is on) an isolated git worktree (`<data_dir>/workspaces/worker-<id>` or PR checkout).
+- **`superagent_town_status(parent_session_id, worker_session_id=None, include_diff=False)`**: Inspect the live status of all workers in a town (or detailed messages, diff stats, and PR links for a single worker).
+- **`superagent_message_worker(parent_session_id, worker_session_id, message, action="follow_up", pr_number=None)`**: Send follow-up instructions, PR creation requests (`action="create_pr"`), or PR review/approval requests (`action="review_pr"` / `"approve_pr"`) from a Router to one of its idle/review/failed workers.
+- **`superagent_pr_create(session_id, title, body="", branch="", base="", draft=None, commit_message="")`**: Commit changes in a session's repository/worktree, push a `superagent/<session_id>` branch, and open (or update) a GitHub Pull Request. Gated by `allow_worker_pr_create`.
+- **`superagent_pr_review(session_id, event="COMMENT", body="", pr_number=None)`**: Submit a GitHub Pull Request review (`COMMENT`, `APPROVE`, or `REQUEST_CHANGES`, with automatic fallback to an approval comment if GitHub returns HTTP 422 on self-approval). `APPROVE` and `REQUEST_CHANGES` are gated by `allow_router_pr_approve`.
 
 ### 2. CLI (`hermes superagent`)
 
@@ -309,35 +328,29 @@ The Superagent page (`/superagent`) is town-first. One **root** chat is one town
 the workers it spawns are houses in that town. Everything is backed by `/towns`
 and `/chats`, so the scene cannot invent activity that has no session row.
 
-- **Town scene** — the centre is the Router house and its person. Every worker
-  gets exactly one house and one person, placed by the `town_slot` allocated
-  when the child row was created. Twelve fixed plots cover the backend's full
-  worker cap, so polling, a town switch or a reload never moves a house. Houses
-  carry text status badges (`queued`, `running`, `review`, `failed`,
-  `cancelled`), not just animation; the switcher shows how many of the twelve
-  plots are used.
+- **Town scene & environment** — the centre is the Router Town Hall (`house-router`) on a paved cobblestone square (`plaza-stone`), with a central fountain, wishing well, noticeboard, park benches, wildflowers, an artisan stream (`water`) crossed by a wooden footbridge (`bridge`), and cobblestone avenues (`road-h`, `road-v`) branching to all 12 worker plots (`TOWN_PLOTS`). Every worker gets one house (`house-a` through `house-g`: cottage, tavern, workshop, forge, library, post office, observatory) placed at the random free `town_slot` (`0…11`) allocated when the child row was created, so polling, a town switch or a reload never moves a house. Houses carry text status badges (`queued`, `running`, `review`, `failed`, `cancelled`), not just animation; streetlamps emit a warm glow when workers are running; the switcher shows how many of the twelve plots are used.
+- **Petdex characters, autonomous movement & speech bubbles** — each Router and worker is assigned a durable `avatar_slug` from [petdex.dev](https://petdex.dev/) (`GET /town/pets`). Characters render in a depth-sorted `TownActor` layer driven by `useTownSimulation` (`requestAnimationFrame` throttled to 25 fps, disabled when `prefers-reduced-motion` is active). They walk between their house doorstep, the central plaza, fountain, noticeboard and Router Hall based on session status, play all 9 Petdex animation rows (`idle`, `running-right`, `running-left`, `waving`, `jumping`, `failed`, `waiting`, `running`, `review`), pause to wave to passing neighbours, and display clickable `TownSpeechBubble` pills showing live tool telemetry or status banter. Clicking any character or bubble opens that session's chat dialog.
 - **One-shot construction** — a house animates only when its id appears after
   the initial snapshot; the known-worker ids are persisted per town, so a
   refresh does not replay every build. `prefers-reduced-motion` skips the
   animation and its timer.
-- **Town switcher** — a compact select, previous/next buttons, **New town** and
+- **Town switcher** — a compact select, previous/next buttons, **🎲 Reroll sprites** (`POST /town/pets/reroll`), **New town** and
   **Sessions**. Switching changes only what is displayed: no session is
   stopped, archived or modified. Arrow-left/right do the same from the page
   when focus is not in a field; the selected town id is persisted.
-- **House dialog** — clicking any house opens that session's transcript and
+- **House dialog** — clicking any house (or its walking sprite/bubble) opens that session's transcript and
   composer in an accessible modal. It reuses the existing `ChatHeader`,
   `Transcript`, live-worker strip and `Composer`, so follow-ups, stop, retry,
-  model/thinking changes, review/export actions and PR comments behave exactly
-  as they do in the chat workspace. Escape/backdrop close it, Tab is trapped,
+  model/thinking changes, **Diff**, **Create PR**, **Comment / Approve PR**, export and Router dispatch actions behave consistently. Escape/backdrop close it, Tab is trapped,
   focus returns to the house, and a session-id guard prevents a previous
   session's transcript from flashing while the next one loads. Closing never
   stops the worker.
-- **House actions** — the dialog's `⋯` menu renames, pins, archives and opens
+- **House actions** — the dialog's `⋯` menu renames, pins, archives, dispatches Router→Worker review/PR actions (`POST /towns/{root_id}/dispatch`), and opens
   the Sessions drawer. The drawer is the complete inventory: search, rename,
   pin, archive/unarchive and delete still work for rows that have no town or
   house (orphaned workers, archived chats, failed launches).
 - **Settings** — an opaque drawer with default model, default thinking,
-  presets, `max_workers`, `worker_yolo` and `chat_max_turns`. It sits on the
+  presets, `max_workers`, `worker_yolo`, `chat_max_turns`, plus worker git worktree isolation (`allow_worker_git_worktree`), worker PR creation (`allow_worker_pr_create`), and Router/worker PR review approval (`allow_router_pr_approve`). It sits on the
   `--card` surface over a dimmed backdrop, traps Tab and is 420 px wide.
 - **Header and status** — the header keeps GitHub, Usage and the labelled
   Settings action; completion toasts and the status-bar chip still speak for
@@ -347,19 +360,16 @@ and `/chats`, so the scene cannot invent activity that has no session row.
   interleaves with tool events, a failed turn shows its stored error, and the
   composer is disabled while a turn is queued/running. Archived chats are
   read-only until unarchived.
-- **Assets** — the vendored PNGs are served by the plugin's own
-  `GET /town/assets` allowlist (data-URL manifest + binary route), so the
-  installed plugin never hotlinks GitHub. Attribution and licences are in
+- **Assets** — the 26 vendored town PNGs are served by `GET /town/assets` (data-URL manifest + binary route), and Petdex character sheets are proxied, 4× downsampled (`384×468` WebP), cached on disk and served by `GET /town/pets` (with 8 bundled offline sheets under `assets/town/pets/`). Attribution and licences are in
   `assets/town/ATTRIBUTION.md`.
 - **Polling** — the town uses the existing chat cadence (2 s while anything
-  runs, 8 s when quiet); opening a town does not start a second poll loop.
-  Sprite animation is CSS only.
+  runs, 8 s when quiet); opening a town does not start a second network poll loop.
 
 A chat turn's lifecycle is `queued` → `running` → `review` (or `failed` /
 `cancelled`). `review` means the worker finished and its changes are waiting in
-the working tree; sending another message resumes the same Hermes session when
+the working tree (or isolated worker worktree); sending another message resumes the same Hermes session when
 `hermes_session_id` is known. Root sessions get the `superagent` toolset so
-they can call `superagent_spawn`; worker sessions do not.
+they can call `superagent_spawn`, `superagent_town_status`, `superagent_message_worker`, `superagent_pr_create`, and `superagent_pr_review`; worker sessions get the `superagent` toolset when `allow_worker_pr_create` or `allow_router_pr_approve` is enabled (while `superagent_spawn` and `superagent_message_worker` remain restricted to root Routers).
 
 ---
 
@@ -369,12 +379,15 @@ they can call `superagent_spawn`; worker sessions do not.
 | :--- | :--- | :--- |
 | `GET` | `/models` | `{default_model, default_provider, default_reasoning_effort, models, presets}` from settings/env. `presets` is `[{name, model, provider}]` and is `[]` when none are configured; `models` is the flat list of preset models in order plus the configured `default_model`, never a hardcoded catalogue. |
 | `GET` | `/health` | `{ok, version, api_version, features, pid, started_at, db_exists, db_path, archived_count}`. `features` advertises `towns` and `thinking`; the page uses it to explain an older gateway instead of a generic error. |
-| `GET` | `/towns?limit=200&archived=hide` | `{db_exists, towns, town_count, worker_count, running, counts, orphaned, orphaned_count, archived_count}`. A town is a root (`parent_session_id` NULL) with its workers; a worker is never returned as a town. Ordering is pinned roots first, then newest activity. Workers carry their allocated `town_slot`. |
-| `GET` | `/town/assets` | `{ok, assets}` — a data-URL manifest of the allowlisted town PNGs. No filesystem path is accepted. |
+| `GET` | `/towns?limit=200&archived=hide` | `{db_exists, towns, town_count, worker_count, running, counts, orphaned, orphaned_count, archived_count}`. A town is a root (`parent_session_id` NULL) with its workers; a worker is never returned as a town. Ordering is pinned roots first, then newest activity. Root and worker rows carry `town_slot`, `avatar_slug`, `branch_name`, `worktree_path`, `message_count`, and `recent_events`. |
+| `GET` | `/town/assets` | `{ok, assets}` — a data-URL manifest of the 26 allowlisted town PNGs. No filesystem path is accepted. |
 | `GET` | `/town/assets/{name}` | The PNG bytes with `image/png` and a one-day cache; an unknown name is `404`. Only the explicit allowlist can be served. |
+| `GET` | `/town/pets?slugs=s1,s2` | `{ok, pets}` — downsampled (`384×468` WebP, `48×52` per frame, `8×9` grid) Petdex sprite sheets and metadata (`display_name`, `kind`, `submitted_by`, `data_url`) for the requested slugs. Falls back to bundled offline pets if unknown or offline. |
+| `POST` | `/town/pets/reroll` | `{session_id?, root_id?}` — re-randomize `avatar_slug` for a single session or all sessions in a town (`root_id`), keeping inhabitants distinct. Returns `{ok, updated}`. |
+| `POST` | `/towns/{root_id}/dispatch` | `{worker_session_id, message?, action?, pr_number?}` — dispatch a follow-up instruction, `create_pr`, `review_pr`, or `approve_pr` task from the town's Router (`root_id`) to a specific worker (`worker_session_id`). |
 | `GET` | `/usage?days=14` | `{ok, db_exists, days, since, totals, series, models}` — chats and turns created in the window, summed `tokens`/`duration_ms`, status `counts`, one `{date, sessions, tokens}` bucket per **local** day (filled to `days`), and `{model, provider, sessions, tokens}` rows busiest first. `days` is clamped to `1–90`. |
-| `GET` | `/settings` | Merged, public settings (`mode`, `repo_path`, defaults including `default_reasoning_effort`, normalised `model_presets`, worker limits, GitHub watch fields) plus `github_token_set`; never the token. |
-| `POST` | `/settings` | Validate and save `mode`, `repo_path`, `default_model`, `default_provider`, `default_reasoning_effort`, `model_presets`, `max_workers` (1–8), `worker_yolo`, `chat_max_turns` (1–500); unknown keys and out-of-range values are `400`. Drops the Runner singleton so the next turn uses the new values. Returns `{ok, settings}`. |
+| `GET` | `/settings` | Merged, public settings (`mode`, `repo_path`, defaults including `default_reasoning_effort`, normalised `model_presets`, worker limits, GitHub watch fields, worktree/PR capability toggles) plus `github_token_set`; never the token. |
+| `POST` | `/settings` | Validate and save `mode`, `repo_path`, `default_model`, `default_provider`, `default_reasoning_effort`, `model_presets`, `max_workers` (1–8), `worker_yolo`, `chat_max_turns` (1–500), `allow_worker_git_worktree`, `allow_worker_pr_create`, `allow_router_pr_approve`, `github_pr_base_branch`, `github_pr_draft_by_default`, `petdex_enabled`; unknown keys and out-of-range values are `400`. Drops the Runner singleton so the next turn uses the new values. Returns `{ok, settings}`. |
 | `GET` | `/chats?limit=50&q=` | `{db_exists, sessions, counts, running, archived_count}`; also runs the runaway watchdog before answering. An optional `archived` query takes `hide` (default: no archived rows), `only` or `all`; an unknown value is `400`. An optional `q` searches titles, prompts and every stored message instead of listing, adding `match_field` (`title`/`prompt`/`message`) and `match_snippet` (≤160 chars) per row; a term over 200 chars is `400`. `counts` describe the visible board, not the hit list. |
 | `POST` | `/chats` | Validate, create and launch a chat. Optional `preset` selects a named model (explicit `model`/`provider` still win; unknown preset is `400` listing the available names) and records a `preset` event. `parent_session_id` creates a real worker under a root (one level, known/root parent only); a worker inherits the router's model, provider, repository and `reasoning_effort`. `reasoning_effort` accepts `none…ultra`. `400` on an empty/oversized prompt or an invalid repo; `200 {ok:false}` when the worker cannot start (the session is stored as `failed`). |
 | `PATCH` | `/chats/{id}` | Rename: `{title}` is trimmed, whitespace-collapsed and capped at 200 chars. `400` empty/oversized/non-string, `404` unknown id. Returns `{ok, session}`; allowed while a turn runs. |
@@ -386,6 +399,8 @@ they can call `superagent_spawn`; worker sessions do not.
 | `POST` | `/chats/{id}/model` | Set `{model, provider, reasoning_effort}` for future turns. Any one may be supplied; model/provider still write as a pair (a provider-only change clears the pinned model), while an effort-only change leaves the model alone. `400` when all three are absent or the level is unknown, `409` while queued/running, `404` for an unknown id. |
 | `POST` | `/chats/{id}/stop` | Cancel a queued/running turn; `409` when nothing is running. |
 | `POST` | `/chats/{id}/retry` | Re-run the last stored user prompt of a `failed`/`cancelled` chat, resuming its Hermes session when one exists. `409` while a turn is live or for any other status (a `review` chat is a result to read, not to repeat), `400` with no stored user message, `404` unknown. Clears the failed attempt's `error`/`tokens`/`duration_ms` and records one `retry` event; it never appends a second copy of the prompt. |
+| `POST` | `/chats/{id}/pr` | `{title, body?, branch?, base?, draft?, commit_message?}` — commit changes in the session's repository/worktree, push a `superagent/<session_id>` branch, and open or update a GitHub PR. Requires `allow_worker_pr_create=true` (`403` when disabled). Updates `pr_number`/`pr_url` on the session. |
+| `POST` | `/chats/{id}/review` | `{event: "COMMENT"\|"APPROVE"\|"REQUEST_CHANGES", body?, pr_number?}` — submit a GitHub PR review on the session's PR. `APPROVE` and `REQUEST_CHANGES` require `allow_router_pr_approve=true` (`403` when disabled); falls back to a formal comment review if GitHub returns HTTP 422 on self-approval. |
 
 #### Guardrails
 
@@ -474,9 +489,9 @@ A new user should be able to choose models and get started without reading the d
 
 ---
 
-### 11. Review a finished session (diff + PR comment)
+### 11. Review a finished session (diff, PR comment, PR review & opt-in PR creation)
 
-Closing the loop does not need a push. A finished session leaves its changes in the working tree; the plugin can show them and say what happened on the pull request, and nothing else.
+By default, closing the loop does not need a push: a finished session leaves its changes in the working tree (or its isolated worker worktree); the plugin can show them and post a comment on the pull request. When you explicitly enable `allow_worker_pr_create` or `allow_router_pr_approve` in **⚙ Settings**, you and your agents can also create feature-branch PRs and submit formal PR reviews (`APPROVE` / `REQUEST_CHANGES`).
 
 **Diff button (chat header).** Visible whenever the session has a repository. The diff is *lazy*: nothing is fetched until the panel is open, and it is refetched every 4 s only while the turn is `queued`/`running` (a finished session stays still until **Refresh**). The collapsible panel sits between the transcript and the composer (`max-h-22rem`, scrolls) and shows:
 
@@ -485,7 +500,9 @@ Closing the loop does not need a push. A finished session leaves its changes in 
 - one row per file with its porcelain letter (`M`, `A`, `D`, `R`, `??`, `!`); past 200 files it says how many were not listed;
 - **one collapsible section per file**: the path, its `+n/-n` counts, and the file's own patch. Clicking a file row jumps to its section; **Copy** copies that path. **Copy patch** copies the whole patch, and a pathless preamble (truncation note, binary marker) still renders rather than disappearing.
 
-**Comment on PR button.** Visible when the session carries a PR number *and* a GitHub token is saved. It opens an inline confirm — never `window.confirm` — with a textarea prefilled from the preview endpoint, **Post** and **Cancel**. The button is disabled while a turn is running and nothing is posted until **Post** is pressed; the success notice links to the new comment. A user edit is never overwritten by a preview refetch.
+**Create PR button.** Visible when the session has a repository and no `pr_number` is linked yet. Opens an inline `CreatePrBox` with editable PR title, branch name (`superagent/<session_id>-...`), base branch, draft checkbox, and body. Submitting calls `POST /chats/{id}/pr` (requires `allow_worker_pr_create=true`).
+
+**Comment / Review on PR button.** Visible when the session carries a PR number *and* a GitHub token is saved. It opens an inline confirm — never `window.confirm` — with a textarea prefilled from the preview endpoint, review verdict radios (**Comment**, **Approve ✅**, **Request changes ❌**), **Post** and **Cancel**. Selecting **Approve** or **Request changes** calls `POST /chats/{id}/review` (requires `allow_router_pr_approve=true`).
 
 | Method | Path | Behaviour |
 | :--- | :--- | :--- |
@@ -493,6 +510,8 @@ Closing the loop does not need a push. A finished session leaves its changes in 
 | `GET` | `/chats/{id}/comment-preview` | `{ok, session_id, pr_number, github_repo, url, body, length}` — exactly what a post would send, with no network call and no token requirement. `400` when the session has no PR. |
 | `GET` | `/chats/{id}/export` | `{ok, session_id, filename, markdown, length}` — the transcript as a self-contained Markdown document (facts, prompt, messages, activity), rendered from one stored read. Capped at 400 000 characters with a visible truncation note. `404` unknown. |
 | `POST` | `/chats/{id}/comment` | Post `{body?}` (default: the generated summary). `400` without a PR, a repository, a saved token or a readable repo; `502` when GitHub refuses (message redacted). Records a `commented` event with the comment URL and returns `{ok, url, pr_number, body_preview, session}`. |
+| `POST` | `/chats/{id}/pr` | Commit worktree changes, push a `superagent/<session_id>` branch, and open/update a GitHub PR (`{title, body?, branch?, base?, draft?, commit_message?}`). Requires `allow_worker_pr_create=true`. |
+| `POST` | `/chats/{id}/review` | Submit a GitHub PR review (`{event: "COMMENT"\|"APPROVE"\|"REQUEST_CHANGES", body?, pr_number?}`). `APPROVE`/`REQUEST_CHANGES` require `allow_router_pr_approve=true`. |
 
 The generated body is `Superagent finished <id> — <title>`, the last assistant message, `Files changed: N (+X/-Y)` from the diff stat, and `_Generated by Superagent._`; missing pieces are omitted and the whole thing is clipped to 20 000 characters (the assistant summary shrinks first).
 
@@ -508,22 +527,22 @@ hermes superagent comment S-0001 --body-file review.md
 
 `comment` exits `2` for usage (both body sources, unreadable/empty file, over 20 000 chars), `1` for an unknown session, a session without a PR, no repo/token or a GitHub failure, and `0` with the comment URL on success.
 
-**Guardrails.** `collect_diff` runs git as an argv list with no shell and never raises: a missing directory, a plain directory, a missing `git` binary and a timeout are all `{ok: false, error}` with stderr redacted. The repository path is resolved through the same containment check as a worker turn, so a session cannot point the diff at an arbitrary directory. Commenting calls exactly one REST endpoint (`POST /repos/{repo}/issues/{n}/comments`) — no commit, push, merge or PR edit happens anywhere in this flow.
+**Guardrails.** `collect_diff` runs git as an argv list with no shell and never raises: a missing directory, a plain directory, a missing `git` binary and a timeout are all `{ok: false, error}` with stderr redacted. The repository path is resolved through the same containment check as a worker turn, so a session cannot point the diff at an arbitrary directory. By default (`allow_worker_pr_create=false`, `allow_router_pr_approve=false`), no commit, push, merge or PR creation can happen anywhere in this flow; when `allow_worker_pr_create` is enabled, pushes use a one-shot `http.extraHeader` credential and reject protected branch names (`main`, `master`, `production`, `release`).
 
 ---
 
 ## Known limitations
 
-- **Workers never commit, push, merge or open a PR.** They edit the working tree and the session ends in `review`; publishing is a human decision, not a missing feature.
-- **The GitHub allow-list is the security boundary.** Empty `github_allowed_users` means **nobody** can trigger work, and the agent ignores comments from its own login — testing with the account that owns the token produces no sessions.
+- **Workers never commit, push, or open a PR unless `allow_worker_pr_create` is explicitly enabled.** By default they edit the working tree (or isolated worker worktree) and the session ends in `review`; publishing is an explicit opt-in decision.
+- **The GitHub allow-list is the security boundary.** Empty `github_allowed_users` means **nobody** can trigger work (both for `GitHubWatcher` and `GitHubSource`), and the agent ignores comments from its own login — testing with the account that owns the token produces no sessions.
+- **GitHub self-approval constraint.** GitHub's REST API rejects `APPROVE` on a PR authored by the same GitHub account that owns the token (`422 Unprocessable Entity`). `GitHubClient.create_review` automatically falls back to a formal `COMMENT` review prefixed with `✅ **Approved by Superagent**` when this happens.
 - **One watched repository and one token per install.** Polling covers open PRs only, capped by `github_pr_limit`.
-- **PR comments land in the PR conversation** through the issue-comments endpoint; the plugin does not reply inside review threads or edit existing comments.
 - **Backend edits need `hermes gateway restart`.** The desktop **Reload desktop plugins** action only reloads `desktop/plugin.js`.
 - **`max_workers` is an in-process semaphore.** One gateway process is assumed; two gateways against the same database would each allow their own workers.
 - **Ticket workers still need an agent turn.** CLI, REST and slash commands only queue; `superagent_tick` / `superagent_run` in a chat or the **Superagent watch** cron launch them.
 - **The chat UI is poll-based**, not token-streaming, and a transcript is read back capped at 200 messages and 50 events per request.
-- **The town art is third-party.** Buildings/trees/props are MIT-licensed derivatives of Hermes Town; the grass is CC-BY-SA 3.0 and the person is CC0. See `assets/town/ATTRIBUTION.md`; the repository's root `LICENSE` covers only the plugin source.
-- **PR worktrees accumulate** under `<data_dir>/workspaces/pr-<n>`; nothing prunes them automatically.
+- **The town art is third-party.** Buildings/trees/props/terrain are MIT-licensed derivatives of Hermes Town; the grass is CC-BY-SA 3.0, the person is CC0, and the bundled Petdex spritesheets in `assets/town/pets/` are credited to their Petdex community authors. See `assets/town/ATTRIBUTION.md`; the repository's root `LICENSE` covers only the plugin source.
+- **PR and worker worktrees accumulate** under `<data_dir>/workspaces/pr-<n>` and `<data_dir>/workspaces/worker-<id>`; nothing prunes them automatically.
 - **Windows UTF-8.** Persisted text is UTF-8 and subprocess/git output is decoded with replacement, so a tool emitting a legacy OEM code page can leave `�` in captured output.
 
 ---
@@ -536,7 +555,7 @@ Run the test suite from the repository root:
 pytest -q
 ```
 
-The suite is hermetic: `tests/test_runner.py` and `tests/test_hardening.py` replace `Popen` with a fake, so no real `hermes` process is spawned. `tests/test_hardening.py` covers repo containment (missing/file/dot-dot/symlink escape), secret redaction, the 20k/2k caps, every `POST /ask` triage branch, and the runaway watchdog. `tests/test_towns.py` covers the parent/worker migration, stable slots, parent rejection, orphan/archive behaviour, real spawning and the asset allowlist; `tests/test_reasoning.py` covers the thinking ladder from storage to `--reasoning`; `tests/test_towns_render.py` runs the Node render probe for the town scene, switcher, house dialog, settings drawer and one-shot construction. The GitHub tests are also offline: `tests/test_github.py` replaces the HTTP call at the `_urlopen` seam and git at the `git_runner` parameter, `tests/test_watcher.py` uses a canned client and a fake runner, and `tests/test_github_api.py` writes settings to a throwaway `HERMES_HOME` and patches the watcher/client singletons. The handoff tests use a real temporary git repository (`tests/test_diff.py` for status/stat/patch, staged changes and truncation; `tests/test_handoff_api.py` for the endpoints; `tests/test_cli_handoff.py` for `diff`/`comment`) and fake the GitHub client, so nothing reaches the network.
+The suite is hermetic (538 tests): `tests/test_runner.py` and `tests/test_hardening.py` replace `Popen` with a fake, so no real `hermes` process is spawned. `tests/test_hardening.py` covers repo containment (missing/file/dot-dot/symlink escape), secret redaction, the 20k/2k caps, every `POST /ask` triage branch, and the runaway watchdog. `tests/test_towns.py` covers the parent/worker migration, randomised and deterministic slot allocation, parent rejection, orphan/archive behaviour, real spawning and the 26-file town asset allowlist; `tests/test_petdex_assets.py` covers the bundled Petdex catalog, 4× Pillow downsampling (`1536×1872 → 384×468`), domain allowlist enforcement, offline fallback and `/town/pets` + `/town/pets/reroll`; `tests/test_reasoning.py` covers the thinking ladder from storage to `--reasoning`; `tests/test_towns_render.py` runs the Node render probe (`tests/towns_render_probe.mjs`) for the town scene, cobblestone roads/plaza, Petdex sprites, waypoint simulation, speech bubbles, switcher, house dialog, settings drawer and one-shot construction. The GitHub and tool tests (`tests/test_github.py`, `tests/test_tools.py`, `tests/test_watcher.py`, `tests/test_github_api.py`, `tests/test_diff.py`, `tests/test_handoff_api.py`, `tests/test_cli_handoff.py`) cover worktree creation, `commit_and_push_session`, `create_pr`, `create_review` (including 422 self-approval fallback), and the Router/Worker coordination tools (`superagent_town_status`, `superagent_message_worker`, `superagent_pr_create`, `superagent_pr_review`) completely offline.
 
 Validate the plugin manifest and its registrations before shipping:
 

@@ -3,6 +3,92 @@
 All notable changes to the `superagent` Hermes plugin. Plain bullets, newest
 first.
 
+## 0.6.0 — 2026-11-08
+
+Superagent Living Towns & Router↔Worker PR Workflows: randomised Petdex
+character sprites, a cobblestone pixel-art town with 7 building archetypes and
+water features, autonomous waypoint movement with live telemetry speech bubbles,
+isolated per-worker git worktrees, and opt-in PR creation/review tools.
+
+### Added
+
+- **Randomised Petdex character sprites (`dashboard/petdex_assets.py`).** Each
+  Router and worker session is assigned a durable `avatar_slug` at creation time.
+  The backend proxies and downsamples `petdex.dev` 8×9 spritesheets 4× to
+  `384×468` WebP (`48×52` per cell) with disk caching (`GET /town/pets`), ships 8
+  curated bundled sheets under `assets/town/pets/` for offline/hermetic use, and
+  exposes `POST /town/pets/reroll` plus a **🎲 Reroll sprites** button in the
+  town switcher.
+- **Living pixel-art town (`assets/town/`, `dashboard/town_assets.py`).**
+  Expanded the vendored town asset allowlist from 14 to 26 PNGs: all 7 worker
+  building archetypes (`house-a` through `house-g`: cottage, tavern, workshop,
+  forge, library, post office, observatory), tileable cobblestone roads
+  (`road-h`, `road-v`), a paved town square (`plaza-stone`), an artisan stream
+  (`water`) with a wooden footbridge (`bridge`), a wishing well (`well`),
+  noticeboard (`signpost`), benches (`bench`), wildflowers (`flowers`), and warm
+  streetlamp glows while workers are running.
+- **Autonomous waypoint movement & speech bubbles (`desktop/plugin.js`).**
+  Characters are decoupled from house buttons into a depth-sorted `TownActor`
+  layer driven by `useTownSimulation` (`requestAnimationFrame` throttled to
+  25 fps, skipped under `prefers-reduced-motion`). Inhabitants walk between
+  their home doorstep, the central plaza, fountain, noticeboard and Router Hall
+  based on session status (`queued`, `running`, `review`, `failed`, `idle`), play
+  all 9 Petdex animation rows (`idle`, `running-right`, `running-left`, `waving`,
+  `jumping`, `failed`, `waiting`, `running`, `review`), pause to wave when
+  passing nearby sprites, and display clickable `TownSpeechBubble` pills showing
+  live tool/activity telemetry (`deriveSpeechBubble`) or status banter.
+- **Router↔Worker coordination & opt-in PR workflows (`sa_tools.py`,
+  `sa_github.py`, `dashboard/plugin_api.py`).** Added four agent tools:
+  `superagent_town_status` (inspect all workers in a town with diffs and PR
+  links), `superagent_message_worker` (send follow-up instructions, PR creation,
+  or PR review/approval tasks from the Router to an existing worker),
+  `superagent_pr_create` (commit worktree changes, push a `superagent/<id>`
+  branch, and open/update a GitHub PR, gated by `allow_worker_pr_create`), and
+  `superagent_pr_review` (submit `APPROVE`, `REQUEST_CHANGES`, or `COMMENT`
+  reviews with automatic self-approval 422 fallback, gated by
+  `allow_router_pr_approve`). Added `POST /chats/{id}/pr`,
+  `POST /chats/{id}/review`, and `POST /towns/{root_id}/dispatch` endpoints plus
+  **Create PR**, review verdict radios, and Router dispatch actions in the
+  house dialog.
+- **Isolated per-worker git worktrees (`sa_github.prepare_worker_worktree`).**
+  When `allow_worker_git_worktree` is enabled (default `true`), `superagent_spawn`
+  provisions a dedicated branch and worktree under
+  `<data_dir>/workspaces/worker-<session_id>` so parallel workers never collide
+  in the shared working tree.
+
+### Changed
+
+- **Randomised plot allocation (`sa_chats.py`).** New workers pick uniformly at
+  random from the available free slots (`0…11`) via `secrets.choice` (persisted
+  on `chat_sessions.town_slot` so houses never move after creation), with
+  `randomize_slot=False` available for deterministic lowest-free-slot callers.
+- **Hash mixing (`desktop/plugin.js`).** `townHash` now uses 32-bit Murmur3
+  avalanche finalisation so sequential session IDs (`S-0001`, `S-0002`, `S-0003`)
+  produce uncorrelated house archetypes and doorstep offsets.
+- **Town read model (`sa_chats.list_towns`).** Root and worker rows in
+  `GET /towns` now include `message_count`, `recent_events`, `avatar_slug`,
+  `branch_name`, and `worktree_path`.
+
+### Fixed
+
+- **`GitHubSource` fail-closed allow-list (`sa_sources.py`).** `GitHubSource._to_inbound`
+  previously checked `if self.allowed_users and login not in self.allowed_users`,
+  which failed open when `github_allowed_users` was empty; it now rejects all
+  GitHub comments when the allow-list is empty, matching `GitHubWatcher` and
+  `DESIGN.md`.
+- **`ArrowLeft` / `ArrowRight` town switching (`desktop/plugin.js`).** Fixed a
+  stale mount closure in the window `keydown` listener by reading `{ towns,
+  townId, selectTown }` through `townNavRef.current`.
+- **House ref churn (`desktop/plugin.js`).** Cached `registerHouse(id)` callbacks
+  per session ID so React does not detach and re-attach every house button ref on
+  each 2 s poll.
+- **`reasoning_effort` propagation (`dashboard/plugin_api.py`, `sa_watcher.py`).**
+  Preserved `reasoning_effort` when creating a replacement session in
+  `POST /chats/{id}/messages` and applied `default_reasoning_effort` in
+  `POST /github/prs/{n}/work` and `GitHubWatcher`.
+- **Windows CRLF handling in render probe (`tests/towns_render_probe.mjs`).**
+  Replaced `.replace('\r\n', '\n')` with `.replaceAll('\r\n', '\n')`.
+
 ## 0.5.10 — 2026-11-08
 
 ### Added

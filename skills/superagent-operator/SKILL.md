@@ -1,7 +1,7 @@
 ---
 name: superagent-operator
 description: Operate Superagent chats, workers and GitHub watch.
-version: 0.5.9
+version: 0.6.0
 platforms: [linux, macos, windows]
 metadata:
   hermes:
@@ -15,15 +15,15 @@ Use this guide when operating, triaging, or tuning the `superagent` plugin in He
 `superagent` has two execution paths that share one SQLite database and one
 attention budget:
 
-- **Chat sessions** — the desktop **Superagent** page draws a town: one root
-  chat is the Router house, every worker it spawns is a house with its own
-  transcript. The page starts one headless `hermes chat` process per turn; you
+- **Chat sessions** — the desktop **Superagent** page draws a pixel-art town: one root
+  chat is the Router Town Hall, every worker it spawns is a house (`house-a` through `house-g`) with its own
+  Petdex character sprite (`GET /town/pets`), speech bubble and transcript. The page starts one headless `hermes chat` process per turn; you
   watch, resume, stop, or open any house's dialog.
 - **Tickets** — a deterministic, zero-token router turns accepted
   requests into tickets; worker subagents run inside a Hermes agent turn.
 
-Neither path commits or pushes for you. Both end in `review` with the changes
-uncommitted in the working tree.
+By default, neither path commits or pushes for you: both end in `review` with the changes
+uncommitted in the working tree (or isolated worker worktree). Opt-in settings (`allow_worker_pr_create`, `allow_router_pr_approve`) let workers/Routers open PRs and submit PR reviews when explicitly enabled.
 
 **Take as little human attention as possible, deliver as much verified value as
 possible.**
@@ -34,9 +34,9 @@ possible.**
 
 | Surface | What it is for |
 | :--- | :--- |
-| Desktop **Superagent** page (`/superagent`) | Town scene (Router + worker houses), house chat dialog, town switcher, Sessions drawer, Settings, GitHub, diff/comment. |
+| Desktop **Superagent** page (`/superagent`) | Town scene (Router + worker houses, wandering Petdex sprites, speech bubbles, **🎲 Reroll sprites**), house chat dialog, town switcher, Sessions drawer, Settings, GitHub, diff/comment/PR create/review. |
 | Status-bar chip + side pane | `▶ N` running chats and `◆ M` chats in `review`/`failed`; ticket attention only as a fallback. |
-| Agent tools | `superagent_ask`, `superagent_tick`, `superagent_status`, `superagent_run` inside a chat or cron turn. |
+| Agent tools | Ticket tools (`superagent_ask`, `superagent_tick`, `superagent_status`, `superagent_run`) and Town/PR tools (`superagent_spawn`, `superagent_town_status`, `superagent_message_worker`, `superagent_pr_create`, `superagent_pr_review`). |
 | CLI | `hermes superagent …` for status, chat, sessions, presets, GitHub, diff and comment. |
 | Slash command | `/superagent status\|ask\|tick\|run\|help`. |
 | Cron blueprint | **Superagent watch** every 5 minutes; runs `superagent_tick(wait=true)` as a real agent turn, so it may launch ticket workers. |
@@ -79,17 +79,20 @@ GitHub connection.
    path, and describe the work. The first turn creates `S-0001` and launches a
    headless worker.
 3. When the Router needs parallel work it calls `superagent_spawn` with
-   `parent_session_id=S-0001`; each child gets one house and one person. Ask for
+   `parent_session_id=S-0001`; each child gets one house (`house-a` through `house-g`) at a random free plot (`0…11`), a Petdex character sprite, and (when `allow_worker_git_worktree=true`) an isolated git worktree under `<data_dir>/workspaces/worker-<id>`. Ask for
    the split explicitly if the Router does not do it, e.g. "spawn two workers:
    one fixes the parser, one adds a test".
-4. Click the Router or any worker house to open its transcript/composer dialog.
+4. The Router can inspect its workers via `superagent_town_status` and send
+   follow-up instructions or PR tasks to an existing worker via
+   `superagent_message_worker` (`action="follow_up"|"create_pr"|"review_pr"|"approve_pr"`).
+5. Click the Router or any worker house (or its wandering Petdex character / speech bubble) to open its transcript/composer dialog.
    **Stop** cancels that session; a follow-up resumes its Hermes session. The
-   dialog has **Retry** after `failed`/`cancelled`, model/thinking changes, diff,
-   export and PR comment. Closing it never stops the worker.
-5. Switch towns with the selector or left/right arrows; switching only changes
+   dialog has **Retry** after `failed`/`cancelled`, model/thinking changes, **Diff**,
+   **Create PR**, **Comment / Approve PR**, export, and Router dispatch actions. Closing it never stops the worker.
+6. Switch towns with the selector or left/right arrows; click **🎲 Reroll sprites** (`POST /town/pets/reroll`) to pick fresh Petdex characters for the town. Switching only changes
    the view, never a session. **Sessions** has search, rename, pin, archive and
    delete for rows that are archived or orphaned.
-6. A turn that ends in `review` or `failed` raises one desktop toast
+7. A turn that ends in `review` or `failed` raises one desktop toast
    (`<title> finished` / `<title> failed`) while the page is open. Opening the
    page does not replay old completions, and `cancelled` is silent.
 
@@ -109,8 +112,7 @@ hermes superagent stop S-0001
   runaway guard (`turn_timeout_seconds`, default 1800 s). A timed-out turn is
   cancelled with a reason that names the phase: `turn timed out after 1900s
   while queued (limit 1800s)` or `... while running ...`.
-- `worker_yolo` only skips approval prompts inside the turn. It does not permit
-  commit, push, merge or PR edits.
+- `worker_yolo` only skips approval prompts inside the turn. Commit/PR creation and PR review approval remain gated behind `allow_worker_pr_create` and `allow_router_pr_approve` (both `false` by default).
 - A failed session shows its stored `error` in the transcript header and on its
   worker card, so you do not have to open a log to see why it stopped.
 
@@ -187,20 +189,18 @@ session per SHA.
 
 ---
 
-## 6. Review Handoff: Diff and Comment
+## 6. Review Handoff: Diff, Comment, and Opt-In PR Workflows
 
-A finished session leaves the work uncommitted. Review it before anything
-leaves your machine.
+By default, a finished session leaves the work uncommitted in its repository or isolated worktree. Review it before anything leaves your machine.
 
 1. Select the session → **Diff** in the chat header (`GET
    /chats/{id}/diff`). It is lazy, refetches only while the turn runs, and shows
    `git status` letters, `git diff --stat` and the capped patch. The CLI
    equivalent is `hermes superagent diff S-0001`.
 2. Read the transcript's final summary and run the tests yourself.
-3. If the session has a PR, **Comment on PR** opens an editable preview
-   (`GET /chats/{id}/comment-preview`). Nothing is posted until you press
-   **Post**; `hermes superagent comment S-0001` does the same from a terminal.
-4. Commit and push under your own workflow. The plugin never does.
+3. If the session has no PR yet and you enabled `allow_worker_pr_create`, click **Create PR** (`POST /chats/{id}/pr`) or let the worker/Router call `superagent_pr_create` to commit, push a `superagent/<session_id>` branch, and open a PR.
+4. If the session has a PR, **Comment on PR** opens an editable preview
+   (`GET /chats/{id}/comment-preview`) with review verdict radios (**Comment**, **Approve ✅**, **Request changes ❌**). `APPROVE` and `REQUEST_CHANGES` call `POST /chats/{id}/review` (or `superagent_pr_review`, gated by `allow_router_pr_approve`). Nothing is posted until you press **Post**; `hermes superagent comment S-0001` does the same from a terminal.
 
 `diff` exits `1` for an unknown session or one without a repository. `comment`
 exits `1` without a PR, repo or saved token, and `2` for bad usage.
@@ -270,13 +270,19 @@ error, `2` usage.
 | `model_presets` | `[]` | Composer chips; empty = no chips. |
 | `max_workers` | `2` | Parallel chat/ticket workers. |
 | `chat_max_turns` | `120` | Agent turns per headless chat worker. |
-| `worker_yolo` | `true` | Pass `--yolo`; still no commits/pushes. |
+| `worker_yolo` | `true` | Pass `--yolo`; still no commits/pushes unless opted in. |
 | `turn_timeout_seconds` | `1800` | Runaway guard; `0` disables. |
 | `github_repo` | `""` | `owner/name` to watch. |
 | `github_allowed_users` | `[]` | Who may trigger work; empty = nobody. |
 | `github_watch_mode` | `observe` | `observe` or `auto` for PR mentions. |
 | `github_watch_new_prs` | `false` | Review every new PR head commit. |
 | `github_poll_seconds` | `90` | Background poll interval. |
+| `allow_worker_git_worktree` | `true` | Isolate each spawned town worker into its own git worktree. |
+| `allow_worker_pr_create` | `false` | Allow workers/Router to commit, push feature branches, and open GitHub PRs. |
+| `allow_router_pr_approve` | `false` | Allow Router/workers to submit `APPROVE` / `REQUEST_CHANGES` PR reviews. |
+| `github_pr_base_branch` | `""` | Default base branch for worker-created PRs (empty = repo `default_branch`). |
+| `github_pr_draft_by_default` | `false` | Open worker-created PRs as drafts by default. |
+| `petdex_enabled` | `true` | Fetch and cache random character sprites from `petdex.dev`. |
 
 Settings layers, lowest to highest: `DEFAULTS` (mirrors `plugin.yaml`) <
 `plugins.entries.superagent.settings` in `config.yaml` <

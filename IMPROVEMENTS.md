@@ -1,7 +1,18 @@
-# Superagent Towns & Router/Worker Evolution — Implementation Plan
+# Superagent Towns & Router/Worker Evolution — Implementation Plan & Handover
 
+> **Status:** ✅ **Implemented & Merged on `main` (`v0.6.0`, commit `ebeed22`)**  
 > **Target codebase:** `hermes-superagent` (`v0.5.10` → `v0.6.0`)  
-> **Scope:** Desktop Towns renderer (`desktop/plugin.js`), asset pipeline (`dashboard/town_assets.py`, `scripts/extract_hermes_town_assets.py`, `assets/town/`), Router↔Worker orchestration & GitHub PR workflows (`sa_chats.py`, `sa_tools.py`, `sa_schemas.py`, `sa_runner.py`, `sa_github.py`, `dashboard/plugin_api.py`, `sa_settings.py`, `plugin.yaml`), and cross-cutting bugfixes/hardening.
+> **Scope:** Desktop Towns renderer (`desktop/plugin.js`), asset pipeline (`dashboard/town_assets.py`, `dashboard/petdex_assets.py`, `scripts/generate_town_and_pet_assets.py`, `assets/town/`), Router↔Worker orchestration & GitHub PR workflows (`sa_chats.py`, `sa_tools.py`, `sa_schemas.py`, `sa_runner.py`, `sa_github.py`, `dashboard/plugin_api.py`, `sa_settings.py`, `plugin.yaml`), and cross-cutting bugfixes/hardening.
+
+## Handover Summary (`v0.6.0`)
+
+| Workstream | Status | Key Landed Files | Verification |
+| :--- | :---: | :--- | :--- |
+| **1. Randomised Spawning & Petdex.dev Sprites** | ✅ Done | `sa_chats.py`, `dashboard/petdex_assets.py`, `assets/town/pets/` (`catalog.json` + 8 WebP sheets), `dashboard/plugin_api.py` (`/town/pets`, `/town/pets/reroll`), `desktop/plugin.js` (`PetdexSprite`, `townHash`) | `tests/test_petdex_assets.py`, `tests/test_towns.py` |
+| **2. Rich Pixel-Art Town Environment** | ✅ Done | `assets/town/*.png` (26 PNGs: 7 worker houses `house-a..g`, `road-h/v`, `plaza-stone`, `water`, `bridge`, `well`, `bench`, `flowers`, `signpost`), `dashboard/town_assets.py`, `assets/town/ATTRIBUTION.md`, `desktop/plugin.js` (`TownScene`) | `tests/test_towns.py`, `tests/towns_render_probe.mjs` |
+| **3. Autonomous Sprite Movement & Speech Bubbles** | ✅ Done | `desktop/plugin.js` (`useTownSimulation`, `TownActor`, `TownSpeechBubble`, `deriveSpeechBubble`), `sa_chats.py` (`list_towns` `recent_events` + `message_count`) | `tests/towns_render_probe.mjs` (`town render probe: ok`) |
+| **4. Router↔Worker Messaging, Worktrees & PR Create/Approve** | ✅ Done | `sa_github.py` (`prepare_worker_worktree`, `commit_and_push_session`, `create_pr`, `create_review`), `sa_schemas.py`, `sa_tools.py`, `sa_runner.py`, `sa_settings.py`, `plugin.yaml`, `dashboard/plugin_api.py`, `desktop/plugin.js` (`CreatePrBox`, `CommentBox`, dispatch menu) | `tests/test_github.py`, `tests/test_tools.py`, `tests/test_settings.py` |
+| **5. Observed Bugs & Hardening** | ✅ Done | `sa_sources.py` (fail-closed empty `allowed_users`), `desktop/plugin.js` (`townNavRef`, `registerHouse` ref cache), `dashboard/plugin_api.py` & `sa_watcher.py` (`reasoning_effort` propagation), `tests/towns_render_probe.mjs` (CRLF fix), `tests/test_cli.py` (`HERMES_HOME` isolation) | `tests/test_sources.py`, `tests/test_cli.py`, `tests/test_release.py` (`538 passed`) |
 
 ---
 

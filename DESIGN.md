@@ -150,25 +150,49 @@ A town is not a second store. It is a read model over `chat_sessions`:
   one root; the hierarchy is deliberately one level, so workers cannot create
   towns or nested trees.
 - `town_slot` is allocated under the same `BEGIN IMMEDIATE` as the child insert
-  and never recomputed. The desktop maps slot `n` to a fixed plot, so polling,
+  (choosing uniformly at random from the available free slots `0…11` via
+  `secrets.choice`, or the lowest free slot when `randomize_slot=False`) and
+  never recomputed. The desktop maps slot `n` to a fixed plot, so polling,
   switching or reloading cannot move a house.
-- `GET /towns` groups roots with their workers, reports status counts and an
+- `avatar_slug`, `branch_name`, and `worktree_path` are stored on
+  `chat_sessions`. Every root and worker receives a durable Petdex character
+  slug at creation (`dashboard/petdex_assets.py`), avoiding duplicates within the
+  same town.
+- `GET /towns` groups roots with their workers, attaches `message_count` and
+  `recent_events` for live telemetry bubbles, reports status counts and an
   `orphaned` list for workers whose root was deleted. A worker is never promoted
   to a town; an orphan gets no phantom building. `/chats` stays flat, so every
   pre-town consumer keeps working.
-- The central house is the Router. `ChatStore` is the only writer of the
-  parent/slot relationship; `superagent_spawn` uses it and the shared
-  `sa_runtime.Runner`, so a router cannot exceed the same worker cap as the UI.
+- The central house is the Router (`house-router`) on a paved cobblestone square.
+  `ChatStore` is the only writer of the parent/slot relationship;
+  `superagent_spawn` uses it and the shared `sa_runtime.Runner`, so a router
+  cannot exceed the same worker cap as the UI. When `allow_worker_git_worktree`
+  is enabled (default `true`), `superagent_spawn` provisions an isolated git
+  worktree (`<data_dir>/workspaces/worker-<session_id>`) so parallel workers do
+  not overwrite each other's working tree.
+- The Router can inspect its workers via `superagent_town_status` and send
+  follow-up prompts, PR creation requests, or PR review/approval tasks to an
+  existing worker via `superagent_message_worker` (or `POST /towns/{root_id}/dispatch`).
 - Construction is a client event, not a render effect: a persisted known-worker
   baseline distinguishes a genuinely new id from a poll. The animation is CSS,
   one-shot, and skipped under reduced motion.
-- Clicking a house opens the existing `ChatHeader`/`Transcript`/`Composer` in a
-  dialog. It is deliberately a reuse, not a second chat implementation: stop,
-  retry, follow-up, model/thinking changes, diff/export and PR comment all go
-  through the same mutations. Closing the dialog never stops the worker.
-- Town art is served from a code allowlist (`GET /town/assets`) because the
-  desktop plugin has no static-file mount. The sprites are vendored with their
-  own licences; see `assets/town/ATTRIBUTION.md`.
+- Characters are decoupled from house buttons into a depth-sorted `TownActor`
+  layer driven by `useTownSimulation` (`requestAnimationFrame` throttled to
+  25 fps, disabled when `prefers-reduced-motion` is on). Inhabitants walk along
+  town roads between their home doorstep, the plaza, fountain, noticeboard and
+  Router Hall according to session status, play all 9 Petdex animation rows,
+  wave to passing neighbours, and display clickable `TownSpeechBubble` telemetry
+  pills.
+- Clicking a house (or its character/bubble) opens the existing
+  `ChatHeader`/`Transcript`/`Composer` in a dialog. It is deliberately a reuse,
+  not a second chat implementation: stop, retry, follow-up, model/thinking
+  changes, diff/export, PR creation and PR review/comment all go through the
+  same mutations. Closing the dialog never stops the worker.
+- Town art is served from a 26-file code allowlist (`GET /town/assets`) and
+  Petdex character sheets are proxied, 4× downsampled (`384×468` WebP), cached on
+  disk and served from `GET /town/pets` (with 8 bundled offline sheets under
+  `assets/town/pets/`). The sprites are vendored with their own licences; see
+  `assets/town/ATTRIBUTION.md`.
 
 ### Live grid
 
@@ -214,9 +238,9 @@ One daemon thread polls every `github_poll_seconds` (minimum 5, default 90); `st
 
 ---
 
-## 8. Review Handoff: Diff and Comment
+## 8. Review Handoff: Diff, Comment, and Opt-In PR Workflows
 
-Closing the loop does not require a push.
+Closing the loop does not require a push by default.
 
 ### Diff (`sa_diff.collect_diff`)
 
@@ -226,21 +250,30 @@ The patch is capped at 60 000 characters with an explicit `truncated` flag and a
 
 ### Comment (`sa_diff.default_comment_body` + `POST /chats/{id}/comment`)
 
-The preview endpoint composes `Superagent finished <id> — <title>`, the last assistant message, and `Files changed: N (+X/-Y)` from the diff stat, clipped to 20 000 characters; it makes no network call and needs no token. The UI shows that body in an editable textarea and posts only when the human presses **Post**. The post calls exactly one REST endpoint (`POST /repos/{repo}/issues/{n}/comments`); there is no commit, push, merge, PR edit or review-thread reply anywhere in the flow.
+The preview endpoint composes `Superagent finished <id> — <title>`, the last assistant message, and `Files changed: N (+X/-Y)` from the diff stat, clipped to 20 000 characters; it makes no network call and needs no token. The UI shows that body in an editable textarea and posts only when the human presses **Post**.
+
+### Opt-In PR Creation & PR Review (`sa_github.py`, `sa_tools.py`, `POST /chats/{id}/pr`, `POST /chats/{id}/review`)
+
+When the operator explicitly enables `allow_worker_pr_create` (`default: false`):
+- `commit_and_push_session()` stages and commits changes in the session's worktree onto a `superagent/<session_id>-<slug>` branch (rejecting protected branch names like `main`, `master`, `production`, `release`) and pushes using a one-shot `-c http.extraHeader=Authorization: Basic …` header so credentials are never written to `.git/config`.
+- `GitHubClient.create_pr()` (`POST /repos/{repo}/pulls`) opens or reuses a pull request for that branch and stores `pr_number` / `pr_url` on the session.
+
+When the operator explicitly enables `allow_router_pr_approve` (`default: false`):
+- `GitHubClient.create_review()` (`POST /repos/{repo}/pulls/{n}/reviews`) submits `APPROVE`, `REQUEST_CHANGES`, or `COMMENT` reviews via `superagent_pr_review` or the house dialog. If GitHub returns HTTP 422 because the token owner authored the PR (`"Can not approve your own pull request"`), it automatically falls back to a formal `COMMENT` review prefixed with `✅ **Approved by Superagent**`.
 
 ---
 
 ## 9. Safety Model
 
-The plugin is designed so that the worst failure is a bad diff a human can discard — not a leaked credential or a published change.
+The plugin is designed so that the worst failure is a bad diff a human can discard — not a leaked credential or an unapproved published change.
 
-- **Containment.** Every repository path is resolved with `Path.resolve(strict=True)`; paths that do not exist, are not directories, contain `..`, or resolve outside `SUPERAGENT_REPO_ROOT` (default: the configured repo, plus `<data_dir>/workspaces` for PR checkouts) are rejected. Only the resolved path reaches `argv`/`cwd`.
+- **Containment.** Every repository path is resolved with `Path.resolve(strict=True)`; paths that do not exist, are not directories, contain `..`, or resolve outside `SUPERAGENT_REPO_ROOT` (default: the configured repo, plus `<data_dir>/workspaces` for PR and worker worktrees) are rejected. Only the resolved path reaches `argv`/`cwd`.
 - **Caps.** Prompts 20 000 chars, stored assistant text 20 000, event detail 2 000, diff patch 60 000, posted comment 20 000. Over-limit prompts are rejected; over-limit output is truncated before the write, so a runaway worker cannot bloat the database.
 - **Secret redaction.** GitHub (`ghp_`, `gho_`, `github_pat_`), OpenAI/Slack-style keys, `Authorization:` values and bare `Bearer` tokens are replaced with `[redacted]` before messages, events, errors, prompts and ticket fields are persisted. The token itself is never returned by a route; `public_settings()` reports `github_token_set` only.
 - **Observe by default.** Both ticket intake and GitHub watch start in observe. Auto is an explicit switch.
-- **No auto-push.** Workers cannot commit, push, merge or open a PR; the comment endpoint posts one comment after a click. The plugin has no code path that publishes a branch.
+- **Opt-in publication gates.** `allow_worker_pr_create` and `allow_router_pr_approve` both default to `False`. Unless explicitly enabled in Settings, workers cannot commit, push, open a PR, or approve a PR; even when enabled, pushes use ephemeral HTTP headers and reject protected branch names.
 - **Runaway guard.** A queued/running turn past `turn_timeout_seconds` is cancelled by the reaper, even after a server restart, and the reason names the phase.
-- **Fail closed on GitHub.** Empty allow-list = nobody; bots and self-comments are ignored; a malformed baseline fetch leaves the baseline open for a retry rather than treating history as new.
+- **Fail closed on GitHub.** Empty allow-list = nobody (enforced in both `GitHubWatcher` and `GitHubSource`); bots and self-comments are ignored; a malformed baseline fetch leaves the baseline open for a retry rather than treating history as new.
 
 ---
 
