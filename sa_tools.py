@@ -123,6 +123,7 @@ def superagent_spawn(args: dict, ctx: Any = None, **kwargs: Any) -> str:
             title=title,
             model=str(parent.get("model") or ""),
             provider=str(parent.get("provider") or ""),
+            reasoning_effort=str(parent.get("reasoning_effort") or ""),
             repo=str(parent.get("repo") or ""),
             source="worker",
             parent_session_id=parent_id,
@@ -136,6 +137,7 @@ def superagent_spawn(args: dict, ctx: Any = None, **kwargs: Any) -> str:
                 prompt,
                 model=str(parent.get("model") or ""),
                 provider=str(parent.get("provider") or ""),
+                reasoning_effort=str(parent.get("reasoning_effort") or ""),
                 repo=str(parent.get("repo") or ""),
             )
         except Exception as exc:

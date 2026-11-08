@@ -481,6 +481,7 @@ def _get_runner(store: Any) -> Any:
                 yolo=_env_bool("SUPERAGENT_WORKER_YOLO", True),
                 model=_env("SUPERAGENT_DEFAULT_MODEL"),
                 provider=_env("SUPERAGENT_DEFAULT_PROVIDER"),
+                reasoning_effort=_env("SUPERAGENT_DEFAULT_REASONING_EFFORT"),
                 repo=_env("SUPERAGENT_REPO"),
                 max_turns=_env_int("SUPERAGENT_CHAT_MAX_TURNS", 120),
             )

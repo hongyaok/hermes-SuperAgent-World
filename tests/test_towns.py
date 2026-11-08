@@ -37,7 +37,8 @@ class FakeRunner:
         self.launches = []
 
     def launch_turn(
-        self, session_id, prompt, *, resume_session_id=None, model=None, provider=None, repo=None
+        self, session_id, prompt, *, resume_session_id=None, model=None, provider=None,
+        reasoning_effort=None, repo=None
     ):
         if self.fail:
             raise RuntimeError(self.fail)
@@ -47,6 +48,7 @@ class FakeRunner:
                 "prompt": prompt,
                 "model": model,
                 "provider": provider,
+                **({"reasoning_effort": reasoning_effort} if reasoning_effort is not None else {}),
                 "repo": repo,
             }
         )
@@ -92,7 +94,7 @@ def test_migration_adds_hierarchy_without_inventing_parents(tmp_path, sa):
     store = sa.sa_chats.ChatStore(path)
     with sqlite3.connect(path) as check:
         columns = {row[1] for row in check.execute("PRAGMA table_info(chat_sessions)")}
-    assert {"parent_session_id", "town_slot"} <= columns
+    assert {"parent_session_id", "town_slot", "reasoning_effort"} <= columns
 
     session = store.get_session("S-0001", message_limit=0)
     assert session["parent_session_id"] is None
@@ -282,7 +284,9 @@ def test_api_worker_inherits_repo_and_refuses_a_different_one(tmp_path, api):
 def test_spawn_tool_creates_and_launches_one_real_worker(tmp_path, monkeypatch, sa):
     path = tmp_path / "superagent.db"
     store = sa.sa_chats.ChatStore(path)
-    root = store.create_session("router", model="m", provider="p", repo="")
+    root = store.create_session(
+        "router", model="m", provider="p", reasoning_effort="max", repo=""
+    )
     runner = FakeRunner(store)
     monkeypatch.setattr(sa.sa_settings, "data_dir", lambda: tmp_path)
     monkeypatch.setattr(sa.sa_runtime, "shared_runner", lambda _store: runner)
@@ -298,7 +302,9 @@ def test_spawn_tool_creates_and_launches_one_real_worker(tmp_path, monkeypatch, 
     assert child["parent_session_id"] == root["id"]
     assert child["town_slot"] == 0
     assert child["status"] == "running"
+    assert child["reasoning_effort"] == "max"
     assert runner.launches[0]["prompt"] == "fix the parser"
+    assert runner.launches[0]["reasoning_effort"] == "max"
 
     second = json.loads(
         sa.sa_tools.superagent_spawn(

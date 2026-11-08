@@ -3,6 +3,36 @@
 All notable changes to the `superagent` Hermes plugin. Plain bullets, newest
 first.
 
+## 0.5.1 — 2026-11-08
+
+### Added
+
+- **Thinking levels through the whole stack.** `chat_sessions.reasoning_effort`
+  stores one of Hermes' levels (`none, minimal, low, medium, high, xhigh, max,
+  ultra`). New chats and worker spawns inherit it, `POST /chats/{id}/model` can
+  change it, and the runner passes `--reasoning <level>` to the headless turn.
+  The model picker now accepts effort edits instead of dropping them; Settings
+  exposes a "Default thinking" selector with Extra high, Max and Ultra.
+
+### Changed
+
+- **Settings is an opaque surface.** The drawer had `--ui-bg-primary`, which is
+  translucent in the desktop chrome; it now sits on `--card` over a dimmed
+  backdrop, traps Tab, and is 420px wide so preset rows fit. The header action
+  is labelled "Settings" instead of a bare gear.
+- **Town art from Hermes Town.** The coarse tileset crops are replaced by the
+  original MIT-licensed buildings, trees, fountain, lamp and rock from
+  `sxuff/hermes-town`; the scene gains a plaza and more vegetation. The
+  extraction script and per-file attribution live in the repository.
+
+### Fixed
+
+- **The model picker dropped effort edits.** Selecting Extra high, Max or Ultra
+  in the catalog changed nothing because the controller ignored `patch.effort`;
+  it now writes the level to the chat row.
+- **Settings showed the town through its form.** The drawer used a translucent
+  chrome variable; it now has an opaque card surface and a dimmed backdrop.
+
 ## 0.5.0 — 2026-11-07
 
 Superagent Towns: a root chat is a town, a spawned worker is a house, and the
