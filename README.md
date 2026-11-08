@@ -342,7 +342,9 @@ and `/chats`, so the scene cannot invent activity that has no session row.
   stopped, archived or modified. Arrow-left/right do the same from the page
   when focus is not in a field; the selected town id is persisted.
 - **House dialog** — clicking any house (or its walking sprite/bubble) opens that session's transcript and
-  composer in an accessible modal. It reuses the existing `ChatHeader`,
+  composer in a fixed compact popup (`460×560` max, `440×540` for generic
+  modals) with the transcript scrolling inside (`superagent-pixel-scroll`), so
+  a long chat never covers the town. It reuses the existing `ChatHeader`,
   `Transcript`, live-worker strip and `Composer`, so follow-ups, stop, retry,
   model/thinking changes, **Diff**, **Create PR**, **Comment / Approve PR**, export and Router dispatch actions behave consistently. Escape/backdrop close it, Tab is trapped,
   focus returns to the house, and a session-id guard prevents a previous
