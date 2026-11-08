@@ -3,6 +3,27 @@
 All notable changes to the `superagent` Hermes plugin. Plain bullets, newest
 first.
 
+## 0.5.4 — 2026-11-08
+
+### Added
+
+- A worker's dialog has a **↗ Router** action that switches the same dialog to
+  the town's root session.
+
+### Changed
+
+- The town header's count/summary, worker count and switcher tooltip use the
+  tertiary text colour instead of the faint quaternary one, matching the
+  Settings readability pass.
+- The stale-gateway banner names the exact command (`hermes gateway restart`)
+  and a `/towns` 404 gets the same explanation instead of the generic
+  "enable the plugin" card.
+
+### Fixed
+
+- A missing towns route no longer reads as a disabled plugin when `/chats`
+  still answers; the error card distinguishes the two.
+
 ## 0.5.3 — 2026-11-08
 
 ### Added
