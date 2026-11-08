@@ -341,12 +341,12 @@ assert.match(drawer, /bg="var\(--card/)
 assert.match(drawer, /md:w-\[420px\]/)
 assert.match(drawer, /z-index:40/)
 assert.match(dialog, /z-index:40/)
-assert.match(dialog, /min\(92vw,460px\)/)
-assert.match(dialog, /min\(78vh,560px\)/)
-// The chat column itself is bounded on every host (dialog, tile, full page).
-assert.match(dialog, /max-w-\[560px\]/)
-// The transcript caps at viewport height so unbounded hosts scroll.
-assert.match(dialog, /max-h-\[min\(60vh,32rem\)\]/)
+assert.match(dialog, /w-\[54vw\]/)
+assert.match(dialog, /h-\[78vh\]/)
+// The chat column itself is a fixed viewport proportion on every host.
+assert.match(dialog, /w-\[52vw\]/)
+// The transcript caps at a viewport proportion so unbounded hosts scroll.
+assert.match(dialog, /max-h-\[56vh\]/)
 
 const settingsPanel = render(h(plugin.SettingsPanel, {
   settings: {
