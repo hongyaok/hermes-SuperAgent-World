@@ -343,6 +343,8 @@ assert.match(drawer, /z-index:40/)
 assert.match(dialog, /z-index:40/)
 assert.match(dialog, /min\(92vw,460px\)/)
 assert.match(dialog, /min\(78vh,560px\)/)
+// The chat column itself is bounded on every host (dialog, tile, full page).
+assert.match(dialog, /max-w-\[560px\]/)
 
 const settingsPanel = render(h(plugin.SettingsPanel, {
   settings: {
