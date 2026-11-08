@@ -1,101 +1,132 @@
 # Superagent Towns — progress and next steps
 
-**Date:** 2026-11-07
-**Status:** vertical slice implemented in source; backend and asset work are on
-`main`; the desktop town page is on `feat/towns-desktop`, not yet exercised in
-the installed app. The gateway route table is stale and restarting it from this
-gateway-hosted chat would terminate the session, so the final desktop pass is
-the first item below.
+**Date:** 2026-11-08
+**Status:** the vertical slice is merged on `main` at **0.5.6**. Source, tests,
+docs and the 12-plot town layout are complete. The installed desktop pass is the
+only acceptance item still blocked: the gateway hosting this chat has the old
+route table, and restarting it from this session would terminate the session.
 
 ## Landed on `main`
 
-| Commit / PR | What it does |
+| PR | What it did |
 | :--- | :--- |
-| PR #24 | Preserves the pin/unpin work and records the task brief. |
-| PR #26 | Additive `parent_session_id` + `town_slot`, migration, `GET /towns`, one-level validation, shared `sa_runtime` Runner, `superagent_spawn`, router prompt/toolset. |
-| PR #25 | Vendors the eight pixel-art sprites under `assets/town/` with per-file provenance and licences. |
+| #24 | Preserved the pin/unpin work and recorded the task brief. |
+| #25 | Vendored the first eight sprites under `assets/town/` with per-file provenance and licences. |
+| #26 | Additive `parent_session_id` + `town_slot`, migration, `GET /towns`, one-level validation, shared `sa_runtime` Runner, `superagent_spawn`, router prompt/toolset. |
+| #27 | Desktop town scene, Router/worker houses, chat dialog, `GET /town/assets`, opaque Settings drawer and labelled header button. |
+| #28 | Replaced the coarse crops with MIT Hermes Town buildings/trees/props; root MIT `LICENSE`; rewritten `ATTRIBUTION.md`; reproducible extraction script. |
+| #29 | Thinking levels through the whole stack (`reasoning_effort` column, settings, API, runner `--reasoning`, model picker, Settings selector above high). |
+| #30 | Fixed 12-plot grid, opaque empty state/dialogs, 992×460 layout proof, README/DESIGN/operator docs, `GET /models` default effort. |
+| #31 | Sprite-only scaling so labels/badges stay readable; empty-baseline construction fix; composer focus + Tab trap; stale-gateway banner; version `0.5.2`. |
+| #32 | Lowest-free-slot allocation, legacy slot clamping, archived-aware orphan count; version `0.5.3`. |
+| #33 | Worker dialog “↗ Router”, readable town header, `/towns` 404 explanation; version `0.5.4`. |
+| #34 | CLI `chat --reasoning none…ultra`, stored/printed level, `models_payload` default effort; version `0.5.5`. |
+| #35 | Solid colour fallbacks (`--card` → `--background` → neutral), parent-based Router/Worker labels, owner-only Router jump, all-12 slot test; version `0.5.6`. |
 
-Backend/version details:
+## What is implemented
+
+### Backend
 
 - `chat_sessions.parent_session_id` is NULL for a root town and a root id for
-  one worker. `town_slot` is allocated once, inside the insert transaction.
-- `GET /towns` groups roots with workers; `/chats` remains flat and compatible.
+  one worker. `town_slot` is allocated inside the insert transaction, reuses
+  the lowest free plot, and is clamped to `0…11` on read. The hierarchy is one
+  level; workers cannot spawn workers.
+- `GET /towns` groups roots with workers, reports status counts, a separate
+  `orphaned` list/count and `archived_count`. `/chats` stays flat and
+  compatible. A missing root leaves an orphan, never a second town.
 - `superagent_spawn` creates a real child chat and launches it through the same
-  `Runner` (one process-wide semaphore), inheriting the router's model,
-  provider and repository.
-- `plugin.yaml`, `dashboard/manifest.json`, `dashboard/plugin_api.py` and
-  `CHANGELOG.md` are at **0.5.0**.
+  process-wide `Runner`/semaphore. The child inherits the Router's model,
+  provider, thinking level and repository.
+- `default_reasoning_effort`, per-session `reasoning_effort`, API validation,
+  worker inheritance and `--reasoning` argv are wired end to end. The accepted
+  ladder is `none, minimal, low, medium, high, xhigh, max, ultra`.
+- `/health` exposes API v3 with features `towns` and `thinking`; `/models`
+  exposes `default_reasoning_effort`; `/town/assets` serves only the 14-file
+  allowlist through data URLs and bytes.
 
-## Current branch `feat/towns-desktop`
+### Desktop
 
-- `dashboard/town_assets.py` + `GET /town/assets` and
-  `GET /town/assets/{name}`: explicit allowlist, real `image/png` MIME, no
-  request path reaches the filesystem. The manifest returns data URLs so the
-  renderer works over local and remote gateways.
-- `desktop/plugin.js`: the page body is now the selected town.
-  - central Router house + one person; one house + person per worker, keyed by
-    stable session id and `town_slot`.
-  - text status badges for queued/running/review/failed/cancelled, not just
-    animation.
-  - compact town switcher (select, previous/next, New town, Sessions).
-  - accessible chat dialog reusing `ChatHeader`, `Transcript` and `Composer`;
-    Escape/backdrop close, focus trap, focus returned to the house, and a
-    stale-data guard that never shows another session's transcript.
-  - one-shot construction only for ids that appear after a persisted baseline;
-    `prefers-reduced-motion` and timer cleanup are handled.
-  - rename/pin/archive from the house menu; search/rename/archive/delete/pin
-    stay available in the Sessions drawer; Settings, GitHub, Usage, toasts and
-    the status-bar chip remain.
-- `tests/towns_render_probe.mjs` + `tests/test_towns_render.py`: renders the
-  real desktop tree with stubbed SDK/React imports. Covers the router/worker
-  houses, status text, one-shot build class, reduced motion, switcher, dialog,
-  stale-transcript guard and the empty page.
-- Backend asset allowlist test added to `tests/test_towns.py`.
+- The page body is the selected town: central Router house, one house and one
+  person per worker, stable 4×3 plots for all 12 backend slots, text status
+  badges (`queued/running/review/failed/cancelled`) and a dirt plaza with trees,
+  fountain, lamp, rocks and bushes.
+- Construction is a one-shot event keyed to a persisted known-worker baseline;
+  a town first observed empty still animates its first worker. Reduced motion
+  skips both animations.
+- Town switcher: select, previous/next, **New town**, **Sessions**. Arrow keys
+  switch only when focus is not in a field; the selected id persists.
+- House dialog reuses `ChatHeader`/`Transcript`/`Composer`, so stop, retry,
+  follow-up, model/thinking changes, diff, export and PR comment go through the
+  same mutations. Escape/backdrop close, Tab is trapped from inside or outside,
+  focus starts in the composer and returns to the house. The worker dialog has a
+  **↗ Router** action only when the owner is known.
+- Settings, Usage, GitHub and Sessions are opaque drawers. Settings sits on
+  `--card` with a solid fallback, a `bg-black/45` backdrop, 420 px width and a
+  labelled “⚙ Settings” header action. Default thinking, presets, worker limits
+  and yolo are there.
+- Assets are vendored PNGs (14): Hermes Town MIT buildings/trees/props, CC-BY-SA
+  grass from hilau/George Bailey/bluecarrot16, CC0 person from Luis Zuno.
+  See `assets/town/ATTRIBUTION.md`.
 
-### Verification already run
+### Tests and tooling
 
 ```text
-python -m pytest -q                        505 passed
-node --check desktop/plugin.js             ok
-node tests/towns_render_probe.mjs          town render probe: ok
-hermes plugins validate .                  Validation passed.
-hermes plugins doctor --ci .               OK: runtime discovery, manifest parsing,
-                                           import, registration
+python -m pytest -q                         517 passed
+node --check desktop/plugin.js              ok
+node tests/towns_render_probe.mjs           town render probe: ok
+hermes plugins validate .                   Validation passed.
+hermes plugins doctor --ci .                5 tools, 0 hooks
 ```
+
+The 992×460 DOM probe with 12 houses reports **zero overlaps and zero
+clipping**. The installed plugin is a directory link at
+`~/.hermes/plugins/superagent -> C:\Users\hongy\Desktop\hermes-superagent`, and
+`hermes plugins show superagent` reports **0.5.6**.
 
 ## Not verified / blockers
 
 1. **Installed desktop UI.** `dashboard/plugin_api.py` is loaded when the
-   gateway boots. The gateway hosting this chat still has the 0.4 route table,
-   so `/towns` and `/town/assets` are 404 until `hermes gateway restart`. Do
-   not run that from this chat. Restart outside the session, then **Reload
-   desktop plugins**.
-2. **Real router spawn.** The tool is registered and the router prompt/toolset
-   are wired, but a real headless `hermes chat -t file,terminal,superagent`
-   turn has not yet called `superagent_spawn` against this gateway. Verify that
-   the plugin toolset is exposed to the headless turn and that the child
-   launches through the shared Runner.
-3. **Visual pass.** The house/person crops were verified programmatically
-   (dimensions, alpha, licence provenance) but not seen in the app. Check the
-   1024px layout, house/person scale, label overlap, animation, reduced motion,
-   dialog focus trap and reload persistence.
-4. **Docs.** README, DESIGN.md, `skills/superagent-operator/SKILL.md` and the
-   plugin manifest description still need the Towns section (version/changelog
-   are done). The task brief is in `tasks/2026-11-07-superagent-towns-brief.txt`.
-5. **Follow-ups.** Replace the `window.prompt` rename stopgap with an inline
-   editor if it feels cheap; give the New-town modal a full Tab trap; decide
-   whether deleting a root should offer cascade/reattach instead of leaving
-   orphaned workers; add a pagination/asset-cache test.
+   gateway boots. The gateway hosting this chat still has the old route table,
+   so `/towns` and `/town/assets` return 404 until the gateway is restarted from
+   an **outside shell**. Do not run the restart from this chat. After the
+   restart, use **Reload desktop plugins** so `desktop/plugin.js` is fresh.
+   The page now detects this and shows a “Gateway needs a restart” banner; a
+   `/towns` 404 also names the restart instead of claiming the plugin is
+   disabled.
+2. **Real Router spawn.** `superagent_spawn` is registered and tested with a
+   fake Runner, but no real headless `hermes chat` turn has called it against
+   this gateway. Verify: create a town, prompt the Router to spawn two workers,
+   confirm two houses appear and both child sessions launch through the shared
+   Runner.
+3. **Visual pass in the app.** The scene has been DOM-probed and the sprites
+   inspected, but not seen in Electron at 1024 px. Check house/person scale,
+   labels, animation, reduced motion, focus trap and reload persistence.
+4. **PR-only paths.** The dialog's diff/comment controls depend on a finished
+   session with a repository/PR; they reuse existing code but have not been
+   exercised in a town dialog.
 
 ## Resuming
 
 ```bash
-git checkout feat/towns-desktop
+cd C:/Users/hongy/Desktop/hermes-superagent
+git status --short          # should be clean on main
+git log --oneline -5
 # outside this chat:
 hermes gateway restart
 # in the app: Reload desktop plugins
 ```
 
-Then: create two towns, send a Router prompt that asks it to call
-`superagent_spawn` twice, switch towns, open the Router and both worker chats,
-send a follow-up, and verify the console has no 404s or remote image URLs.
+Then:
+
+1. Create two towns. Ask the first Router to “spawn two workers: one fixes the
+   parser, one adds a test”.
+2. Confirm the Router is centred, two houses appear with construction, and each
+   house opens its own transcript.
+3. Switch towns and use previous/next; confirm no session is stopped.
+4. Open a worker, follow up, change thinking to `xhigh`, then retry a failed
+   chat.
+5. Check the console for 404s, remote image URLs, focus escapes or horizontal
+   scroll at 1024 px.
+6. Only then consider the installed slice verified.
+
+The task brief is in `tasks/2026-11-07-superagent-towns-brief.txt`.
