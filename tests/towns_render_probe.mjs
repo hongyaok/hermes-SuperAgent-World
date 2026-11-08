@@ -281,6 +281,14 @@ assert.match(settingsPanel, /Model presets/)
 assert.match(settingsPanel, /Max parallel workers/)
 
 assert.equal(plugin.reasoningLabel('xhigh'), 'Extra high')
+const fallbackPicker = render(h(plugin.PresetSelect, {
+  value: { model: 'm', provider: 'p', effort: 'xhigh' },
+  models: { models: ['m', 'n'] },
+  onChange: () => undefined,
+}))
+assert.match(fallbackPicker, /Thinking level/)
+assert.match(fallbackPicker, /Extra high/)
+assert.match(fallbackPicker, /Default model/)
 assert.equal(plugin.modelWithThinking({ model: 'm', provider: 'p', effort: 'max' }), 'p: m · Max')
 assert.equal(plugin.modelWithThinking({ model: 'm', provider: 'p', effort: '' }), 'p: m')
 assert.equal(plugin.backendNeedsRestart(null), false)
