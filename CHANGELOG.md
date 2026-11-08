@@ -3,6 +3,23 @@
 All notable changes to the `superagent` Hermes plugin. Plain bullets, newest
 first.
 
+## 0.5.7 — 2026-11-08
+
+### Added
+
+- `hermes superagent models` and `settings` print the resolved default thinking
+  level (`model default` when unset).
+
+### Changed
+
+- `settings` places the thinking line directly under model/provider, where the
+  other chat defaults are read.
+
+### Fixed
+
+- The CLI no longer hides a configured `default_reasoning_effort` from the two
+  commands people use to inspect it.
+
 ## 0.5.6 — 2026-11-08
 
 ### Added

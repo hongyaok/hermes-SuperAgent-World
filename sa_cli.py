@@ -230,6 +230,7 @@ def render_models(data: dict) -> str:
     lines = [
         f"default model:    {data.get('default_model') or '(unset)'}",
         f"default provider: {data.get('default_provider') or '(unset)'}",
+        f"default thinking: {data.get('default_reasoning_effort') or 'model default'}",
         "",
         "presets:",
     ]
@@ -272,6 +273,11 @@ def render_settings(data: dict) -> str:
         ("github_poll_seconds", "GitHub poll (s)"),
     ):
         lines.append(line(label, data.get(key)))
+        if key == "default_provider":
+            lines.append(line(
+                "default thinking",
+                data.get("default_reasoning_effort") or "model default",
+            ))
     lines.append(line("GitHub token", "set (value never shown)" if data.get("github_token_set") else "not set"))
     if presets:
         lines.append("  model presets:")
