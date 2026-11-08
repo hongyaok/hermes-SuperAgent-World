@@ -4289,6 +4289,9 @@ const TOWN_CSS = `
 .superagent-speech-bubble { animation: superagent-speech-float 2200ms ease-in-out infinite; }
 .superagent-town-sky { transition: background-color 800ms linear; }
 .superagent-town-clock { font-variant-numeric: tabular-nums; }
+/* Fixed-size bubbles scroll instead of growing the town layout. Thin here;
+ * the pixel-chrome pass upgrades this to a stepped retro scrollbar. */
+.superagent-pixel-scroll { scrollbar-width: thin; }
 @media (prefers-reduced-motion: reduce) {
   .superagent-town-build, .superagent-town-person, .superagent-petdex-sprite, .superagent-speech-bubble { animation: none !important; }
 }
@@ -4397,12 +4400,12 @@ function TownSpeechBubble({ text, status }) {
   return jsx('span', {
     'data-town-speech': '1',
     className: cn(
-      'superagent-speech-bubble pointer-events-none absolute -top-6 left-1/2 z-20',
-      'max-w-[11.5rem] -translate-x-1/2 truncate whitespace-nowrap rounded-full border-2 px-2 py-0.5',
-      'text-[0.625rem] font-medium leading-tight opacity-100 shadow-md',
+      'superagent-speech-bubble superagent-pixel-scroll pointer-events-none absolute -top-6 left-1/2 z-20',
+      'h-14 w-36 -translate-x-1/2 overflow-x-hidden overflow-y-auto break-words rounded-lg border-2 px-2 py-1',
+      'text-left text-[0.625rem] font-medium leading-tight opacity-100 shadow-md',
       toneClass,
     ),
-    style: { backgroundColor: 'var(--card, #fffbe8)', opacity: 1 },
+    style: { backgroundColor: 'var(--card, #fffbe8)', opacity: 1, maxHeight: '56px' },
     title: text,
     children: text,
   })
