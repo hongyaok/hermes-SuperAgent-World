@@ -876,6 +876,7 @@ def list_models() -> dict[str, Any]:
     return {
         "default_model": default_model,
         "default_provider": str(settings.get("default_provider") or ""),
+        "default_reasoning_effort": str(settings.get("default_reasoning_effort") or ""),
         "models": models,
         "presets": presets,
     }

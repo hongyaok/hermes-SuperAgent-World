@@ -93,16 +93,18 @@ const MAX_WORKERS = 8
 // so a poll or a town switch cannot move a house. Slots past the list fall
 // into a deterministic outer ring.
 const TOWN_PLOTS = [
-  { left: 22, top: 34, scale: 1 },
-  { left: 78, top: 34, scale: 1 },
-  { left: 12, top: 62, scale: 1 },
-  { left: 88, top: 62, scale: 1 },
-  { left: 31, top: 80, scale: 0.95 },
-  { left: 69, top: 80, scale: 0.95 },
-  { left: 38, top: 17, scale: 0.9 },
-  { left: 62, top: 17, scale: 0.9 },
-  { left: 8, top: 44, scale: 0.86 },
-  { left: 92, top: 44, scale: 0.86 },
+  { left: 10, top: 18, scale: 0.72 },
+  { left: 90, top: 18, scale: 0.72 },
+  { left: 10, top: 50, scale: 0.72 },
+  { left: 90, top: 50, scale: 0.72 },
+  { left: 10, top: 82, scale: 0.72 },
+  { left: 90, top: 82, scale: 0.72 },
+  { left: 30, top: 18, scale: 0.72 },
+  { left: 70, top: 18, scale: 0.72 },
+  { left: 30, top: 50, scale: 0.72 },
+  { left: 70, top: 50, scale: 0.72 },
+  { left: 30, top: 82, scale: 0.72 },
+  { left: 70, top: 82, scale: 0.72 },
 ]
 const TOWN_HOUSE_SPRITES = ['house-a.png', 'house-b.png', 'house-c.png', 'house-d.png']
 const TOWN_BUILD_MS = 900
@@ -2028,7 +2030,7 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
                           setModel((current) => ({ ...current, effort: event.target.value }))
                         },
                         className: cn('rounded border border-(--ui-stroke-secondary)',
-                          'bg-(--card) px-1.5 py-1 text-[0.6875rem] text-(--ui-text-secondary)',
+                          'bg-background px-1.5 py-1 text-[0.6875rem] text-(--ui-text-secondary)',
                           'focus:outline-none'),
                         children: REASONING_LEVELS.map((level) => jsx('option', {
                           key: level.value || 'default',
@@ -3853,8 +3855,8 @@ const TOWN_CSS = `
 }
 @keyframes superagent-town-walk {
   0% { background-position-x: 0; }
-  33.33% { background-position-x: -36px; }
-  66.66% { background-position-x: -72px; }
+  33.33% { background-position-x: calc(var(--town-person-step, 36px) * -1); }
+  66.66% { background-position-x: calc(var(--town-person-step, 36px) * -2); }
   100% { background-position-x: 0; }
 }
 .superagent-town-build { animation: superagent-town-build 900ms cubic-bezier(.2,.8,.2,1) both; }
@@ -3918,7 +3920,7 @@ function TownHouse({ session, isRouter, slot, onOpen, houseRef, building, reduce
           jsxs('span', {
             key: 'badge',
             className: cn('absolute left-0 top-0 inline-flex items-center gap-1 rounded border',
-              'border-(--ui-stroke-secondary) bg-(--card) px-1 py-0.5',
+              'border-(--ui-stroke-secondary) bg-background px-1 py-0.5',
               'text-[0.625rem] leading-none text-(--ui-text-secondary) shadow-sm'),
             children: [
               jsx(ChatDot, { key: 'dot', status: session.status }),
@@ -3943,6 +3945,7 @@ function TownHouse({ session, isRouter, slot, onOpen, houseRef, building, reduce
                   backgroundImage: `url("${person}")`,
                   backgroundSize: `${personSize * 3}px ${personSize * 4}px`,
                   backgroundPosition: '0 0',
+                  '--town-person-step': `${personSize}px`,
                   imageRendering: 'pixelated',
                   filter: townPersonFilter(session.id, isRouter),
                 },
@@ -3953,7 +3956,7 @@ function TownHouse({ session, isRouter, slot, onOpen, houseRef, building, reduce
       jsx('span', {
         key: 'name',
         className: cn('mt-0.5 block max-w-[11rem] truncate rounded border px-1.5 py-0.5',
-          'border-(--ui-stroke-secondary) bg-(--card) text-center text-[0.625rem]',
+          'border-(--ui-stroke-secondary) bg-background text-center text-[0.625rem]',
           'leading-tight text-(--ui-text-secondary) shadow-sm'),
         title: sessionTitle(session),
         children: isRouter ? 'Router' : sessionTitle(session),
@@ -4006,6 +4009,7 @@ function TownScene({ town, assets, buildingIds, onOpen, registerHouse, reducedMo
         key: 'scene',
         role: 'group',
         'aria-label': `${sessionTitle(town)} — town`,
+        'data-town-workers': workers.length,
         className: cn('relative min-h-[360px] flex-1 overflow-hidden rounded-lg border',
           'border-(--ui-stroke-secondary)'),
         style: grass
@@ -4072,16 +4076,6 @@ function TownScene({ town, assets, buildingIds, onOpen, registerHouse, reducedMo
             reducedMotion,
             assets,
           })),
-          jsxs('div', {
-            key: 'label',
-            className: cn('pointer-events-none absolute bottom-2 left-2 z-20 rounded border',
-              'border-(--ui-stroke-secondary) bg-background px-2 py-1 text-[0.6875rem]',
-              'text-(--ui-text-secondary)'),
-            children: [
-              jsx('span', { key: 't', className: 'font-medium', children: sessionTitle(town) }),
-              jsx('span', { key: 's', className: 'ml-2 text-(--ui-text-quaternary)', children: summary }),
-            ],
-          }),
         ],
       }),
       jsx('p', {
@@ -4212,7 +4206,7 @@ function TownChatDialog({
 
   return jsx('div', {
     'data-town-dialog': sessionId,
-    className: 'absolute inset-0 z-30 flex items-center justify-center bg-background/80 p-3',
+    className: 'absolute inset-0 z-30 flex items-center justify-center bg-black/45 p-3',
     onClick: (event) => { if (event && event.target === event.currentTarget) onClose() },
     children: jsxs('section', {
       role: 'dialog',
@@ -4221,7 +4215,8 @@ function TownChatDialog({
       ref: panelRef,
       tabIndex: -1,
       className: cn('flex h-[min(86vh,760px)] w-full max-w-3xl flex-col overflow-hidden rounded-lg',
-        'border border-(--ui-stroke-secondary) bg-background shadow-xl focus:outline-none'),
+        'border border-(--ui-stroke-secondary) shadow-xl focus:outline-none'),
+      style: { backgroundColor: 'var(--card)', color: 'var(--foreground)' },
       children: [
         jsxs('header', {
           key: 'head',
@@ -4234,6 +4229,12 @@ function TownChatDialog({
                   key: 'kind', className: 'shrink-0 rounded border border-(--ui-stroke-secondary) px-1 text-[0.625rem] text-(--ui-text-tertiary)',
                   children: router ? 'Router house' : 'Worker house',
                 }),
+                session
+                  ? jsx('span', {
+                      key: 'status', className: 'shrink-0 rounded border border-(--ui-stroke-secondary) px-1 text-[0.625rem] text-(--ui-text-secondary)',
+                      children: townStatusLabel(session.status),
+                    })
+                  : null,
                 jsx('span', {
                   key: 'id', id: 'superagent-town-dialog-title',
                   className: 'min-w-0 truncate text-sm font-medium text-(--ui-text-secondary)',
@@ -4293,12 +4294,30 @@ function TownModal({ title, subtitle, onClose, children }) {
   useEffect(() => {
     const panel = panelRef.current
     if (!panel) return undefined
-    const first = panel.querySelector('textarea, input') || panel.querySelector('button')
+    const focusables = () => Array.from(panel.querySelectorAll(
+      'button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+    )).filter((element) => element.getClientRects().length > 0)
+    const first = panel.querySelector('textarea, input') || focusables()[0]
     if (first && typeof first.focus === 'function') first.focus()
     const onKeyDown = (event) => {
-      if (!event || event.key !== 'Escape') return
-      if (typeof event.preventDefault === 'function') event.preventDefault()
-      closeRef.current()
+      if (!event) return
+      if (event.key === 'Escape') {
+        if (typeof event.preventDefault === 'function') event.preventDefault()
+        closeRef.current()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const items = focusables()
+      if (!items.length) return
+      const head = items[0]
+      const tail = items[items.length - 1]
+      if (event.shiftKey && (document.activeElement === head || !panel.contains(document.activeElement))) {
+        if (typeof event.preventDefault === 'function') event.preventDefault()
+        tail.focus()
+      } else if (!event.shiftKey && document.activeElement === tail) {
+        if (typeof event.preventDefault === 'function') event.preventDefault()
+        head.focus()
+      }
     }
     if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return undefined
     window.addEventListener('keydown', onKeyDown)
@@ -4306,13 +4325,14 @@ function TownModal({ title, subtitle, onClose, children }) {
   }, [])
   return jsx('div', {
     'data-town-modal': '1',
-    className: 'absolute inset-0 z-30 flex items-center justify-center bg-background/80 p-3',
+    className: 'absolute inset-0 z-30 flex items-center justify-center bg-black/45 p-3',
     onClick: (event) => { if (event && event.target === event.currentTarget) onClose() },
     children: jsxs('section', {
       role: 'dialog', 'aria-modal': 'true', 'aria-label': title,
       ref: panelRef, tabIndex: -1,
       className: cn('flex w-full max-w-xl flex-col gap-2 rounded-lg border',
-        'border-(--ui-stroke-secondary) bg-background p-3 shadow-xl focus:outline-none'),
+        'border-(--ui-stroke-secondary) p-3 shadow-xl focus:outline-none'),
+      style: { backgroundColor: 'var(--card)', color: 'var(--foreground)' },
       children: [
         jsxs('div', {
           key: 'head', className: 'flex items-start justify-between gap-2',
@@ -4339,13 +4359,47 @@ function TownModal({ title, subtitle, onClose, children }) {
   })
 }
 
-function TownEmpty({ onNew, banner }) {
+function TownEmpty({ onNew, banner, assets }) {
+  const grass = assets && assets['grass.png'] && assets['grass.png'].data_url
+  const router = assets && assets['house-router.png'] && assets['house-router.png'].data_url
+  const person = assets && assets['person.png'] && assets['person.png'].data_url
   return jsxs('div', {
     className: 'flex min-h-0 flex-1 flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-(--ui-stroke-secondary) p-6 text-center',
     children: [
+      jsxs('div', {
+        key: 'art',
+        'aria-hidden': 'true',
+        className: 'relative flex h-36 w-full max-w-xs items-end justify-center overflow-hidden rounded border border-(--ui-stroke-secondary)',
+        style: grass
+          ? {
+              backgroundImage: `url("${grass}")`,
+              backgroundSize: '96px 48px',
+              imageRendering: 'pixelated',
+            }
+          : undefined,
+        children: [
+          router
+            ? jsx('img', {
+                key: 'router', src: router, alt: '', draggable: false,
+                className: 'relative z-10 mb-5',
+                style: { width: 112, height: 'auto', imageRendering: 'pixelated' },
+              })
+            : null,
+          person
+            ? jsx('span', {
+                key: 'person',
+                className: 'absolute bottom-4 left-1/2 z-20 -translate-x-1/2',
+                style: {
+                  width: 28, height: 28, backgroundImage: `url("${person}")`,
+                  backgroundSize: '84px 112px', imageRendering: 'pixelated',
+                },
+              })
+            : null,
+        ],
+      }),
       jsx('div', { key: 'title', className: 'text-sm font-medium text-(--ui-text-secondary)', children: 'No towns yet' }),
       jsx('p', {
-        key: 'copy', className: 'max-w-sm text-xs text-(--ui-text-quaternary)',
+        key: 'copy', className: 'max-w-sm text-xs text-(--ui-text-tertiary)',
         children: 'A town starts with one Router session in the centre. Ask it for work, and every worker it spawns becomes a house.',
       }),
       jsx('button', {
@@ -5134,7 +5188,7 @@ function SuperagentPage() {
               children: 'Loading towns…',
             })
           : !town
-            ? jsx(TownEmpty, { onNew: newChat, banner: onboarding })
+            ? jsx(TownEmpty, { onNew: newChat, banner: onboarding, assets: assetMap })
             : jsx(TownScene, {
                 town, assets: assetMap, buildingIds: newWorkerIds,
                 onOpen: openHouse, registerHouse, reducedMotion,
