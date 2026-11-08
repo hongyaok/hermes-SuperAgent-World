@@ -154,6 +154,31 @@ def test_recent_event_detail_is_clipped_to_160_chars(chat):
     assert len(event["detail"]) == sa_chats.RECENT_EVENT_CHARS
 
 
+def test_recent_events_read_only_the_newest_rows_per_session(chat):
+    """A long history must not be scanned just to keep the newest three."""
+    busy = chat.create_session("busy worker")
+    quiet = chat.create_session("quiet worker")
+    for index in range(250):
+        chat.add_event(busy["id"], "tool", f"e{index}")
+    for index in range(3):
+        chat.add_event(quiet["id"], "tool", f"s{index}")
+
+    with chat._connect() as conn:
+        feeds = chat._recent_events(conn, [busy["id"], quiet["id"]])
+
+    newest = feeds[busy["id"]]
+    assert len(newest) == sa_chats.RECENT_EVENT_LIMIT
+    # The newest events, not the first ones the scan happened to see.
+    assert [event["detail"] for event in newest] == ["e249", "e248", "e247"]
+    assert [event["detail"] for event in feeds[quiet["id"]]] == ["s2", "s1", "s0"]
+
+    with chat._connect() as conn:
+        wider = chat._recent_events(conn, [busy["id"]], per_session=10)
+    assert [event["detail"] for event in wider[busy["id"]]] == [
+        f"e{index}" for index in range(249, 239, -1)
+    ]
+
+
 def test_only_live_sessions_get_recent_events(chat):
     chat.create_session("still queued")
     done = chat.create_session("finished")

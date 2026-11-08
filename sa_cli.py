@@ -48,7 +48,7 @@ _RUNNERS_LOCK = threading.Lock()
 USAGE = (
     "usage: hermes superagent "
     "<status|tick|ask <request>|run <ticket-id>|show <ticket-id|session-id>|"
-    "chat <prompt>|sessions|stop <session-id>|diff <session-id>|"
+    "chat <prompt>|sessions|towns|stop <session-id>|diff <session-id>|"
     "comment <session-id> [--body TEXT]|models|settings|cleanup|"
     "github <status|test|connect|disconnect|prs|poll|work <number>>|doctor> [--json]"
 )
@@ -614,6 +614,64 @@ def render_sessions(data: dict) -> str:
     return "\n".join(lines)
 
 
+def render_towns(data: dict) -> str:
+    """Town hierarchy in the order list_towns returns it: one block per root."""
+    rows = data.get("towns") or []
+    header = (
+        f"Towns   total={data.get('town_count', len(rows))}"
+        f"   workers={data.get('worker_count', 0)}"
+        f"   running={data.get('running', 0)}"
+    )
+    archived = int(data.get("archived_count") or 0)
+    if archived:
+        # Hidden by default; the count is what tells a reader they exist.
+        header += f"   archived={archived} (hidden; --show-archived shows them)"
+    lines = [header, ""]
+    if not rows:
+        lines.append('No towns yet. Start one with: hermes superagent chat "<prompt>"')
+    for town in rows:
+        workers = town.get("workers") or []
+        status_counts: dict[str, int] = {}
+        for worker in workers:
+            worker_status = str(worker.get("status") or "?")
+            status_counts[worker_status] = status_counts.get(worker_status, 0) + 1
+        summary = f"workers={town.get('worker_count', len(workers))}"
+        if status_counts:
+            summary += " (" + " ".join(
+                f"{key}={value}" for key, value in sorted(status_counts.items())
+            ) + ")"
+        title = " ".join(str(town.get("title") or "").split())
+        if len(title) > 44:
+            title = title[:43] + "..."
+        town_id = str(town.get("id") or "?")
+        town_status = str(town.get("status") or "?")
+        town_elapsed = _format_elapsed(town.get("elapsed_seconds"))
+        lines.append(
+            f"  {town_id:<7} {town_status:<10} {town_elapsed:>8}  {title}  {summary}"
+        )
+        for worker in workers:
+            slot = worker.get("town_slot")
+            slot_text = "-" if slot is None else str(slot)
+            worker_line = (
+                f"      slot {slot_text:>2} {str(worker.get('id') or '?'):<7}"
+                f" {str(worker.get('status') or '?'):<10}"
+                f" {_format_elapsed(worker.get('elapsed_seconds')):>8}"
+            )
+            if worker.get("pr_number") is not None:
+                worker_line += f"  PR #{worker['pr_number']}"
+            pr_url = str(worker.get("pr_url") or "").strip()
+            if pr_url:
+                worker_line += f" {pr_url}"
+            lines.append(worker_line)
+    orphaned = int(data.get("orphaned_count") or 0)
+    if orphaned:
+        lines.append("")
+        lines.append(
+            f"  orphaned workers: {orphaned} (their parent town session is missing)"
+        )
+    return "\n".join(lines)
+
+
 def render_search(data: dict) -> str:
     """One block per hit: where it was, what it says, and why it matched."""
     rows = data.get("sessions") or []
@@ -1108,6 +1166,39 @@ def _pin_chat(args: argparse.Namespace, engine: Any, want_json: bool, pinned: bo
         print(json.dumps({"ok": True, "pinned": pinned, "session": session}, indent=2, default=str))
     else:
         print(f"{session_id} {'pinned' if pinned else 'unpinned'}")
+    return 0
+
+
+def _list_towns(args: argparse.Namespace, engine: Any, want_json: bool) -> int:
+    """`towns`: root towns with their workers, newest activity first."""
+    try:
+        limit = int(getattr(args, "limit", 50) or 50)
+    except (TypeError, ValueError):
+        limit = 50
+    limit = max(1, min(limit, 200))
+    archived = "all" if getattr(args, "show_archived", False) else "hide"
+    try:
+        store = _chat_store(engine)
+        data = store.list_towns(limit=limit, archived=archived)
+        payload = {
+            "db_exists": Path(str(store.path)).is_file(),
+            "towns": data.get("towns") or [],
+            "counts": data.get("counts") or {},
+            "running": data.get("running", 0),
+            "town_count": data.get("town_count", 0),
+            "worker_count": data.get("worker_count", 0),
+            "orphaned": data.get("orphaned") or [],
+            "orphaned_count": data.get("orphaned_count", 0),
+            "archived_count": data.get("archived_count", 0),
+        }
+    except Exception as exc:
+        print(f"error: towns failed: {exc}")
+        return 1
+    print(
+        json.dumps(payload, indent=2, default=str)
+        if want_json
+        else render_towns(payload)
+    )
     return 0
 
 
@@ -1773,6 +1864,15 @@ def setup_cli(subparser: argparse.ArgumentParser) -> None:
         help="Include archived sessions (hidden by default)",
     )
     _add_json_flag(sessions_p)
+    towns_p = subs.add_parser("towns", help="List router towns and their workers")
+    towns_p.add_argument(
+        "--limit", type=int, default=50, help="How many towns to show (1-200)"
+    )
+    towns_p.add_argument(
+        "--show-archived", "--all", dest="show_archived", action="store_true",
+        help="Include archived towns and workers (hidden by default)",
+    )
+    _add_json_flag(towns_p)
     search_p = subs.add_parser(
         "search", help="Search chat titles, prompts and transcripts"
     )
@@ -1939,6 +2039,9 @@ def run(args: argparse.Namespace, ctx: Any) -> int:
 
     if command == "sessions":
         return _list_sessions(args, engine, want_json)
+
+    if command == "towns":
+        return _list_towns(args, engine, want_json)
 
     if command == "search":
         return _search_chats(args, engine, want_json)

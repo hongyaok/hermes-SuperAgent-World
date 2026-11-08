@@ -444,6 +444,108 @@ def test_sessions_json_reports_the_archived_count(sa, store, fake_executor, monk
     assert data["archived_count"] == 1
 
 
+def test_towns_subparser_registered(sa):
+    parser = argparse.ArgumentParser(prog="hermes superagent")
+    sa.sa_cli.setup_cli(parser)
+
+    ns = parser.parse_args(["towns"])
+    assert ns.superagent_command == "towns"
+    assert ns.limit == 50 and ns.show_archived is False and ns.json is False
+
+    ns = parser.parse_args(["towns", "--limit", "5", "--show-archived", "--json"])
+    assert ns.limit == 5 and ns.show_archived is True and ns.json is True
+
+
+def test_towns_empty_store_prints_empty_state(
+    sa, store, fake_executor, monkeypatch, capsys
+):
+    engine = _engine(sa, store, fake_executor)
+    _patch_engine(sa, monkeypatch, engine)
+
+    rc = sa.sa_cli.run(_args(superagent_command="towns"), object())
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "total=0" in out
+    assert "No towns yet" in out
+
+
+def test_towns_lists_root_with_worker_slot_and_pr(
+    sa, store, fake_executor, monkeypatch, capsys
+):
+    engine = _engine(sa, store, fake_executor)
+    _patch_engine(sa, monkeypatch, engine)
+    chat = sa.sa_chats.ChatStore(store.path)
+    root = chat.create_session("router town")
+    worker = chat.create_session(
+        "worker one",
+        parent_session_id=root["id"],
+        status="running",
+        pr_number=7,
+        pr_url="https://github.com/o/r/pull/7",
+    )
+
+    rc = sa.sa_cli.run(_args(superagent_command="towns"), object())
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert root["id"] in out and worker["id"] in out
+    assert out.index(root["id"]) < out.index(worker["id"])
+    assert f"slot {worker['town_slot']:>2}" in out
+    assert "workers=1" in out and "running=1" in out
+    assert "PR #7" in out and "https://github.com/o/r/pull/7" in out
+
+
+def test_towns_json_shape(sa, store, fake_executor, monkeypatch, capsys):
+    engine = _engine(sa, store, fake_executor)
+    _patch_engine(sa, monkeypatch, engine)
+    chat = sa.sa_chats.ChatStore(store.path)
+    root = chat.create_session("router town")
+    worker = chat.create_session("worker one", parent_session_id=root["id"])
+
+    rc = sa.sa_cli.run(_args(superagent_command="towns", json=True), object())
+    data = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    for key in (
+        "db_exists",
+        "towns",
+        "counts",
+        "running",
+        "town_count",
+        "worker_count",
+        "orphaned_count",
+    ):
+        assert key in data
+    assert data["town_count"] == 1 and data["worker_count"] == 1
+    town = data["towns"][0]
+    assert town["id"] == root["id"] and town["worker_count"] == 1
+    row = town["workers"][0]
+    for key in ("id", "status", "town_slot", "elapsed_seconds", "pr_number", "pr_url"):
+        assert key in row
+    assert row["id"] == worker["id"] and row["town_slot"] == worker["town_slot"]
+
+
+def test_towns_limit_and_show_archived(sa, store, fake_executor, monkeypatch, capsys):
+    engine = _engine(sa, store, fake_executor)
+    _patch_engine(sa, monkeypatch, engine)
+    chat = sa.sa_chats.ChatStore(store.path)
+    first = chat.create_session("first town")
+    second = chat.create_session("second town")
+    filed = chat.create_session("archived town")
+    chat.set_archived(filed["id"])
+
+    rc = sa.sa_cli.run(_args(superagent_command="towns", limit=1), object())
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert second["id"] in out and first["id"] not in out
+    assert "archived=1" in out and "--show-archived" in out
+
+    rc = sa.sa_cli.run(
+        _args(superagent_command="towns", show_archived=True), object()
+    )
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert first["id"] in out and second["id"] in out and filed["id"] in out
+
+
 def test_show_session_detail_has_messages_and_events(
     sa, store, fake_executor, monkeypatch, capsys
 ):

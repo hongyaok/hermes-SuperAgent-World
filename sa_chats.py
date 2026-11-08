@@ -1076,24 +1076,26 @@ class ChatStore:
     ) -> dict[str, list[dict]]:
         """Newest ``per_session`` events for every id, in one query.
 
-        Grouping happens here, not in SQL, so the query stays a plain index
-        scan: the results arrive newest-first and each bucket stops at
-        ``per_session``.
+        A ``ROW_NUMBER()`` window bounds the result inside SQLite, so the rows
+        arrive newest-first per session and a long history is never read just
+        to be thrown away: at most ``per_session`` rows per session leave the
+        database.
         """
         ids = [str(session_id) for session_id in session_ids if session_id]
         if not ids:
             return {}
         rows = conn.execute(
-            "SELECT session_id, kind, detail, created_at FROM chat_events"
-            " WHERE session_id IN (%s) ORDER BY id DESC" % ", ".join("?" for _ in ids),
-            ids,
+            "SELECT session_id, kind, detail, created_at FROM ("
+            " SELECT session_id, kind, detail, created_at,"
+            " ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY id DESC) AS row_num"
+            " FROM chat_events WHERE session_id IN (%s)"
+            ") WHERE row_num <= ? ORDER BY session_id, row_num"
+            % ", ".join("?" for _ in ids),
+            [*ids, per_session],
         ).fetchall()
         feeds: dict[str, list[dict]] = {session_id: [] for session_id in ids}
         for row in rows:
-            bucket = feeds[row["session_id"]]
-            if len(bucket) >= per_session:
-                continue
-            bucket.append(
+            feeds[row["session_id"]].append(
                 {
                     "kind": row["kind"],
                     "detail": _clip(row["detail"], RECENT_EVENT_CHARS),
