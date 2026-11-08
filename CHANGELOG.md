@@ -3,6 +3,26 @@
 All notable changes to the `superagent` Hermes plugin. Plain bullets, newest
 first.
 
+## 0.5.10 — 2026-11-08
+
+### Added
+
+- Regression tests that a Router gets `superagent` in its toolset and “Town
+  mode” in its prompt while a worker gets neither, and that a new chat with no
+  explicit level stores the saved default.
+- The shortcut sheet now lists the town keys (←/→, n, /).
+
+### Changed
+
+- The house name is a pointer affordance only (`tabIndex=-1`); keyboard users
+  keep one tab stop per house on the house button itself.
+- The operator skill version follows the plugin.
+
+### Fixed
+
+- The shortcut sheet advertised `j/k` chat navigation that the town page does
+  not implement; it now describes the town controls that actually work.
+
 ## 0.5.9 — 2026-11-08
 
 ### Added

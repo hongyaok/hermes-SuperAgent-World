@@ -1,7 +1,7 @@
 ---
 name: superagent-operator
 description: Operate Superagent chats, workers and GitHub watch.
-version: 0.5.1
+version: 0.5.9
 platforms: [linux, macos, windows]
 metadata:
   hermes:

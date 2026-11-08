@@ -179,6 +179,34 @@ def test_launch_builds_the_headless_command(chat, popen, tmp_path):
     assert "shell" not in kwargs
 
 
+def test_router_gets_the_superagent_toolset_but_workers_do_not(chat, popen):
+    popen.install(
+        FakeProcess(jsonl({"type": "result", "session_id": "router-local"})),
+        FakeProcess(jsonl({"type": "result", "session_id": "worker-local"})),
+    )
+    runner = make_runner(chat, max_workers=2, router_toolset="superagent")
+    root = chat.create_session("root")
+    child = chat.create_session("worker", parent_session_id=root["id"])
+
+    runner.launch_turn(root["id"], "root")
+    runner.launch_turn(child["id"], "worker")
+    assert wait_until(lambda: status_of(chat, root["id"]) == "review")
+    assert wait_until(lambda: status_of(chat, child["id"]) == "review")
+
+    def argv_for(session_id):
+        return next(
+            call["argv"] for call in popen.calls
+            if session_id in call["argv"][call["argv"].index("-q") + 1]
+        )
+
+    root_argv = argv_for(root["id"])
+    child_argv = argv_for(child["id"])
+    assert root_argv[root_argv.index("-t") + 1] == "file,terminal,superagent"
+    assert child_argv[child_argv.index("-t") + 1] == "file,terminal"
+    assert "Town mode" in root_argv[root_argv.index("-q") + 1]
+    assert "Town mode" not in child_argv[child_argv.index("-q") + 1]
+
+
 def test_resume_turn_sends_the_raw_message(chat, popen):
     popen.install(FakeProcess(jsonl({"type": "result", "session_id": "local-2"})))
     runner = make_runner(chat)
