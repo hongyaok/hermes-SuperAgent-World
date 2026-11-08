@@ -346,7 +346,9 @@ and `/chats`, so the scene cannot invent activity that has no session row.
   modals) with the transcript scrolling inside (`superagent-pixel-scroll`), so
   a long chat never covers the town. The chat column itself is a centered
   `560px` column on every host (dialog, workspace tile, full page), so no
-  surface can stretch it edge-to-edge. It reuses the existing `ChatHeader`,
+  surface can stretch it edge-to-edge, and the transcript caps at
+  `min(60vh, 32rem)` so no host can grow taller with the chat — it scrolls
+  instead. It reuses the existing `ChatHeader`,
   `Transcript`, live-worker strip and `Composer`, so follow-ups, stop, retry,
   model/thinking changes, **Diff**, **Create PR**, **Comment / Approve PR**, export and Router dispatch actions behave consistently. Escape/backdrop close it, Tab is trapped,
   focus returns to the house, and a session-id guard prevents a previous
