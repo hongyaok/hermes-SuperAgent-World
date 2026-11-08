@@ -3375,7 +3375,7 @@ function ChatCenter(props) {
 
   if (!session) {
     return jsxs('div', {
-      className: 'flex min-h-0 min-w-0 flex-1 flex-col gap-3',
+      className: 'mx-auto flex min-h-0 min-w-0 w-full max-w-[560px] flex-1 flex-col gap-3',
       children: [
         banner ? jsx('div', { key: 'banner', className: 'shrink-0', children: banner }) : null,
         jsx('div', {
@@ -3410,7 +3410,7 @@ function ChatCenter(props) {
     : null
 
   return jsxs('div', {
-    className: 'flex min-h-0 min-w-0 flex-1 flex-col gap-3',
+    className: 'mx-auto flex min-h-0 min-w-0 w-full max-w-[560px] flex-1 flex-col gap-3',
     children: [
       jsx(ChatHeader, {
         key: 'head', session,
@@ -3453,7 +3453,7 @@ function ChatTile({ sessionId }) {
     return jsx('div', { className: 'p-4 text-xs text-(--ui-text-tertiary)', children: 'Loading chat…' })
   }
   return jsxs('div', {
-    className: 'flex h-full min-h-0 flex-col gap-2 p-3',
+    className: 'mx-auto flex h-full min-h-0 w-full max-w-[560px] flex-col gap-2 p-3',
     children: [
       jsx(ChatHeader, { key: 'head', session, tile: true }),
       jsx(Transcript, { key: 'transcript', session }),

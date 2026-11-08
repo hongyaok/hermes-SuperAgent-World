@@ -344,7 +344,9 @@ and `/chats`, so the scene cannot invent activity that has no session row.
 - **House dialog** — clicking any house (or its walking sprite/bubble) opens that session's transcript and
   composer in a fixed compact popup (`460×560` max, `440×540` for generic
   modals) with the transcript scrolling inside (`superagent-pixel-scroll`), so
-  a long chat never covers the town. It reuses the existing `ChatHeader`,
+  a long chat never covers the town. The chat column itself is a centered
+  `560px` column on every host (dialog, workspace tile, full page), so no
+  surface can stretch it edge-to-edge. It reuses the existing `ChatHeader`,
   `Transcript`, live-worker strip and `Composer`, so follow-ups, stop, retry,
   model/thinking changes, **Diff**, **Create PR**, **Comment / Approve PR**, export and Router dispatch actions behave consistently. Escape/backdrop close it, Tab is trapped,
   focus returns to the house, and a session-id guard prevents a previous
