@@ -4291,7 +4291,22 @@ const TOWN_CSS = `
 .superagent-town-clock { font-variant-numeric: tabular-nums; }
 /* Fixed-size bubbles scroll instead of growing the town layout. Thin here;
  * the pixel-chrome pass upgrades this to a stepped retro scrollbar. */
-.superagent-pixel-scroll { scrollbar-width: thin; }
+.superagent-pixel-scroll { scrollbar-width: thin; scrollbar-color: #e8b64c #2a2135; }
+.superagent-pixel-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+.superagent-pixel-scroll::-webkit-scrollbar-track { background: #2a2135; border: 2px solid #1a1a2e; }
+.superagent-pixel-scroll::-webkit-scrollbar-thumb { background: #f5d97a; border: 2px solid #1a1a2e; }
+.superagent-pixel-scroll::-webkit-scrollbar-thumb:active { background: #ffd94d; }
+/* Pixel chrome: system pixel-font stack (no remote fetch, hermetic) plus
+ * stepped 2px panels. Applied to the town canvas, HUD, bubbles and dialog
+ * windows; the rest of the plugin keeps the host chrome. */
+.superagent-pixel, .superagent-town-clock, .superagent-speech-bubble {
+  font-family: 'VT323', 'Px437 IBM VGA 8x16', 'IBM Plex Mono', 'Courier New', monospace;
+  letter-spacing: 0.02em;
+}
+.superagent-pixel-panel {
+  border: 2px solid #1a1a2e !important;
+  box-shadow: 0 2px 0 #1a1a2e, inset -2px -2px 0 rgba(0,0,0,0.18), inset 2px 2px 0 rgba(255,255,255,0.22);
+}
 @media (prefers-reduced-motion: reduce) {
   .superagent-town-build, .superagent-town-person, .superagent-petdex-sprite, .superagent-speech-bubble { animation: none !important; }
 }
@@ -4827,7 +4842,7 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
   const routerPet = petMap[town.avatar_slug] || null
 
   return jsxs('div', {
-    className: 'relative isolate z-0 flex min-h-0 flex-1 flex-col gap-2',
+    className: 'superagent-pixel relative isolate z-0 flex min-h-0 flex-1 flex-col gap-2',
     style: { isolation: 'isolate', zIndex: 0 },
     children: [
       jsxs('div', {
@@ -5111,7 +5126,7 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
                     key: 'clock',
                     'data-town-clock': townTime.phase,
                     title: `Town time follows this device (${townTime.phase})`,
-                    className: cn('superagent-town-clock inline-flex items-center gap-1 rounded-md border',
+                    className: cn('superagent-town-clock superagent-pixel-panel inline-flex items-center gap-1 rounded-md border',
                       'border-(--ui-stroke-secondary) bg-background/90 px-2 py-0.5',
                       'text-[0.625rem] leading-tight text-(--ui-text-secondary) shadow-sm'),
                     children: `${townTime.phase === 'night' ? '🌙' : (townTime.phase === 'day' ? '☀️' : '🌤️')} ${townTime.label}`,
@@ -5301,7 +5316,7 @@ function TownChatDialog({
       'aria-labelledby': 'superagent-town-dialog-title',
       ref: panelRef,
       tabIndex: -1,
-      className: cn('flex h-[min(86vh,760px)] w-full max-w-3xl flex-col overflow-hidden rounded-lg',
+      className: cn('superagent-pixel superagent-pixel-panel flex h-[min(86vh,760px)] w-full max-w-3xl flex-col overflow-hidden rounded-lg',
         'border border-(--ui-stroke-secondary) shadow-xl focus:outline-none'),
       style: { backgroundColor: 'var(--card, var(--background, #1c1c1e))', color: 'var(--foreground, #f5f5f5)' },
       children: [
@@ -5428,7 +5443,7 @@ function TownModal({ title, subtitle, onClose, children }) {
     children: jsxs('section', {
       role: 'dialog', 'aria-modal': 'true', 'aria-label': title,
       ref: panelRef, tabIndex: -1,
-      className: cn('flex max-h-[min(86vh,760px)] w-full max-w-xl flex-col gap-2 overflow-y-auto rounded-lg border',
+      className: cn('superagent-pixel superagent-pixel-panel superagent-pixel-scroll flex max-h-[min(86vh,760px)] w-full max-w-xl flex-col gap-2 overflow-y-auto rounded-lg border',
         'border-(--ui-stroke-secondary) p-3 shadow-xl focus:outline-none'),
       style: { backgroundColor: 'var(--card, var(--background, #1c1c1e))', color: 'var(--foreground, #f5f5f5)' },
       children: [
