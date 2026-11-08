@@ -91,20 +91,21 @@ const MAX_WORKERS = 8
 // One plot per worker slot. The list is deliberately static: a slot is
 // allocated once by the backend and never recomputed from the current array,
 // so a poll or a town switch cannot move a house. Slots past the list fall
-// into a deterministic outer ring.
+// into a deterministic outer ring. Plots cluster around the plaza so the
+// town reads as one community, not far-flung outposts.
 const TOWN_PLOTS = [
-  { left: 10, top: 18, scale: 0.72 },
-  { left: 90, top: 18, scale: 0.72 },
-  { left: 10, top: 50, scale: 0.72 },
-  { left: 90, top: 50, scale: 0.72 },
-  { left: 10, top: 82, scale: 0.72 },
-  { left: 90, top: 82, scale: 0.72 },
-  { left: 30, top: 18, scale: 0.72 },
-  { left: 70, top: 18, scale: 0.72 },
-  { left: 30, top: 50, scale: 0.72 },
-  { left: 70, top: 50, scale: 0.72 },
-  { left: 30, top: 82, scale: 0.72 },
-  { left: 70, top: 82, scale: 0.72 },
+  { left: 26, top: 22, scale: 0.72 },
+  { left: 74, top: 22, scale: 0.72 },
+  { left: 22, top: 50, scale: 0.72 },
+  { left: 78, top: 50, scale: 0.72 },
+  { left: 26, top: 78, scale: 0.72 },
+  { left: 74, top: 78, scale: 0.72 },
+  { left: 38, top: 22, scale: 0.72 },
+  { left: 62, top: 22, scale: 0.72 },
+  { left: 38, top: 56, scale: 0.72 },
+  { left: 62, top: 56, scale: 0.72 },
+  { left: 38, top: 80, scale: 0.72 },
+  { left: 62, top: 80, scale: 0.72 },
 ]
 const TOWN_MAX_WORKERS = TOWN_PLOTS.length
 const TOWN_HOUSE_SPRITES = [

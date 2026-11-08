@@ -224,10 +224,15 @@ const quiet = render(h(plugin.TownScene, {
 assert.doesNotMatch(quiet, /superagent-town-build/)
 
 assert.deepEqual(plugin.townHousePosition(0), plugin.townHousePosition(0))
-assert.deepEqual(plugin.townHousePosition(3), { left: 90, top: 50, scale: 0.72 })
+assert.deepEqual(plugin.townHousePosition(3), { left: 78, top: 50, scale: 0.72 })
 assert.equal(plugin.TOWN_PLOTS.length, 12)
-assert.deepEqual(plugin.townHousePosition(11), { left: 70, top: 82, scale: 0.72 })
+assert.deepEqual(plugin.townHousePosition(11), { left: 62, top: 80, scale: 0.72 })
 assert.ok(plugin.townHousePosition(12).left >= 0)
+// Community check: all twelve plots sit inside the 20-80% band, not at the far edges.
+for (let slot = 0; slot < 12; slot += 1) {
+  const plot = plugin.townHousePosition(slot)
+  assert.ok(plot.left >= 20 && plot.left <= 80, `plot ${slot} left ${plot.left} inside community band`)
+}
 
 const switcher = render(h(plugin.TownSwitcher, {
   towns: [root],
