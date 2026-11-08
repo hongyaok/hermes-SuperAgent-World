@@ -1984,6 +1984,15 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
         return
       }
       setNotice('Saved.')
+      // New-town uses the remembered picker values. Saving a new default is
+      // an explicit request to use it, so reset that memory with the default
+      // instead of leaving the next chat on the old model/level.
+      const savedSettings = result && result.settings
+      if (savedSettings) {
+        writeStored('lastModel', String(savedSettings.default_model || ''))
+        writeStored('lastProvider', String(savedSettings.default_provider || ''))
+        writeStored('lastEffort', String(savedSettings.default_reasoning_effort || ''))
+      }
       queryClient.invalidateQueries({ queryKey: [ID, 'settings'] })
       queryClient.invalidateQueries({ queryKey: [ID, 'models'] })
       invalidateChats(queryClient)
