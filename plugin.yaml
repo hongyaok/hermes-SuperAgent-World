@@ -1,7 +1,7 @@
 name: superagent
-version: 0.5.1
+version: 0.5.2
 description: >
-  Router/worker coding agent for one repository, plus a chat-first desktop
+  Router/worker coding agent for one repository, plus a town-first desktop
   workspace. Polls GitHub (or takes local requests), turns accepted work into
   tickets or headless chat turns, and runs each in isolation. Observe by
   default; a panel shows only what needs a human, and nothing is ever

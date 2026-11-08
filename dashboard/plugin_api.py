@@ -79,12 +79,12 @@ except ImportError:  # loaded standalone by the gateway / pytest
 
 router = APIRouter()
 
-VERSION = "0.5.1"
+VERSION = "0.5.2"
 # Contract generation for the desktop: bumped when a release adds routes the
 # panel feature-detects (v2 = session management; v3 = towns and worker
 # spawning).
 API_VERSION = 3
-FEATURES = ("chats", "settings", "github", "diff", "session_management", "towns")
+FEATURES = ("chats", "settings", "github", "diff", "session_management", "towns", "thinking")
 # Module import time: when the gateway loaded this plugin, not the request time.
 STARTED_AT = time.time()
 
