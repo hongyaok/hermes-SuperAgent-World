@@ -633,6 +633,26 @@ function HeaderIconButton({ label, tip, active, onClick, buttonRef, children }) 
   })
 }
 
+/** A labelled header action for the one panel a new user must be able to find. */
+function HeaderLabelButton({ label, tip, active, onClick, buttonRef, children }) {
+  return jsx(Tip, {
+    label: tip || label,
+    children: jsx('button', {
+      type: 'button',
+      ref: buttonRef,
+      onClick,
+      title: tip || label,
+      'aria-label': label,
+      'aria-expanded': !!active,
+      className: cn('inline-flex h-7 shrink-0 items-center gap-1 rounded border',
+        'border-(--ui-stroke-secondary) px-2 text-[0.6875rem] text-(--ui-text-secondary)',
+        'hover:bg-(--chrome-action-hover) hover:text-(--ui-text-primary)',
+        active && 'bg-(--chrome-action-hover) text-(--ui-text-primary)'),
+      children,
+    }),
+  })
+}
+
 /** GitHub as a glyph: its status dot is the whole affordance, the tip names
  *  the repo. Keeps the header to a single 44px line. */
 function GithubHeaderButton({ open, status, onClick, buttonRef }) {
@@ -1923,7 +1943,7 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
                 key: 'defaults', className: 'flex min-w-0 flex-col gap-2',
                 children: [
                   jsx('div', {
-                    key: 'label', className: 'text-[0.6875rem] font-medium uppercase tracking-wide text-(--ui-text-quaternary)',
+                    key: 'label', className: 'text-[0.6875rem] font-medium uppercase tracking-wide text-(--ui-text-tertiary)',
                     children: 'Default model',
                   }),
                   jsxs('div', {
@@ -1989,7 +2009,7 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
                     ],
                   }),
                   jsx('div', {
-                    key: 'yolo-help', className: 'text-[0.6875rem] leading-snug text-(--ui-text-quaternary)',
+                    key: 'yolo-help', className: 'text-[0.6875rem] leading-snug text-(--ui-text-tertiary)',
                     children: 'Skips approval prompts inside a turn; workers still never commit, push or merge. 1–8 workers, 1–500 turns.',
                   }),
                 ],
@@ -2001,17 +2021,17 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
                     key: 'label', className: 'flex items-baseline justify-between gap-2',
                     children: [
                       jsx('span', {
-                        key: 'l', className: 'text-[0.6875rem] font-medium uppercase tracking-wide text-(--ui-text-quaternary)',
+                        key: 'l', className: 'text-[0.6875rem] font-medium uppercase tracking-wide text-(--ui-text-secondary)',
                         children: 'Model presets',
                       }),
                       jsx('span', {
-                        key: 'n', className: 'text-[0.6875rem] tabular-nums text-(--ui-text-quaternary)',
+                        key: 'n', className: 'text-[0.6875rem] tabular-nums text-(--ui-text-tertiary)',
                         children: `${rows.length}/${MAX_PRESET_ROWS}`,
                       }),
                     ],
                   }),
                   jsx('div', {
-                    key: 'hint', className: 'text-[0.6875rem] leading-snug text-(--ui-text-quaternary)',
+                    key: 'hint', className: 'text-[0.6875rem] leading-snug text-(--ui-text-tertiary)',
                     children: SETTINGS_HINT,
                   }),
                   rows.length
@@ -3595,57 +3615,95 @@ function OverlayDrawer({ panel, title, subtitle, onClose, children }) {
 
   useEffect(() => {
     const el = panelRef.current
-    if (el && typeof el.focus === 'function') el.focus()
+    if (!el) return undefined
+    const focusables = () => Array.from(el.querySelectorAll(
+      'button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+    )).filter((element) => element.getClientRects().length > 0)
+    const first = focusables()[0]
+    if (first && typeof first.focus === 'function') first.focus()
+    else if (typeof el.focus === 'function') el.focus()
     const onKeyDown = (event) => {
-      if (!event || event.key !== 'Escape') return
-      if (typeof event.preventDefault === 'function') event.preventDefault()
-      closeRef.current()
+      if (!event) return
+      if (event.key === 'Escape') {
+        if (typeof event.preventDefault === 'function') event.preventDefault()
+        closeRef.current()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const items = focusables()
+      if (!items.length) return
+      const head = items[0]
+      const tail = items[items.length - 1]
+      if (event.shiftKey && (document.activeElement === head || !el.contains(document.activeElement))) {
+        if (typeof event.preventDefault === 'function') event.preventDefault()
+        tail.focus()
+      } else if (!event.shiftKey && document.activeElement === tail) {
+        if (typeof event.preventDefault === 'function') event.preventDefault()
+        head.focus()
+      }
     }
     if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return undefined
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
-  return jsxs('section', {
-    'aria-label': title,
-    'data-drawer': panel,
-    ref: panelRef,
-    tabIndex: -1,
-    className: cn('absolute inset-y-0 right-0 z-20 flex w-full max-w-full flex-col border-l',
-      'border-(--ui-stroke-secondary) bg-(--ui-bg-primary) shadow-lg focus:outline-none',
-      'md:w-[380px] md:max-w-[92vw]'),
+  return jsxs('div', {
+    className: 'absolute inset-0 z-30 flex',
     children: [
-      jsxs('div', {
-        key: 'head',
-        className: cn('flex h-9 shrink-0 items-center justify-between gap-2 border-b',
-          'border-(--ui-stroke-secondary) px-3'),
+      jsx('button', {
+        key: 'backdrop',
+        type: 'button',
+        tabIndex: -1,
+        'aria-label': `Close ${title}`,
+        onClick: onClose,
+        className: 'absolute inset-0 cursor-default bg-black/45 backdrop-blur-[2px]',
+      }),
+      jsxs('section', {
+        key: 'panel',
+        'aria-label': title,
+        'aria-modal': 'true',
+        role: 'dialog',
+        'data-drawer': panel,
+        ref: panelRef,
+        tabIndex: -1,
+        style: { backgroundColor: 'var(--card)', color: 'var(--foreground)' },
+        className: cn('absolute inset-y-0 right-0 z-10 flex w-full max-w-full flex-col border-l',
+          'border-(--ui-stroke-secondary) shadow-2xl focus:outline-none',
+          'md:w-[420px] md:max-w-[94vw]'),
         children: [
           jsxs('div', {
-            key: 't', className: 'flex min-w-0 items-baseline gap-2',
+            key: 'head',
+            className: cn('flex h-10 shrink-0 items-center justify-between gap-2 border-b',
+              'border-(--ui-stroke-secondary) px-3'),
             children: [
-              jsx('span', {
-                key: 'l', className: 'shrink-0 text-xs font-medium text-(--ui-text-secondary)',
-                children: title,
+              jsxs('div', {
+                key: 't', className: 'flex min-w-0 items-baseline gap-2',
+                children: [
+                  jsx('span', {
+                    key: 'l', className: 'shrink-0 text-sm font-medium text-(--ui-text-primary)',
+                    children: title,
+                  }),
+                  subtitle
+                    ? jsx('span', {
+                        key: 's', title: subtitle,
+                        className: 'min-w-0 truncate text-[0.6875rem] text-(--ui-text-quaternary)',
+                        children: subtitle,
+                      })
+                    : null,
+                ],
               }),
-              subtitle
-                ? jsx('span', {
-                    key: 's', title: subtitle,
-                    className: 'min-w-0 truncate text-[0.6875rem] text-(--ui-text-quaternary)',
-                    children: subtitle,
-                  })
-                : null,
+              jsx('button', {
+                key: 'x', type: 'button', 'aria-label': `Close ${title}`, title: 'Close (Esc)',
+                onClick: onClose,
+                className: cn('inline-flex h-7 w-7 shrink-0 items-center justify-center rounded',
+                  'text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover) hover:text-(--ui-text-secondary)'),
+                children: '✕',
+              }),
             ],
           }),
-          jsx('button', {
-            key: 'x', type: 'button', 'aria-label': `Close ${title}`, title: 'Close (Esc)',
-            onClick: onClose,
-            className: cn('inline-flex h-6 w-6 shrink-0 items-center justify-center rounded',
-              'text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover) hover:text-(--ui-text-secondary)'),
-            children: '✕',
-          }),
+          jsx('div', { key: 'body', className: 'flex min-h-0 flex-1 flex-col overflow-hidden', children }),
         ],
       }),
-      jsx('div', { key: 'body', className: 'flex min-h-0 flex-1 flex-col overflow-hidden', children }),
     ],
   })
 }
@@ -4912,13 +4970,16 @@ function SuperagentPage() {
                 onClick: () => toggleDrawer('usage'),
                 children: '▤',
               }),
-              jsx(HeaderIconButton, {
+              jsx(HeaderLabelButton, {
                 key: 'settings', label: 'Settings',
-                tip: 'Settings: default model, presets and worker limits',
+                tip: 'Settings: default model, thinking level, presets and worker limits',
                 active: settingsOpen,
                 onClick: () => toggleDrawer('settings'),
                 buttonRef: settingsRef,
-                children: '⚙',
+                children: [
+                  jsx('span', { key: 'g', 'aria-hidden': 'true', children: '⚙' }),
+                  jsx('span', { key: 't', children: 'Settings' }),
+                ],
               }),
             ],
           }),
@@ -5201,7 +5262,8 @@ function SuperagentChip() {
 // Named exports for the render probe. The app only consumes the default
 // export; these let a Node test render the town tree without Electron.
 export {
-  SuperagentPage, TownScene, TownHouse, TownSwitcher, TownChatDialog, TownEmpty,
+  SuperagentPage, SettingsPanel, OverlayDrawer,
+  TownScene, TownHouse, TownSwitcher, TownChatDialog, TownEmpty,
   townHousePosition, townHouseSprite, townStatusLabel, TOWN_PLOTS,
 }
 

@@ -122,10 +122,11 @@ function render(node) {
   if (!node.type || node.type === 'style') return ''
   const props = node.props || {}
   const bits = []
-  for (const key of ['aria-label', 'data-town-house', 'data-town-dialog', 'id', 'role']) {
+  for (const key of ['aria-label', 'data-town-house', 'data-town-dialog', 'data-drawer', 'id', 'role']) {
     if (props[key] != null) bits.push(`${key}="${props[key]}"`)
   }
   if (props.className) bits.push(`class="${props.className}"`)
+  if (props.style && props.style.backgroundColor) bits.push(`bg="${props.style.backgroundColor}"`)
   const children = props.children
   if (children != null) bits.push(Array.isArray(children) ? children.map(render).join(' ') : render(children))
   return bits.join(' ')
@@ -230,5 +231,26 @@ assert.match(empty, /No towns yet/)
 const page = render(h(plugin.SuperagentPage, {}))
 assert.match(page, /Superagent Towns/)
 assert.match(page, /No towns yet/)
+
+const drawer = render(h(plugin.OverlayDrawer, {
+  panel: 'settings', title: 'Settings', subtitle: 'defaults', onClose: () => undefined, children: 'body',
+}))
+assert.match(drawer, /data-drawer="settings"/)
+assert.match(drawer, /bg="var\(--card\)"/)
+assert.match(drawer, /md:w-\[420px\]/)
+
+const settingsPanel = render(h(plugin.SettingsPanel, {
+  settings: {
+    default_model: 'test-model', default_provider: 'test', model_presets: [],
+    max_workers: 2, chat_max_turns: 120, worker_yolo: true,
+  },
+  models: { models: ['test-model'], presets: [] },
+  loading: false,
+  error: null,
+  onRetry: () => undefined,
+}))
+assert.match(settingsPanel, /Default model/)
+assert.match(settingsPanel, /Model presets/)
+assert.match(settingsPanel, /Max parallel workers/)
 
 console.log('town render probe: ok')
