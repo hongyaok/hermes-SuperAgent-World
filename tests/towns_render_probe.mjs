@@ -87,7 +87,8 @@ await writeFile(probePath, rewritten, 'utf8')
 const plugin = await import(pathToFileURL(probePath).href)
 
 const assets = Object.fromEntries(
-  ['grass.png', 'house-router.png', 'house-a.png', 'house-b.png', 'house-c.png', 'person.png', 'tree-a.png', 'tree-b.png']
+  ['grass.png', 'house-router.png', 'house-a.png', 'house-b.png', 'house-c.png', 'house-d.png',
+    'person.png', 'tree-a.png', 'tree-b.png', 'tree-c.png', 'bush.png', 'fountain.png', 'rock.png', 'lamp.png']
     .map((name) => [name, { data_url: 'data:image/png;base64,AA==' }]),
 )
 
