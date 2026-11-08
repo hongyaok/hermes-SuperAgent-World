@@ -76,7 +76,7 @@ hermes config set plugins.entries.superagent.settings.repo_path "/path/to/your/r
 hermes config set plugins.entries.superagent.settings.mode observe
 ```
 
-The same values are editable without the CLI: the Superagent page's **⚙ Settings** panel writes `<HERMES_HOME>/plugin-data/superagent/settings.json` (default model/provider, named model presets, `max_workers`, `chat_max_turns`, `worker_yolo`). The panel, `GET/POST /settings` and the CLI all read through `sa_settings.py`, so they agree on one merged view.
+The same values are editable without the CLI: the Superagent page's **⚙ Settings** panel writes `<HERMES_HOME>/plugin-data/superagent/settings.json` (default model/provider, default thinking level, named model presets, `max_workers`, `chat_max_turns`, `worker_yolo`). The panel, `GET/POST /settings` and the CLI all read through `sa_settings.py`, so they agree on one merged view.
 
 ### Model presets
 
@@ -109,6 +109,7 @@ At most **12** presets are kept, names must be unique (case-insensitive), and ev
 | `poll_limit` | `int` | `30` | Maximum number of GitHub issue comments fetched per polling pass (`1`–`100`). |
 | `default_model` | `str` | `""` | Model used by desktop chat sessions when the request does not pick one. Empty means the CLI default. Env: `SUPERAGENT_DEFAULT_MODEL`. |
 | `default_provider` | `str` | `""` | Provider for the default chat model (for example `opencode-go`). Empty means the CLI default. Env: `SUPERAGENT_DEFAULT_PROVIDER`. |
+| `default_reasoning_effort` | `str` | `""` | Thinking level for new chats and spawned workers: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` or `ultra`. Empty leaves the model/CLI default. Env: `SUPERAGENT_DEFAULT_REASONING_EFFORT`. |
 | `model_presets` | `list` | `[]` | Named models offered as composer chips. Empty means no chips (the model picker still works). Env: `SUPERAGENT_MODEL_PRESETS` (comma separated). |
 | `worker_yolo` | `bool` | `true` | Pass `--yolo` to headless chat workers so they do not wait for approval prompts. Env: `SUPERAGENT_WORKER_YOLO`. |
 | `chat_max_turns` | `int` | `120` | Maximum agent turns for one headless chat worker. Env: `SUPERAGENT_CHAT_MAX_TURNS`. |
@@ -126,6 +127,7 @@ The dashboard backend is loaded outside the plugin package, so it reads these va
 | :--- | :--- |
 | `SUPERAGENT_DEFAULT_MODEL` | Default chat model. |
 | `SUPERAGENT_DEFAULT_PROVIDER` | Default chat provider. |
+| `SUPERAGENT_DEFAULT_REASONING_EFFORT` | Default thinking level (`none…ultra`). |
 | `SUPERAGENT_MODEL_PRESETS` | Comma-separated model picker presets. |
 | `SUPERAGENT_WORKER_YOLO` | `1`/`true`/`yes`/`on` to pass `--yolo`. |
 | `SUPERAGENT_CHAT_MAX_TURNS` | Maximum agent turns per chat worker. |
@@ -224,7 +226,7 @@ hermes superagent doctor
 | `hermes superagent ask "<request>"` | Record a request as a ticket. |
 | `hermes superagent run <ticket-id>` | Promote an `observed`/`blocked`/`failed` ticket to `queued`. |
 | `hermes superagent show <id>` | A ticket's full detail, or a chat session (`S-…`) with messages and events. |
-| `hermes superagent chat "<prompt>"` | Start a headless chat turn (blocking; `--detach` returns immediately). `--preset <name>` resolves a named preset; `--model`/`--provider` still win. |
+| `hermes superagent chat "<prompt>"` | Start a headless chat turn (blocking; `--detach` returns immediately). `--preset <name>` resolves a named preset; `--model`/`--provider` still win. `--reasoning <level>` selects `none…ultra` for this session. |
 | `hermes superagent sessions` / `stop <id>` | List chat sessions (archived ones are hidden; `--all` shows them) / cancel a queued or running turn. |
 | `hermes superagent diff <id>` | `git status` + `git diff --stat` + the (capped) patch for the session's repository; `--json` returns the full dict. `1` for an unknown session or one without a repository. |
 | `hermes superagent comment <id> [--body TEXT \| --body-file PATH]` | Post one summary comment to the session's pull request and print its URL. `1` without a PR/token or when GitHub refuses, `2` for bad usage. |

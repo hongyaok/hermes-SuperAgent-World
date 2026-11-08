@@ -167,11 +167,21 @@ def _config(ctx: Any, key: str, default: Any) -> Any:
 
 
 def models_payload(ctx: Any) -> dict:
-    """Resolved default model/provider plus presets (same keys as GET /models)."""
+    """Resolved default model/provider/thinking plus presets (same keys as GET /models)."""
     model = _env("SUPERAGENT_DEFAULT_MODEL") or str(_config(ctx, "default_model", "") or "").strip()
     provider = _env("SUPERAGENT_DEFAULT_PROVIDER") or str(
         _config(ctx, "default_provider", "") or ""
     ).strip()
+    effort = (
+        _env("SUPERAGENT_DEFAULT_REASONING_EFFORT")
+        or str(_config(ctx, "default_reasoning_effort", "") or "").strip()
+    )
+    if not effort:
+        try:
+            effort = str(sa_settings.load_settings().get("default_reasoning_effort") or "")
+        except Exception:
+            effort = ""
+    effort = sa_settings.normalize_reasoning_effort(effort)
     presets: list[dict[str, str]] = []
     env_presets = os.environ.get("SUPERAGENT_MODEL_PRESETS")
     if env_presets:
@@ -194,6 +204,7 @@ def models_payload(ctx: Any) -> dict:
     return {
         "default_model": model,
         "default_provider": provider,
+        "default_reasoning_effort": effort,
         "models": list(dict.fromkeys(
             [preset["model"] for preset in presets] + ([model] if model else [])
         )),
@@ -631,6 +642,8 @@ def render_chat(session: dict, db_path: str = "") -> str:
     provider = str(session.get("provider") or "")
     lines = [f"{session_id}  {status}" + (f"  {title}" if title else "")]
     lines.append(f"  model:      {model}" + (f" ({provider})" if provider else ""))
+    if session.get("reasoning_effort"):
+        lines.append(f"  thinking:   {session['reasoning_effort']}")
     if session.get("repo"):
         lines.append(f"  repo:       {session['repo']}")
     lines.append(f"  transcript: {db_path or '-'}")
@@ -648,6 +661,8 @@ def render_session(session: dict) -> str:
     model = session.get("model") or "-"
     provider = session.get("provider") or ""
     lines.append(f"  model:     {model}" + (f" ({provider})" if provider else ""))
+    if session.get("reasoning_effort"):
+        lines.append(f"  thinking:  {session['reasoning_effort']}")
     if session.get("repo"):
         lines.append(f"  repo:      {session['repo']}")
     if session.get("hermes_session_id"):
@@ -737,12 +752,22 @@ def _launch_chat(args: argparse.Namespace, ctx: Any, engine: Any, want_json: boo
         or _env("SUPERAGENT_REPO")
         or str(_config(ctx, "repo_path", "") or "").strip()
     )
+    requested_effort = (getattr(args, "reasoning", "") or "").strip()
+    effort = sa_settings.normalize_reasoning_effort(requested_effort)
+    if requested_effort and not effort:
+        print(
+            "error: reasoning must be one of: "
+            + ", ".join(sa_settings.REASONING_EFFORTS)
+        )
+        return 2
+    effort = effort or str(defaults.get("default_reasoning_effort") or "")
     title = (getattr(args, "title", "") or "").strip()
 
     try:
         store = _chat_store(engine)
         session = store.create_session(
-            prompt, title=title, model=model, provider=provider, repo=repo, source="cli"
+            prompt, title=title, model=model, provider=provider,
+            reasoning_effort=effort, repo=repo, source="cli",
         )
         session_id = session["id"]
         if preset is not None:
@@ -755,7 +780,8 @@ def _launch_chat(args: argparse.Namespace, ctx: Any, engine: Any, want_json: boo
     detach = bool(getattr(args, "detach", False))
     try:
         _get_runner(store).launch_turn(
-            session_id, prompt, model=model, provider=provider, repo=repo, block=not detach
+            session_id, prompt, model=model, provider=provider,
+            reasoning_effort=effort or None, repo=repo, block=not detach,
         )
     except KeyboardInterrupt:
         # Ctrl-C during a blocking turn: cancel the worker, keep the session.
@@ -1719,6 +1745,10 @@ def setup_cli(subparser: argparse.ArgumentParser) -> None:
     chat_p.add_argument("prompt", nargs="+", help="What the worker should do")
     chat_p.add_argument("--model", default="", help="Model override for this session")
     chat_p.add_argument("--provider", default="", help="Provider override for this session")
+    chat_p.add_argument(
+        "--reasoning", default="",
+        help="Thinking level: none, minimal, low, medium, high, xhigh, max or ultra",
+    )
     chat_p.add_argument(
         "--preset", default="", help="Named model preset (see `hermes superagent models`)"
     )

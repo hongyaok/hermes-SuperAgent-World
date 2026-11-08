@@ -3,6 +3,25 @@
 All notable changes to the `superagent` Hermes plugin. Plain bullets, newest
 first.
 
+## 0.5.5 — 2026-11-08
+
+### Added
+
+- `hermes superagent chat --reasoning <level>` selects `none…ultra` for one CLI
+  session; an explicit flag wins over the configured default. The session row
+  and the runner both carry the resolved level, and `show`/`chat` print it.
+
+### Changed
+
+- The CLI `models` payload and the README configuration tables now include
+  `default_reasoning_effort`, matching `GET /models` and the Settings panel.
+
+### Fixed
+
+- A CLI chat created with a configured default thinking level left the session
+  row blank and relied on the runner fallback; it now stores the effective
+  level so `show` and a later resume see the same value.
+
 ## 0.5.4 — 2026-11-08
 
 ### Added

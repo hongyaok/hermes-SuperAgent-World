@@ -231,7 +231,7 @@ def _patch_runner(sa, monkeypatch, runner):
 def _chat_args(**kwargs):
     base = dict(
         superagent_command="chat", json=False, prompt=[],
-        model="", provider="", repo="", title="",
+        model="", provider="", repo="", title="", reasoning="",
     )
     base.update(kwargs)
     return types.SimpleNamespace(**base)
@@ -241,6 +241,7 @@ def _clear_chat_env(monkeypatch):
     for name in (
         "SUPERAGENT_DEFAULT_MODEL",
         "SUPERAGENT_DEFAULT_PROVIDER",
+        "SUPERAGENT_DEFAULT_REASONING_EFFORT",
         "SUPERAGENT_REPO",
         "SUPERAGENT_MODEL_PRESETS",
     ):
@@ -264,11 +265,41 @@ def test_chat_creates_session_and_launches_turn(
     assert "hermes superagent show S-0001" in out
     assert runner.launched == [
         {"session_id": "S-0001", "prompt": "Fix the parser",
-         "model": "", "provider": "", "repo": "", "block": True}
+         "model": "", "provider": "", "reasoning_effort": None,
+         "repo": "", "block": True}
     ]
     session = sa.sa_chats.ChatStore(store.path).get_session("S-0001", message_limit=0)
     assert session["title"] == "Fix the parser"
     assert session["source"] == "cli"
+
+
+def test_chat_reasoning_flag_sets_the_session_and_runner(
+    sa, store, fake_executor, monkeypatch, capsys
+):
+    _clear_chat_env(monkeypatch)
+    engine = _engine(sa, store, fake_executor)
+    _patch_engine(sa, monkeypatch, engine)
+    runner = _patch_runner(sa, monkeypatch, FakeRunner())
+
+    rc = sa.sa_cli.run(_chat_args(prompt=["Think"], reasoning="ultra"), object())
+    assert rc == 0
+    assert runner.launched[0]["reasoning_effort"] == "ultra"
+    session = sa.sa_chats.ChatStore(store.path).get_session("S-0001", message_limit=0)
+    assert session["reasoning_effort"] == "ultra"
+
+
+def test_chat_rejects_an_unknown_reasoning_level(
+    sa, store, fake_executor, monkeypatch, capsys
+):
+    _clear_chat_env(monkeypatch)
+    engine = _engine(sa, store, fake_executor)
+    _patch_engine(sa, monkeypatch, engine)
+    runner = _patch_runner(sa, monkeypatch, FakeRunner())
+
+    rc = sa.sa_cli.run(_chat_args(prompt=["Think"], reasoning="infinite"), object())
+    assert rc == 2
+    assert "reasoning must be one of" in capsys.readouterr().out
+    assert runner.launched == []
 
 
 def test_chat_json_shape(sa, store, fake_executor, monkeypatch, capsys):
