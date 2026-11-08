@@ -91,6 +91,17 @@ def test_create_chat_persists_thinking_and_worker_inherits_it(api):
     assert runner.launches[0].get("reasoning_effort") is None
 
 
+def test_create_chat_without_an_explicit_level_uses_the_saved_default(api, monkeypatch):
+    module, runner = api
+    defaults = dict(module.sa_settings.DEFAULTS)
+    defaults["default_reasoning_effort"] = "xhigh"
+    monkeypatch.setattr(module.sa_settings, "load_settings", lambda: defaults)
+
+    created = module.create_chat({"prompt": "root"})
+    assert created["session"]["reasoning_effort"] == "xhigh"
+    assert runner.launches[0].get("reasoning_effort") is None
+
+
 def test_create_chat_rejects_an_unknown_level(api):
     module, _runner = api
     from fastapi import HTTPException

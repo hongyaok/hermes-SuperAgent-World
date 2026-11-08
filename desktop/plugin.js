@@ -3672,9 +3672,9 @@ function OnboardingBanner({ onSettings, onGithub, onStart, onDismiss }) {
 /** The keyboard map, as a sheet rather than a tooltip nobody finds. `?` opens
  *  it, Escape or a click on the backdrop closes it. */
 const SHORTCUTS = [
-  ['/', 'Focus chat search'],
-  ['j / k', 'Next / previous chat'],
-  ['n', 'New chat'],
+  ['← / →', 'Previous / next town'],
+  ['n', 'New town'],
+  ['/', 'Search sessions'],
   ['?', 'This list'],
   ['Esc', 'Close a panel'],
 ]
@@ -4017,6 +4017,7 @@ function TownHouse({ session, isRouter, slot, onOpen, houseRef, building, reduce
       jsx('button', {
         key: 'name',
         type: 'button',
+        tabIndex: -1,
         onClick: () => onOpen(session.id),
         'aria-label': `Open ${isRouter ? 'Router' : 'worker'} ${session.id}: ${sessionTitle(session)}`,
         className: cn('mt-0.5 block max-w-[11rem] truncate rounded border px-1.5 py-0.5',
