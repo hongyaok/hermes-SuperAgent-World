@@ -3,6 +3,27 @@
 All notable changes to the `superagent` Hermes plugin. Plain bullets, newest
 first.
 
+## 0.5.8 — 2026-11-08
+
+### Added
+
+- The town switcher reports `N/12 plots` used, with a tooltip spelling out the
+  cap, so the fixed grid is visible before a spawn fails.
+
+### Changed
+
+- Changing a model or applying a preset keeps the independently chosen thinking
+  level. Presets are model/provider pairs; effort is not silently reset. This
+  covers both the catalog menu and the fallback `<select>`.
+- The README now documents `/health` and the actual `town_count` key (it said
+  `towns_count`) and states that the grid has twelve plots.
+
+### Fixed
+
+- The fallback model picker dropped `effort` when a model was selected; it now
+  preserves the current level.
+- The CLI's `models`/`settings` thinking output has a regression test.
+
 ## 0.5.7 — 2026-11-08
 
 ### Added
