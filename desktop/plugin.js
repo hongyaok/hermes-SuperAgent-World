@@ -272,8 +272,10 @@ function modelLabel(model, provider) {
 
 /** A session's fixed model, or the lowercase rail copy for "nothing pinned". */
 function sessionModelLabel(session) {
-  if (!session || !String(session.model || '').trim()) return 'default model'
-  return modelLabel(session.model, session.provider)
+  const effort = String((session && session.reasoning_effort) || '').trim()
+  const suffix = effort ? ` · ${reasoningLabel(effort)}` : ''
+  if (!session || !String(session.model || '').trim()) return `default model${suffix}`
+  return `${modelLabel(session.model, session.provider)}${suffix}`
 }
 
 function firstLine(text) {
@@ -1574,6 +1576,32 @@ function Transcript({ session, optimistic }) {
 
 // -- model picker -----------------------------------------------------------
 
+// The level ladder the Hermes CLI accepts. xhigh/max/ultra are deliberately
+// present: the catalog menu offers them, and the old controller silently
+// dropped every effort edit, so "above high" never reached a worker.
+const REASONING_LEVELS = [
+  { value: '', label: 'Default' },
+  { value: 'none', label: 'None' },
+  { value: 'minimal', label: 'Minimal' },
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+  { value: 'xhigh', label: 'Extra high' },
+  { value: 'max', label: 'Max' },
+  { value: 'ultra', label: 'Ultra' },
+]
+
+function reasoningLabel(value) {
+  const found = REASONING_LEVELS.find((level) => level.value === value)
+  return found ? found.label : String(value || '')
+}
+
+function modelWithThinking(value) {
+  const base = modelLabel(value && value.model, value && value.provider)
+  const effort = String((value && value.effort) || '').trim()
+  return effort ? `${base} · ${reasoningLabel(effort)}` : base
+}
+
 function PresetSelect({ value, models, onChange }) {
   const presets = (models && models.models) || []
   const current = value.model || ''
@@ -1600,16 +1628,24 @@ function ModelPicker({ value, models, onChange, disabled }) {
   }
   const controller = {
     allowSpeed: false,
-    applyPreset: (preset, row) => onChange({ model: row.model, provider: row.provider }),
-    current: { effort: '', fast: false, model: value.model, provider: value.provider },
+    applyPreset: (preset, row) => onChange({
+      model: row.model, provider: row.provider, effort: String((preset && preset.effort) || ''),
+    }),
+    current: {
+      effort: String(value.effort || ''), fast: false,
+      model: value.model, provider: value.provider,
+    },
     presetFor: () => ({}),
     select: (model, provider) => {
-      onChange({ model, provider })
+      onChange({ model, provider, effort: String(value.effort || '') })
       setOpen(false)
     },
     setOptions: (patch, row) => {
       if (patch.effort === undefined) return
-      onChange({ model: row.model, provider: row.provider })
+      onChange({
+        model: row.model, provider: row.provider,
+        effort: String(patch.effort || ''),
+      })
     },
   }
   const menu = jsx(ModelCatalogMenu, {
@@ -1631,7 +1667,7 @@ function ModelPicker({ value, models, onChange, disabled }) {
             'px-1.5 py-1 text-[0.6875rem] text-(--ui-text-secondary) hover:bg-(--chrome-action-hover)',
             disabled && 'opacity-50'),
           children: [
-            jsx('span', { key: 'l', className: 'min-w-0 truncate', children: modelLabel(value.model, value.provider) }),
+            jsx('span', { key: 'l', className: 'min-w-0 truncate', children: modelWithThinking(value) }),
             jsx('span', { key: 'c', className: 'shrink-0 text-(--ui-text-quaternary)', children: '▾' }),
           ],
         }),
@@ -1666,7 +1702,10 @@ function SessionModelControl({ session, models, onChange, pending }) {
     })
   }
   return jsx(ModelPicker, {
-    value: { model: session.model || '', provider: session.provider || '' },
+    value: {
+      model: session.model || '', provider: session.provider || '',
+      effort: session.reasoning_effort || '',
+    },
     models,
     disabled: pending,
     onChange: (next) => {
@@ -1827,6 +1866,7 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
   const [model, setModel] = useState(() => ({
     model: (settings && settings.default_model) || '',
     provider: (settings && settings.default_provider) || '',
+    effort: (settings && settings.default_reasoning_effort) || '',
   }))
   const [rows, setRows] = useState(() => presetRowsFrom(settings))
   const [maxWorkers, setMaxWorkers] = useState(() => Number(settings && settings.max_workers) || 2)
@@ -1837,6 +1877,7 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
   const signature = useMemo(() => JSON.stringify({
     model: (settings && settings.default_model) || '',
     provider: (settings && settings.default_provider) || '',
+    effort: (settings && settings.default_reasoning_effort) || '',
     presets: presetRowsFrom(settings),
     workers: Number(settings && settings.max_workers) || 2,
     turns: Number(settings && settings.chat_max_turns) || 120,
@@ -1848,6 +1889,7 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
     setModel({
       model: settings.default_model || '',
       provider: settings.default_provider || '',
+      effort: settings.default_reasoning_effort || '',
     })
     setRows(presetRowsFrom(settings))
     setMaxWorkers(Number(settings.max_workers) || 2)
@@ -1870,6 +1912,7 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
       body: {
         default_model: String(model.model || '').trim(),
         default_provider: String(model.provider || '').trim(),
+        default_reasoning_effort: String(model.effort || '').trim(),
         model_presets: rows
           .map((row) => ({
             name: String(row.name || '').trim(),
@@ -1953,16 +1996,46 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
                         value: model, models, disabled: save.isPending,
                         onChange: (next) => {
                           edited()
-                          setModel({ model: next.model || '', provider: next.provider || '' })
+                          setModel({
+                            model: next.model || '', provider: next.provider || '',
+                            effort: String(next.effort || ''),
+                          })
                         },
                       }),
                       model.model
                         ? jsx(GhostButton, {
                             key: 'clear', title: 'Clear the default (let Hermes choose)',
-                            onClick: () => { edited(); setModel({ model: '', provider: '' }) },
+                            onClick: () => { edited(); setModel({ model: '', provider: '', effort: '' }) },
                             children: 'Inherit',
                           })
                         : null,
+                    ],
+                  }),
+                  jsxs('label', {
+                    key: 'effort',
+                    className: 'flex items-center gap-2 text-[0.6875rem] text-(--ui-text-tertiary)',
+                    children: [
+                      jsx('span', {
+                        key: 'l', className: 'min-w-0 flex-1',
+                        children: 'Default thinking',
+                      }),
+                      jsx('select', {
+                        key: 'i',
+                        value: model.effort || '',
+                        'aria-label': 'Default thinking level',
+                        onChange: (event) => {
+                          edited()
+                          setModel((current) => ({ ...current, effort: event.target.value }))
+                        },
+                        className: cn('rounded border border-(--ui-stroke-secondary)',
+                          'bg-(--card) px-1.5 py-1 text-[0.6875rem] text-(--ui-text-secondary)',
+                          'focus:outline-none'),
+                        children: REASONING_LEVELS.map((level) => jsx('option', {
+                          key: level.value || 'default',
+                          value: level.value,
+                          children: level.value ? level.label : 'Model default',
+                        })),
+                      }),
                     ],
                   }),
                   jsxs('div', {
@@ -4318,7 +4391,9 @@ function SuperagentPage() {
   const [optimistic, setOptimistic] = useState(null)
   const [recentRepos, setRecentRepos] = useState(() => readRecentRepos())
   const [model, setModel] = useState(() => ({
-    model: readStored('lastModel', ''), provider: readStored('lastProvider', ''),
+    model: readStored('lastModel', ''),
+    provider: readStored('lastProvider', ''),
+    effort: readStored('lastEffort', ''),
   }))
   const [repo, setRepo] = useState(() => readStored('lastRepo', ''))
   // Exactly one drawer at a time: opening either closes the other.
@@ -4578,7 +4653,11 @@ function SuperagentPage() {
   // A chat's model is fixed at creation; this swaps it for future turns.
   const setChatModel = useMutation({
     mutationFn: (vars) => rest(`/chats/${encodeURIComponent(vars.id)}/model`, {
-      method: 'POST', body: { model: vars.model, provider: vars.provider },
+      method: 'POST',
+      body: {
+        model: vars.model, provider: vars.provider,
+        reasoning_effort: vars.effort || '',
+      },
     }),
     onSuccess: () => invalidateChats(queryClient, selectedId),
   })
@@ -4699,8 +4778,12 @@ function SuperagentPage() {
     if (!selectedSession || !next) return
     const pickedModel = String(next.model || '').trim()
     const pickedProvider = String(next.provider || '').trim()
-    if (!pickedModel && !pickedProvider) return
-    setChatModel.mutate({ id: selectedSession.id, model: pickedModel, provider: pickedProvider })
+    const pickedEffort = String(next.effort || '').trim()
+    if (!pickedModel && !pickedProvider && !pickedEffort) return
+    setChatModel.mutate({
+      id: selectedSession.id, model: pickedModel, provider: pickedProvider,
+      effort: pickedEffort,
+    })
   }
 
   /** How many rows in the open transcript already carry this exact text, so an
@@ -4740,10 +4823,12 @@ function SuperagentPage() {
     }
     writeStored('lastModel', model.model)
     writeStored('lastProvider', model.provider)
+    writeStored('lastEffort', model.effort || '')
     writeStored('lastRepo', repo)
     createChat.mutate(
       {
-        prompt: text, model: model.model, provider: model.provider, repo,
+        prompt: text, model: model.model, provider: model.provider,
+        reasoning_effort: model.effort || '', repo,
         preset: presetName || undefined,
       },
       {
@@ -4761,6 +4846,7 @@ function SuperagentPage() {
     setModel({
       model: String(preset.model || ''),
       provider: String(preset.provider || ''),
+      effort: String(model.effort || ''),
     })
   }
 
@@ -4788,7 +4874,11 @@ function SuperagentPage() {
     setNewTownOpen(true)
     setDrawer(null)
     setPresetName('')
-    setModel({ model: readStored('lastModel', ''), provider: readStored('lastProvider', '') })
+    setModel({
+      model: readStored('lastModel', ''),
+      provider: readStored('lastProvider', ''),
+      effort: readStored('lastEffort', ''),
+    })
     setRepo(readStored('lastRepo', ''))
     startChat()
   }
@@ -5303,7 +5393,8 @@ function SuperagentChip() {
 // Named exports for the render probe. The app only consumes the default
 // export; these let a Node test render the town tree without Electron.
 export {
-  SuperagentPage, SettingsPanel, OverlayDrawer,
+  SuperagentPage, SettingsPanel, OverlayDrawer, ModelPicker,
+  modelWithThinking, reasoningLabel,
   TownScene, TownHouse, TownSwitcher, TownChatDialog, TownEmpty,
   townHousePosition, townHouseSprite, townStatusLabel, TOWN_PLOTS,
 }

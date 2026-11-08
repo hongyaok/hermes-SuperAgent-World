@@ -366,6 +366,7 @@ class Runner:
         yolo: bool = True,
         model: str = "",
         provider: str = "",
+        reasoning_effort: str = "",
         repo: str = "",
         repo_root: str = "",
         max_turns: int = 120,
@@ -387,6 +388,7 @@ class Runner:
         self.yolo = bool(yolo)
         self.model = model or ""
         self.provider = provider or ""
+        self.reasoning_effort = (reasoning_effort or "").strip()
         self.repo = repo or ""
         # The configured root every per-turn repo must resolve inside. Defaults
         # to the configured repo, so a chat cannot wander into another tree.
@@ -430,6 +432,7 @@ class Runner:
         resume_session_id: Optional[str] = None,
         model: Optional[str] = None,
         provider: Optional[str] = None,
+        reasoning_effort: Optional[str] = None,
         repo: Optional[str] = None,
         block: bool = False,
     ) -> dict:
@@ -474,6 +477,16 @@ class Runner:
             fields["provider"] = provider
         elif self.provider:
             fields["provider"] = self.provider
+        # None means "keep the row's current level"; an explicit empty string
+        # clears it. The row wins over the Runner's configured default.
+        if reasoning_effort is None:
+            effort = str(session.get("reasoning_effort") or self.reasoning_effort or "").strip()
+        else:
+            effort = str(reasoning_effort).strip()
+        if reasoning_effort is not None:
+            fields["reasoning_effort"] = effort
+        elif not str(session.get("reasoning_effort") or "").strip() and effort:
+            fields["reasoning_effort"] = effort
         self.chat.update_session(session_id, **fields)
         self._add_event(session_id, "queued", "waiting for a worker slot")
 
@@ -485,6 +498,7 @@ class Runner:
                 "resume": resume,
                 "model": model or self.model,
                 "provider": provider or self.provider,
+                "reasoning_effort": effort,
                 "repo": repo_path,
                 "toolsets": toolsets,
             },
@@ -502,6 +516,7 @@ class Runner:
                 resume=resume,
                 model=model or self.model,
                 provider=provider or self.provider,
+                reasoning_effort=effort,
                 repo=repo_path,
                 toolsets=toolsets,
             )
@@ -629,6 +644,7 @@ class Runner:
         resume: Optional[str],
         model: str,
         provider: str,
+        reasoning_effort: str,
         repo: str,
         toolsets: tuple[str, ...],
     ) -> None:
@@ -645,6 +661,7 @@ class Runner:
                     resume=resume,
                     model=model,
                     provider=provider,
+                    reasoning_effort=reasoning_effort,
                     repo=repo,
                     toolsets=toolsets,
                 )
@@ -660,12 +677,13 @@ class Runner:
         resume: Optional[str],
         model: str,
         provider: str,
+        reasoning_effort: str,
         repo: str,
         toolsets: tuple[str, ...],
     ) -> None:
         argv = self._build_argv(
             binary, prompt, resume_session_id=resume, model=model, provider=provider,
-            repo=repo, toolsets=toolsets,
+            reasoning_effort=reasoning_effort, repo=repo, toolsets=toolsets,
         )
         self._add_event(session_id, "started", " ".join(argv))
 
@@ -829,6 +847,7 @@ class Runner:
         resume_session_id: Optional[str] = None,
         model: str = "",
         provider: str = "",
+        reasoning_effort: str = "",
         repo: str = "",
         toolsets: Optional[tuple[str, ...]] = None,
     ) -> list[str]:
@@ -853,6 +872,8 @@ class Runner:
             argv += ["-m", model]
         if provider:
             argv += ["--provider", provider]
+        if reasoning_effort:
+            argv += ["--reasoning", reasoning_effort]
         if repo:
             argv += ["--in", repo]
         if resume_session_id:

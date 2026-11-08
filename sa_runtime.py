@@ -75,6 +75,7 @@ def build_runner(store: Any, settings: Optional[dict[str, Any]] = None) -> Any:
         yolo=bool(settings.get("worker_yolo", True)),
         model=str(settings.get("default_model") or ""),
         provider=str(settings.get("default_provider") or ""),
+        reasoning_effort=str(settings.get("default_reasoning_effort") or ""),
         repo=repo,
         repo_root=runner_root(repo),
         max_turns=int(settings.get("chat_max_turns") or 120),

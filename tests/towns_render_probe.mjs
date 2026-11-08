@@ -242,7 +242,8 @@ assert.match(drawer, /md:w-\[420px\]/)
 
 const settingsPanel = render(h(plugin.SettingsPanel, {
   settings: {
-    default_model: 'test-model', default_provider: 'test', model_presets: [],
+    default_model: 'test-model', default_provider: 'test',
+    default_reasoning_effort: 'xhigh', model_presets: [],
     max_workers: 2, chat_max_turns: 120, worker_yolo: true,
   },
   models: { models: ['test-model'], presets: [] },
@@ -251,7 +252,14 @@ const settingsPanel = render(h(plugin.SettingsPanel, {
   onRetry: () => undefined,
 }))
 assert.match(settingsPanel, /Default model/)
+assert.match(settingsPanel, /Default thinking/)
+assert.match(settingsPanel, /Extra high/)
+assert.match(settingsPanel, /Ultra/)
 assert.match(settingsPanel, /Model presets/)
 assert.match(settingsPanel, /Max parallel workers/)
+
+assert.equal(plugin.reasoningLabel('xhigh'), 'Extra high')
+assert.equal(plugin.modelWithThinking({ model: 'm', provider: 'p', effort: 'max' }), 'p: m · Max')
+assert.equal(plugin.modelWithThinking({ model: 'm', provider: 'p', effort: '' }), 'p: m')
 
 console.log('town render probe: ok')

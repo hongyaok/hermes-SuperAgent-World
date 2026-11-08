@@ -1,5 +1,5 @@
 name: superagent
-version: 0.5.0
+version: 0.5.1
 description: >
   Router/worker coding agent for one repository, plus a chat-first desktop
   workspace. Polls GitHub (or takes local requests), turns accepted work into
@@ -80,6 +80,12 @@ config_schema:
     default: ""
     label: Default chat provider
     description: Provider for the default chat model (for example opencode-go). Empty means the CLI default.
+  default_reasoning_effort:
+    type: str
+    choices: ["", none, minimal, low, medium, high, xhigh, max, ultra]
+    default: ""
+    label: Default thinking level
+    description: Default reasoning effort for new chats and worker launches. Empty leaves the model default.
   model_presets:
     type: list
     default: []

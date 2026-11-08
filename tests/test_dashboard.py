@@ -90,7 +90,8 @@ class FakeRunner:
         self.stopped = []
 
     def launch_turn(
-        self, session_id, prompt, *, resume_session_id=None, model=None, provider=None, repo=None
+        self, session_id, prompt, *, resume_session_id=None, model=None, provider=None,
+        reasoning_effort=None, repo=None
     ):
         if self.fail:
             raise RuntimeError(self.fail)
@@ -102,6 +103,7 @@ class FakeRunner:
                 "model": model,
                 "provider": provider,
                 "repo": repo,
+                **({"reasoning_effort": reasoning_effort} if reasoning_effort is not None else {}),
             }
         )
         if self.store is not None:

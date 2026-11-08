@@ -79,7 +79,7 @@ except ImportError:  # loaded standalone by the gateway / pytest
 
 router = APIRouter()
 
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 # Contract generation for the desktop: bumped when a release adds routes the
 # panel feature-detects (v2 = session management; v3 = towns and worker
 # spawning).
@@ -114,6 +114,7 @@ SETTINGS_KEYS = (
     "repo_path",
     "default_model",
     "default_provider",
+    "default_reasoning_effort",
     "model_presets",
     "max_workers",
     "worker_yolo",
@@ -130,6 +131,7 @@ SETTINGS_EDITABLE = (
     "repo_path",
     "default_model",
     "default_provider",
+    "default_reasoning_effort",
     "model_presets",
     "max_workers",
     "worker_yolo",
@@ -749,6 +751,14 @@ def _settings_bool(value: Any, field: str) -> bool:
     raise HTTPException(status_code=400, detail=f"{field} must be true or false")
 
 
+def _reasoning_effort(value: Any, field: str = "reasoning_effort") -> str:
+    """Validate one of Hermes' reasoning levels; '' means inherit."""
+    try:
+        return sa_settings.normalize_reasoning_effort(value, strict=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"{field}: {exc}") from exc
+
+
 def _settings_patch(data: Any) -> dict[str, Any]:
     """Validate the editable settings keys; returns only what was supplied."""
     if data is None:
@@ -780,6 +790,10 @@ def _settings_patch(data: Any) -> dict[str, Any]:
                 detail=f"{key} is too long (max {SETTINGS_STRING_LIMIT} chars)",
             )
         patch[key] = text
+    if "default_reasoning_effort" in data:
+        patch["default_reasoning_effort"] = _reasoning_effort(
+            data.get("default_reasoning_effort"), "default_reasoning_effort"
+        )
     if "model_presets" in data:
         raw = data.get("model_presets")
         if raw is not None and not isinstance(raw, (list, tuple)):
@@ -1124,6 +1138,12 @@ def create_chat(body: dict) -> dict[str, Any]:
         or str((preset or {}).get("provider") or "")
         or str(settings.get("default_provider") or "")
     ).strip()
+    # Explicit thinking level > default level. Presets deliberately stay a
+    # model/provider pair; a worker inherits its router's level below.
+    raw_effort = data.get("reasoning_effort")
+    effort = _reasoning_effort(raw_effort) if raw_effort is not None else ""
+    if not effort:
+        effort = _reasoning_effort(settings.get("default_reasoning_effort"))
     repo = _validated_repo(str(data.get("repo") or os.environ.get("SUPERAGENT_REPO", "") or "").strip())
     title = _scrub(str(data.get("title") or "").strip())
     source = str(data.get("source") or "desktop").strip() or "desktop"
@@ -1169,6 +1189,8 @@ def create_chat(body: dict) -> dict[str, Any]:
             model = _scrub(str(parent_session.get("model") or "")).strip() or model
         if not explicit_provider:
             provider = _scrub(str(parent_session.get("provider") or "")).strip() or provider
+        if not effort:
+            effort = _reasoning_effort(parent_session.get("reasoning_effort"))
         source = "worker"
 
     try:
@@ -1177,6 +1199,7 @@ def create_chat(body: dict) -> dict[str, Any]:
             title=title[:200],
             model=model[:200],
             provider=provider[:200],
+            reasoning_effort=effort[:40],
             repo=repo[:1000],
             source=source[:40],
             parent_session_id=parent or None,
@@ -1351,7 +1374,7 @@ def retry_chat(session_id: str) -> dict[str, Any]:
 
 @router.post("/chats/{session_id}/model")
 def set_chat_model(session_id: str, body: dict) -> dict[str, Any]:
-    """Change the model/provider a session will use for its *next* turn.
+    """Change the model, provider or thinking level for a session's next turn.
 
     The model is fixed for a chat at creation time in the composer, so this is
     the only way to move an existing conversation to another model. A live turn
@@ -1361,8 +1384,12 @@ def set_chat_model(session_id: str, body: dict) -> dict[str, Any]:
     data = body or {}
     model = str(data.get("model") or "").strip()
     provider = str(data.get("provider") or "").strip()
-    if not model and not provider:
-        raise HTTPException(status_code=400, detail="model or provider is required")
+    effort_given = "reasoning_effort" in data
+    effort = _reasoning_effort(data.get("reasoning_effort")) if effort_given else ""
+    if not model and not provider and not effort_given:
+        raise HTTPException(
+            status_code=400, detail="model, provider or reasoning_effort is required"
+        )
 
     store = _chat_store()
     session = store.get_session(session_id, message_limit=0)
@@ -1376,11 +1403,21 @@ def set_chat_model(session_id: str, body: dict) -> dict[str, Any]:
 
     model = model[:200]
     provider = provider[:200]
+    patch: dict[str, Any] = {}
+    if "model" in data or "provider" in data:
+        # Historical contract: a model/provider edit writes both fields, so a
+        # provider-only change deliberately clears the pinned model.
+        patch["model"] = model
+        patch["provider"] = provider
+    if effort_given:
+        patch["reasoning_effort"] = effort
     label = f"{provider}: {model}" if model and provider else (model or provider)
+    if effort_given:
+        label = f"{label} · thinking {effort or 'default'}".strip(" ·")
     # Event first, then the row: once the new model is visible its audit trail
     # already explains it (same order the runner uses when it finishes a turn).
     store.add_event(session_id, "model", f"next turn uses {label}")
-    updated = store.update_session(session_id, model=model, provider=provider)
+    updated = store.update_session(session_id, **patch)
     return {"ok": True, "session": updated}
 
 

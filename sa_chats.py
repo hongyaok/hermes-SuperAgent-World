@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     status            TEXT NOT NULL,
     model             TEXT,
     provider          TEXT,
+    reasoning_effort  TEXT,
     repo              TEXT,
     hermes_session_id TEXT,
     source            TEXT,
@@ -104,6 +105,7 @@ UPDATABLE = (
     "status",
     "model",
     "provider",
+    "reasoning_effort",
     "repo",
     "hermes_session_id",
     "source",
@@ -297,6 +299,9 @@ def session_markdown(session: dict, max_chars: int = MAX_EXPORT_CHARS) -> str:
     if model or provider:
         label = f"`{model}`" if model else ""
         facts.append(("Model", (label + (f" ({provider})" if provider else "")).strip()))
+    effort = str(session.get("reasoning_effort") or "").strip()
+    if effort:
+        facts.append(("Thinking", f"`{effort}`"))
     repo = str(session.get("repo") or "").strip()
     if repo:
         facts.append(("Repo", f"`{repo}`"))
@@ -382,6 +387,8 @@ class ChatStore:
             conn.execute("ALTER TABLE chat_sessions ADD COLUMN archived_at REAL")
         if "pinned_at" not in columns:
             conn.execute("ALTER TABLE chat_sessions ADD COLUMN pinned_at REAL")
+        if "reasoning_effort" not in columns:
+            conn.execute("ALTER TABLE chat_sessions ADD COLUMN reasoning_effort TEXT")
         if "parent_session_id" not in columns:
             conn.execute("ALTER TABLE chat_sessions ADD COLUMN parent_session_id TEXT")
         if "town_slot" not in columns:
@@ -447,6 +454,7 @@ class ChatStore:
         title: str = "",
         model: str = "",
         provider: str = "",
+        reasoning_effort: str = "",
         repo: str = "",
         source: str = "desktop",
         github_repo: Optional[str] = None,
@@ -482,6 +490,7 @@ class ChatStore:
             "status": status,
             "model": model or "",
             "provider": provider or "",
+            "reasoning_effort": reasoning_effort or "",
             "repo": repo or "",
             "hermes_session_id": None,
             "source": source or "desktop",
@@ -536,15 +545,16 @@ class ChatStore:
                 row["town_slot"] = slot
             conn.execute(
                 """INSERT INTO chat_sessions
-                   (id, title, prompt, status, model, provider, repo, hermes_session_id,
-                    source, github_repo, pr_number, pr_url, pid, tokens, duration_ms, error,
-                    last_event, parent_session_id, town_slot, created_at, updated_at,
-                    started_at, finished_at)
-                   VALUES (:id, :title, :prompt, :status, :model, :provider, :repo,
-                           :hermes_session_id, :source, :github_repo, :pr_number, :pr_url,
-                           :pid, :tokens, :duration_ms, :error, :last_event,
-                           :parent_session_id, :town_slot, :created_at, :updated_at,
-                           :started_at, :finished_at)""",
+                   (id, title, prompt, status, model, provider, reasoning_effort, repo,
+                    hermes_session_id, source, github_repo, pr_number, pr_url, pid, tokens,
+                    duration_ms, error, last_event, parent_session_id, town_slot, created_at,
+                    updated_at, started_at, finished_at)
+                   VALUES (:id, :title, :prompt, :status, :model, :provider,
+                           :reasoning_effort, :repo, :hermes_session_id, :source,
+                           :github_repo, :pr_number, :pr_url, :pid, :tokens,
+                           :duration_ms, :error, :last_event, :parent_session_id,
+                           :town_slot, :created_at, :updated_at, :started_at,
+                           :finished_at)""",
                 row,
             )
         detail = f"{row['source']} chat -> {status}"

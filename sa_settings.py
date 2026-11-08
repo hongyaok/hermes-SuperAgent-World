@@ -36,6 +36,7 @@ DEFAULTS: dict[str, Any] = {
     "github_token": "",
     "default_model": "",
     "default_provider": "",
+    "default_reasoning_effort": "",
     "model_presets": [],
     "max_workers": 2,
     "worker_yolo": True,
@@ -57,6 +58,7 @@ ENV_VARS: dict[str, str] = {
     "github_allowed_users": "SUPERAGENT_GITHUB_ALLOWED_USERS",
     "default_model": "SUPERAGENT_DEFAULT_MODEL",
     "default_provider": "SUPERAGENT_DEFAULT_PROVIDER",
+    "default_reasoning_effort": "SUPERAGENT_DEFAULT_REASONING_EFFORT",
     "model_presets": "SUPERAGENT_MODEL_PRESETS",
     "max_workers": "SUPERAGENT_MAX_WORKERS",
     "worker_yolo": "SUPERAGENT_WORKER_YOLO",
@@ -68,6 +70,32 @@ ENV_VARS: dict[str, str] = {
 }
 
 CACHE_SECONDS = 5.0
+
+# The levels Hermes accepts for --reasoning / agent.reasoning_effort. `none`
+# means thinking off; xhigh, max and ultra sit above high. Aliases are accepted
+# from hand-edited files and normalised to one canonical spelling.
+REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
+_REASONING_ALIASES = {"off": "none", "false": "none", "disabled": "none"}
+
+
+def normalize_reasoning_effort(value: Any, *, strict: bool = False) -> str:
+    """Return a canonical effort level, or '' for "inherit the model default".
+
+    ``strict=True`` is the API path: an unknown value is a 400 instead of a
+    silently ignored setting. The loader stays lenient so a hand-edited file
+    degrades to the default rather than taking the whole config down.
+    """
+    text = str(value if value is not None else "").strip().lower()
+    text = _REASONING_ALIASES.get(text, text)
+    if not text:
+        return ""
+    if text not in REASONING_EFFORTS:
+        if strict:
+            raise ValueError(
+                "reasoning_effort must be one of: " + ", ".join(REASONING_EFFORTS)
+            )
+        return ""
+    return text
 
 # A preset is a named (model, provider) pair. Twelve is enough for a picker
 # and keeps a hand-edited settings file from turning into a model catalog.
@@ -239,6 +267,8 @@ def _coerce(key: str, value: Any, fallback: Any) -> Any:
     """Coerce one value to the type of its default; bad input keeps ``fallback``."""
     if key == "model_presets":
         return normalize_presets(value)
+    if key == "default_reasoning_effort":
+        return normalize_reasoning_effort(value)
     default = DEFAULTS.get(key)
     if isinstance(default, bool):
         return _as_bool(value, bool(fallback))
