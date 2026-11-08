@@ -184,6 +184,7 @@ const switcher = render(h(plugin.TownSwitcher, {
 assert.match(switcher, /Previous town/)
 assert.match(switcher, /Next town/)
 assert.match(switcher, /New town/)
+assert.match(switcher, /2\/12 plots/)
 assert.match(switcher, /Sessions/)
 
 const dialogBase = {

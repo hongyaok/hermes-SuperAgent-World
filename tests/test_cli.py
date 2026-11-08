@@ -248,6 +248,19 @@ def _clear_chat_env(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
 
+def test_render_models_and_settings_show_default_thinking(sa):
+    models_text = sa.sa_cli.render_models({
+        "default_model": "m", "default_provider": "p",
+        "default_reasoning_effort": "ultra", "presets": [],
+    })
+    assert "default thinking: ultra" in models_text
+    settings_text = sa.sa_cli.render_settings({
+        "default_model": "m", "default_provider": "p",
+        "default_reasoning_effort": "xhigh",
+    })
+    assert "default thinking     xhigh" in settings_text
+
+
 def test_chat_creates_session_and_launches_turn(
     sa, store, fake_executor, monkeypatch, capsys
 ):

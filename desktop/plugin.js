@@ -106,6 +106,7 @@ const TOWN_PLOTS = [
   { left: 30, top: 82, scale: 0.72 },
   { left: 70, top: 82, scale: 0.72 },
 ]
+const TOWN_MAX_WORKERS = TOWN_PLOTS.length
 const TOWN_HOUSE_SPRITES = ['house-a.png', 'house-b.png', 'house-c.png', 'house-d.png']
 const TOWN_BUILD_MS = 900
 const TOWN_STATUS_LABEL = {
@@ -1629,7 +1630,12 @@ function PresetSelect({ value, models, onChange }) {
   const options = current && presets.indexOf(current) === -1 ? [current].concat(presets) : presets
   return jsxs('select', {
     value: current,
-    onChange: (event) => onChange({ model: event.target.value, provider: '' }),
+    onChange: (event) => onChange({
+      model: event.target.value, provider: '',
+      // Keep the chosen thinking level when only the model changes; the
+      // fallback picker has no effort control of its own.
+      effort: String(value.effort || ''),
+    }),
     className: cn('max-w-[14rem] rounded border border-(--ui-stroke-secondary) bg-transparent',
       'px-1.5 py-1 text-[0.6875rem] text-(--ui-text-secondary)'),
     children: [
@@ -1650,7 +1656,10 @@ function ModelPicker({ value, models, onChange, disabled }) {
   const controller = {
     allowSpeed: false,
     applyPreset: (preset, row) => onChange({
-      model: row.model, provider: row.provider, effort: String((preset && preset.effort) || ''),
+      model: row.model, provider: row.provider,
+      // Presets are model/provider pairs; keep the independently chosen
+      // thinking level unless the preset explicitly carries one.
+      effort: String((preset && preset.effort) || value.effort || ''),
     }),
     current: {
       effort: String(value.effort || ''), fast: false,
@@ -4157,8 +4166,9 @@ function TownSwitcher({ towns, value, onChange, onPrev, onNext, onNew, onSession
       current
         ? jsx('span', {
             key: 'workers',
+            title: `${(current.workers || []).length} of ${TOWN_MAX_WORKERS} plots used`,
             className: 'hidden shrink-0 text-[0.6875rem] text-(--ui-text-tertiary) sm:inline',
-            children: `${(current.workers || []).length} worker${(current.workers || []).length === 1 ? '' : 's'}`,
+            children: `${(current.workers || []).length}/${TOWN_MAX_WORKERS} plots`,
           })
         : null,
       jsx('button', {

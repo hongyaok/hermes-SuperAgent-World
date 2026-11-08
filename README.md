@@ -311,9 +311,11 @@ and `/chats`, so the scene cannot invent activity that has no session row.
 
 - **Town scene** — the centre is the Router house and its person. Every worker
   gets exactly one house and one person, placed by the `town_slot` allocated
-  when the child row was created. The plot list is fixed, so polling, a town
-  switch or a reload never moves a house. Houses carry text status badges
-  (`queued`, `running`, `review`, `failed`, `cancelled`), not just animation.
+  when the child row was created. Twelve fixed plots cover the backend's full
+  worker cap, so polling, a town switch or a reload never moves a house. Houses
+  carry text status badges (`queued`, `running`, `review`, `failed`,
+  `cancelled`), not just animation; the switcher shows how many of the twelve
+  plots are used.
 - **One-shot construction** — a house animates only when its id appears after
   the initial snapshot; the known-worker ids are persisted per town, so a
   refresh does not replay every build. `prefers-reduced-motion` skips the
@@ -366,7 +368,8 @@ they can call `superagent_spawn`; worker sessions do not.
 | Method | Path | Behaviour |
 | :--- | :--- | :--- |
 | `GET` | `/models` | `{default_model, default_provider, default_reasoning_effort, models, presets}` from settings/env. `presets` is `[{name, model, provider}]` and is `[]` when none are configured; `models` is the flat list of preset models in order plus the configured `default_model`, never a hardcoded catalogue. |
-| `GET` | `/towns?limit=200&archived=hide` | `{ok, towns, towns_count, worker_count, running, counts, orphaned, orphaned_count, archived_count}`. A town is a root (`parent_session_id` NULL) with its workers; a worker is never returned as a town. Ordering is pinned roots first, then newest activity. Workers carry their allocated `town_slot`. |
+| `GET` | `/health` | `{ok, version, api_version, features, pid, started_at, db_exists, db_path, archived_count}`. `features` advertises `towns` and `thinking`; the page uses it to explain an older gateway instead of a generic error. |
+| `GET` | `/towns?limit=200&archived=hide` | `{db_exists, towns, town_count, worker_count, running, counts, orphaned, orphaned_count, archived_count}`. A town is a root (`parent_session_id` NULL) with its workers; a worker is never returned as a town. Ordering is pinned roots first, then newest activity. Workers carry their allocated `town_slot`. |
 | `GET` | `/town/assets` | `{ok, assets}` — a data-URL manifest of the allowlisted town PNGs. No filesystem path is accepted. |
 | `GET` | `/town/assets/{name}` | The PNG bytes with `image/png` and a one-day cache; an unknown name is `404`. Only the explicit allowlist can be served. |
 | `GET` | `/usage?days=14` | `{ok, db_exists, days, since, totals, series, models}` — chats and turns created in the window, summed `tokens`/`duration_ms`, status `counts`, one `{date, sessions, tokens}` bucket per **local** day (filled to `days`), and `{model, provider, sessions, tokens}` rows busiest first. `days` is clamped to `1–90`. |
