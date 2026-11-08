@@ -3,6 +3,28 @@
 All notable changes to the `superagent` Hermes plugin. Plain bullets, newest
 first.
 
+## 0.5.6 — 2026-11-08
+
+### Added
+
+- Regression tests that fill all twelve plots, and render-probe checks for the
+  twelfth plot and the worker-only Router link.
+
+### Changed
+
+- Opaque surfaces use a CSS fallback chain (`--card` → `--background` →
+  `#1c1c1e`), so Settings, the house dialog and the new-town modal cannot fall
+  back to transparent if a theme omits `--card`.
+- A dialog labels its session as Router from `parent_session_id`, not from the
+  currently displayed town; drawer subtitles use the tertiary text colour.
+
+### Fixed
+
+- An orphaned worker opened from Sessions no longer offers a Router jump to an
+  unrelated town.
+- A newly created root whose town list has not refetched yet is labelled
+  "Router house" instead of "Worker house".
+
 ## 0.5.5 — 2026-11-08
 
 ### Added

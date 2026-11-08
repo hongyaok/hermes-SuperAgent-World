@@ -3760,7 +3760,7 @@ function OverlayDrawer({ panel, title, subtitle, onClose, children }) {
         'data-drawer': panel,
         ref: panelRef,
         tabIndex: -1,
-        style: { backgroundColor: 'var(--card)', color: 'var(--foreground)' },
+        style: { backgroundColor: 'var(--card, var(--background, #1c1c1e))', color: 'var(--foreground, #f5f5f5)' },
         className: cn('absolute inset-y-0 right-0 z-10 flex w-full max-w-full flex-col border-l',
           'border-(--ui-stroke-secondary) shadow-2xl focus:outline-none',
           'md:w-[420px] md:max-w-[94vw]'),
@@ -3780,7 +3780,7 @@ function OverlayDrawer({ panel, title, subtitle, onClose, children }) {
                   subtitle
                     ? jsx('span', {
                         key: 's', title: subtitle,
-                        className: 'min-w-0 truncate text-[0.6875rem] text-(--ui-text-quaternary)',
+                        className: 'min-w-0 truncate text-[0.6875rem] text-(--ui-text-tertiary)',
                         children: subtitle,
                       })
                     : null,
@@ -4179,7 +4179,7 @@ function TownSwitcher({ towns, value, onChange, onPrev, onNext, onNew, onSession
 }
 
 function TownChatDialog({
-  sessionId, town, detail, canComment, onSelect, optimistic,
+  sessionId, town, detail, canComment, onSelect, optimistic, canJumpRouter,
   draft, onDraft, onSend, onStop, pending, stopPending, error,
   model, onModelChange, repo, onRepoChange, models, inputRef, recentRepos,
   onSessionModel, modelPending, presets, presetName, onPreset, onPresetClear,
@@ -4190,7 +4190,7 @@ function TownChatDialog({
   closeRef.current = onClose
   const session = detail && detail.data && detail.data.session
   const ready = !!(session && session.id === sessionId)
-  const router = sessionId === town.id
+  const router = session ? session.parent_session_id == null : sessionId === town.id
 
   useEffect(() => {
     const panel = panelRef.current
@@ -4243,7 +4243,7 @@ function TownChatDialog({
       tabIndex: -1,
       className: cn('flex h-[min(86vh,760px)] w-full max-w-3xl flex-col overflow-hidden rounded-lg',
         'border border-(--ui-stroke-secondary) shadow-xl focus:outline-none'),
-      style: { backgroundColor: 'var(--card)', color: 'var(--foreground)' },
+      style: { backgroundColor: 'var(--card, var(--background, #1c1c1e))', color: 'var(--foreground, #f5f5f5)' },
       children: [
         jsxs('header', {
           key: 'head',
@@ -4262,7 +4262,7 @@ function TownChatDialog({
                       children: townStatusLabel(session.status),
                     })
                   : null,
-                !router && typeof onSelect === 'function'
+                !router && canJumpRouter && typeof onSelect === 'function'
                   ? jsx('button', {
                       key: 'router', type: 'button', onClick: () => onSelect(town.id),
                       className: cn('shrink-0 rounded border border-(--ui-stroke-secondary) px-1',
@@ -4369,7 +4369,7 @@ function TownModal({ title, subtitle, onClose, children }) {
       ref: panelRef, tabIndex: -1,
       className: cn('flex max-h-[min(86vh,760px)] w-full max-w-xl flex-col gap-2 overflow-y-auto rounded-lg border',
         'border-(--ui-stroke-secondary) p-3 shadow-xl focus:outline-none'),
-      style: { backgroundColor: 'var(--card)', color: 'var(--foreground)' },
+      style: { backgroundColor: 'var(--card, var(--background, #1c1c1e))', color: 'var(--foreground, #f5f5f5)' },
       children: [
         jsxs('div', {
           key: 'head', className: 'flex items-start justify-between gap-2',
@@ -5080,11 +5080,13 @@ function SuperagentPage() {
   // or the GitHub panel. Resolve its owning town from the data, not from the
   // town that happened to be on screen when the click happened.
   const dialogSession = selectedSession
-  const dialogTown = useMemo(() => {
-    if (!dialogSession || !towns.length) return town
+  const dialogOwner = useMemo(() => {
+    if (!dialogSession) return null
     return towns.find((item) => item.id === dialogSession.id
-      || (item.workers || []).some((worker) => worker.id === dialogSession.id)) || town
-  }, [towns, dialogSession, town])
+      || (item.workers || []).some((worker) => worker.id === dialogSession.id)) || null
+  }, [towns, dialogSession])
+  const dialogTown = dialogOwner || town
+  const canJumpRouter = !!(dialogOwner && dialogSession && dialogSession.id !== dialogOwner.id)
 
   const selectSession = (id) => {
     const owner = towns.find((item) => item.id === id
@@ -5277,6 +5279,7 @@ function SuperagentPage() {
             town: dialogTown,
             detail,
             canComment: !!(githubQuery.data && githubQuery.data.token_set),
+            canJumpRouter,
             onSelect: selectSession,
             optimistic,
             ...composerProps,

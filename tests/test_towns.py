@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from sa_plugin import sa_chats
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -185,6 +187,20 @@ def test_archive_and_delete_never_create_phantom_towns(chat):
     assert data["towns"] == []
     assert data["orphaned_count"] == 1
     assert data["orphaned"][0]["id"] == child["id"]
+
+
+def test_full_town_assigns_every_grid_slot(chat):
+    root = chat.create_session("root")
+    slots = [
+        chat.create_session(f"worker-{index}", parent_session_id=root["id"])["town_slot"]
+        for index in range(sa_chats.MAX_TOWN_WORKERS)
+    ]
+    assert slots == list(range(sa_chats.MAX_TOWN_WORKERS))
+    with pytest.raises(ValueError, match="max 12"):
+        chat.create_session("overflow", parent_session_id=root["id"])
+    town = chat.list_towns()["towns"][0]
+    assert town["worker_count"] == sa_chats.MAX_TOWN_WORKERS
+    assert [worker["town_slot"] for worker in town["workers"]] == slots
 
 
 def test_slot_reuses_a_gap_after_delete(chat):
