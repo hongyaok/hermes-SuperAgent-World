@@ -3,6 +3,26 @@
 All notable changes to the `superagent` Hermes plugin. Plain bullets, newest
 first.
 
+## 0.5.3 — 2026-11-08
+
+### Added
+
+- Regression coverage for slot reuse after a delete, archived orphans, and a
+  legacy slot outside the desktop grid.
+
+### Changed
+
+- A new worker takes the lowest free plot (`0…11`) instead of `MAX(town_slot)+1`.
+  Deleting a worker no longer leaves a permanent gap that can push the next
+  worker past the twelve-house grid.
+
+### Fixed
+
+- `/towns` clamps a legacy/out-of-range `town_slot` to the grid instead of
+  handing the desktop an index it cannot draw.
+- Archived orphans no longer inflate the header's orphan count on the default
+  `archived=hide` board; `archived=all`/`only` still reports them.
+
 ## 0.5.2 — 2026-11-08
 
 ### Added

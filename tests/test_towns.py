@@ -187,6 +187,42 @@ def test_archive_and_delete_never_create_phantom_towns(chat):
     assert data["orphaned"][0]["id"] == child["id"]
 
 
+def test_slot_reuses_a_gap_after_delete(chat):
+    root = chat.create_session("root")
+    first = chat.create_session("first", parent_session_id=root["id"])
+    second = chat.create_session("second", parent_session_id=root["id"])
+    third = chat.create_session("third", parent_session_id=root["id"])
+    assert [first["town_slot"], second["town_slot"], third["town_slot"]] == [0, 1, 2]
+
+    assert chat.delete_session(second["id"]) is True
+    replacement = chat.create_session("replacement", parent_session_id=root["id"])
+    assert replacement["town_slot"] == 1
+    slots = [worker["town_slot"] for worker in chat.list_towns()["towns"][0]["workers"]]
+    assert slots == [0, 1, 2]
+
+
+def test_list_towns_clamps_legacy_slots_to_the_grid(chat):
+    root = chat.create_session("root")
+    child = chat.create_session("worker", parent_session_id=root["id"])
+    with chat._connect() as conn:
+        conn.execute("UPDATE chat_sessions SET town_slot = 99 WHERE id = ?", (child["id"],))
+    town = chat.list_towns()["towns"][0]
+    assert town["workers"][0]["town_slot"] == 0
+
+
+def test_archived_orphans_follow_the_archived_mode(chat):
+    root = chat.create_session("root")
+    child = chat.create_session("worker", parent_session_id=root["id"])
+    chat.set_archived(child["id"], True)
+    assert chat.delete_session(root["id"]) is True
+
+    hidden = chat.list_towns()
+    assert hidden["orphaned_count"] == 0
+    assert hidden["orphaned"] == []
+    assert chat.list_towns(archived="all")["orphaned_count"] == 1
+    assert chat.list_towns(archived="only")["orphaned_count"] == 1
+
+
 def test_list_sessions_stays_flat_and_compatible(chat):
     root = chat.create_session("root")
     child = chat.create_session("worker", parent_session_id=root["id"])
