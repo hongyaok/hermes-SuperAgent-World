@@ -1,1 +1,1 @@
-{"api": "plugin_api.py", "description": "Superagent Towns: real router and worker sessions as a pixel-art town, each session a house with its own transcript, composer, thinking level and live status.", "icon": "Bot", "label": "Superagent", "name": "superagent", "version": "0.5.3"}
+{"api": "plugin_api.py", "description": "Superagent Towns: real router and worker sessions as a pixel-art town, each session a house with its own transcript, composer, thinking level and live status.", "icon": "Bot", "label": "Superagent", "name": "superagent", "version": "0.5.4"}

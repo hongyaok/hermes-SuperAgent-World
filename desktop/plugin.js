@@ -4133,6 +4133,7 @@ function TownSwitcher({ towns, value, onChange, onPrev, onNext, onNew, onSession
             key: 'select',
             value: value || '',
             'aria-label': 'Select town',
+            title: current ? `${sessionTitle(current)} · ${townStatusLabel(current.status)}` : 'Select town',
             onChange: (event) => onChange(event.target.value),
             className: cn('h-7 max-w-[15rem] min-w-[8rem] truncate bg-transparent px-1',
               'text-xs text-(--ui-text-secondary) focus:outline-none'),
@@ -4156,7 +4157,7 @@ function TownSwitcher({ towns, value, onChange, onPrev, onNext, onNew, onSession
       current
         ? jsx('span', {
             key: 'workers',
-            className: 'hidden shrink-0 text-[0.6875rem] text-(--ui-text-quaternary) sm:inline',
+            className: 'hidden shrink-0 text-[0.6875rem] text-(--ui-text-tertiary) sm:inline',
             children: `${(current.workers || []).length} worker${(current.workers || []).length === 1 ? '' : 's'}`,
           })
         : null,
@@ -4259,6 +4260,16 @@ function TownChatDialog({
                   ? jsx('span', {
                       key: 'status', className: 'shrink-0 rounded border border-(--ui-stroke-secondary) px-1 text-[0.625rem] text-(--ui-text-secondary)',
                       children: townStatusLabel(session.status),
+                    })
+                  : null,
+                !router && typeof onSelect === 'function'
+                  ? jsx('button', {
+                      key: 'router', type: 'button', onClick: () => onSelect(town.id),
+                      className: cn('shrink-0 rounded border border-(--ui-stroke-secondary) px-1',
+                        'text-[0.625rem] text-(--ui-text-tertiary)',
+                        'hover:bg-(--chrome-action-hover) hover:text-(--ui-text-secondary)'),
+                      title: 'Open the town Router',
+                      children: '↗ Router',
                     })
                   : null,
                 jsx('span', {
@@ -5143,12 +5154,12 @@ function SuperagentPage() {
             children: [
               jsx('span', { key: 'name', className: 'shrink-0 text-sm font-medium', children: 'Superagent Towns' }),
               jsx('span', {
-                key: 'towns', className: 'shrink-0 text-xs text-(--ui-text-quaternary)',
+                key: 'towns', className: 'shrink-0 text-xs text-(--ui-text-tertiary)',
                 children: townCount ? `${townCount} town${townCount === 1 ? '' : 's'}` : '',
               }),
               summaryLabel
                 ? jsx('span', {
-                    key: 'counts', className: 'min-w-0 truncate text-xs text-(--ui-text-quaternary)',
+                    key: 'counts', className: 'min-w-0 truncate text-xs text-(--ui-text-tertiary)',
                     children: `· ${summaryLabel}`,
                   })
                 : null,
@@ -5156,8 +5167,8 @@ function SuperagentPage() {
                 ? jsx('button', {
                     key: 'orphans', type: 'button', onClick: openSessions,
                     title: 'Worker sessions whose root was deleted are kept in Sessions, never drawn as towns.',
-                    className: cn('shrink-0 rounded px-1 text-xs text-(--ui-text-quaternary)',
-                      'hover:bg-(--chrome-action-hover) hover:text-(--ui-text-secondary)'),
+                    className: cn('shrink-0 rounded px-1 text-xs text-(--ui-text-secondary)',
+                      'hover:bg-(--chrome-action-hover) hover:text-(--ui-text-primary)'),
                     children: `· ${orphaned} orphaned`,
                   })
                 : null,
@@ -5205,7 +5216,9 @@ function SuperagentPage() {
         ? jsx('div', {
             key: 'error', className: 'shrink-0',
             children: jsx(ErrorCard, {
-              title: 'Superagent backend unavailable. Enable the plugin first.',
+              title: townsQuery.isError && /404/.test(errorText(townsQuery.error))
+                ? 'Towns route missing. Restart the gateway from an outside shell, then reload desktop plugins.'
+                : 'Superagent backend unavailable. Enable the plugin first.',
               error: chatsQuery.error || townsQuery.error,
               onRetry: () => { chatsQuery.refetch(); townsQuery.refetch() },
             }),
@@ -5220,7 +5233,16 @@ function SuperagentPage() {
               jsx('span', { key: 'lead', className: 'font-medium', children: 'Gateway needs a restart. ' }),
               jsx('span', {
                 key: 'detail',
-                children: `This desktop expects towns and thinking levels, but the gateway loaded API v${health.api_version == null ? '?' : health.api_version}. Stop and start the gateway from an outside shell, then reload desktop plugins.`,
+                children: `This desktop expects towns and thinking levels, but the gateway loaded API v${health.api_version == null ? '?' : health.api_version}. `,
+              }),
+              jsx('code', {
+                key: 'cmd',
+                className: 'rounded bg-(--chrome-action-hover) px-1 py-0.5 font-mono text-[0.6875rem]',
+                children: 'hermes gateway restart',
+              }),
+              jsx('span', {
+                key: 'tail',
+                children: ' from an outside shell, then reload desktop plugins.',
               }),
             ],
           })
