@@ -535,13 +535,28 @@ class ChatStore:
                         f"town {parent} already has {children} workers"
                         f" (max {MAX_TOWN_WORKERS})"
                     )
-                slot = int(
-                    conn.execute(
-                        "SELECT COALESCE(MAX(town_slot), -1) + 1 AS slot"
-                        " FROM chat_sessions WHERE parent_session_id = ?",
+                slot = None
+                used_slots = {
+                    int(row["town_slot"])
+                    for row in conn.execute(
+                        "SELECT town_slot FROM chat_sessions"
+                        " WHERE parent_session_id = ? AND town_slot IS NOT NULL",
                         (parent,),
-                    ).fetchone()["slot"]
-                )
+                    )
+                    if row["town_slot"] is not None
+                }
+                for candidate in range(MAX_TOWN_WORKERS):
+                    if candidate not in used_slots:
+                        slot = candidate
+                        break
+                if slot is None:
+                    # Count said there was room but every plot is taken; this
+                    # can only happen with a hand-edited database, and a slot
+                    # outside the desktop grid would draw a phantom house.
+                    raise ValueError(
+                        f"town {parent} has no free plot"
+                        f" (max {MAX_TOWN_WORKERS})"
+                    )
                 row["town_slot"] = slot
             conn.execute(
                 """INSERT INTO chat_sessions
@@ -791,7 +806,9 @@ class ChatStore:
                     " s.archived_at FROM chat_sessions s"
                     " LEFT JOIN chat_sessions p ON p.id = s.parent_session_id"
                     " WHERE s.parent_session_id IS NOT NULL AND p.id IS NULL"
-                    " ORDER BY s.updated_at DESC LIMIT 20"
+                    + (" AND s.archived_at IS NULL" if mode == "hide" else "")
+                    + (" AND s.archived_at IS NOT NULL" if mode == "only" else "")
+                    + " ORDER BY s.updated_at DESC LIMIT 20"
                 )
             ]
             orphaned_count = int(
@@ -799,6 +816,8 @@ class ChatStore:
                     "SELECT COUNT(*) AS n FROM chat_sessions s"
                     " LEFT JOIN chat_sessions p ON p.id = s.parent_session_id"
                     " WHERE s.parent_session_id IS NOT NULL AND p.id IS NULL"
+                    + (" AND s.archived_at IS NULL" if mode == "hide" else "")
+                    + (" AND s.archived_at IS NOT NULL" if mode == "only" else "")
                 ).fetchone()["n"]
             )
             archived_count = int(
@@ -816,11 +835,14 @@ class ChatStore:
             town_workers = workers.get(town["id"], [])
             for worker in town_workers:
                 slot = worker.get("town_slot")
-                if slot is None or int(slot) in used:
+                try:
+                    slot = int(slot) if slot is not None else None
+                except (TypeError, ValueError):
+                    slot = None
+                if slot is None or not 0 <= slot < MAX_TOWN_WORKERS or slot in used:
                     while next_slot in used:
                         next_slot += 1
                     slot = next_slot
-                slot = int(slot)
                 used.add(slot)
                 worker["town_slot"] = slot
                 worker["elapsed_seconds"] = _elapsed_seconds(worker, now)
