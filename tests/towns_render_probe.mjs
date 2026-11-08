@@ -345,6 +345,8 @@ assert.match(dialog, /min\(92vw,460px\)/)
 assert.match(dialog, /min\(78vh,560px\)/)
 // The chat column itself is bounded on every host (dialog, tile, full page).
 assert.match(dialog, /max-w-\[560px\]/)
+// The transcript caps at viewport height so unbounded hosts scroll.
+assert.match(dialog, /max-h-\[min\(60vh,32rem\)\]/)
 
 const settingsPanel = render(h(plugin.SettingsPanel, {
   settings: {

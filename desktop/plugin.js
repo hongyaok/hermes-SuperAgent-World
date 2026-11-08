@@ -1601,7 +1601,11 @@ function Transcript({ session, optimistic }) {
           stickRef.current = atBottom
           setAway(!atBottom)
         },
-        className: cn('flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto superagent-pixel-scroll px-1 py-1'),
+        // Viewport cap as well as flex: on hosts with no definite height
+        // (full page, tile) flex-1 alone would let the column grow with the
+        // chat. A max-height can only limit, never force growth, so the
+        // fixed dialog is unaffected while unbounded hosts scroll instead.
+        className: cn('flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto superagent-pixel-scroll max-h-[min(60vh,32rem)] px-1 py-1'),
         children: body,
       }),
       away
