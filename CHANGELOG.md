@@ -15,11 +15,15 @@ first.
 
 - The existing-chat “Change model” control names the thinking level in its
   tooltip and accessible label; it edits both through the same picker.
+- Saving Settings resets the remembered new-chat picker to the saved defaults,
+  so the next **New town** actually uses the model and thinking level just set.
 
 ### Fixed
 
 - A shell without `ModelCatalogMenu` could choose a model but had no way to
   choose a thinking level from the composer; the fallback now exposes both.
+- New chats kept using the last-used model/level after Settings was saved;
+  saving a default now takes effect on the next new town.
 
 ## 0.5.8 — 2026-11-08
 
