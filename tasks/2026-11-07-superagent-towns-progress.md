@@ -1,7 +1,7 @@
 # Superagent Towns — progress and next steps
 
 **Date:** 2026-11-08
-**Status:** the vertical slice is merged on `main` at **0.5.7**. Source, tests,
+**Status:** the vertical slice is merged on `main` at **0.5.10**. Source, tests,
 docs and the 12-plot town layout are complete. The installed desktop pass is the
 only acceptance item still blocked: the gateway hosting this chat has the old
 route table, and restarting it from this session would terminate the session.
@@ -24,6 +24,11 @@ route table, and restarting it from this session would terminate the session.
 | #35 | Solid colour fallbacks (`--card` → `--background` → neutral), parent-based Router/Worker labels, owner-only Router jump, all-12 slot test; version `0.5.6`. |
 | #36 | Handover updated to the merged 0.5.6 state. |
 | #37 | CLI `models`/`settings` print the resolved default thinking level; version `0.5.7`. |
+| #38 | Handover updated to 0.5.7. |
+| #39 | Thinking survives model/preset changes; switcher shows `N/12 plots`; README `/health` and `town_count`; version `0.5.8`. |
+| #40 | Fallback model picker exposes a Thinking level select; version `0.5.9`. |
+| #41 | Saving Settings resets the remembered new-town picker to the saved defaults. |
+| #42 | Root/worker toolset + default-level tests; town shortcut sheet; version `0.5.10`. |
 
 ## What is implemented
 
@@ -73,7 +78,7 @@ route table, and restarting it from this session would terminate the session.
 ### Tests and tooling
 
 ```text
-python -m pytest -q                         517 passed
+python -m pytest -q                         520 passed
 node --check desktop/plugin.js              ok
 node tests/towns_render_probe.mjs           town render probe: ok
 hermes plugins validate .                   Validation passed.
@@ -83,7 +88,7 @@ hermes plugins doctor --ci .                5 tools, 0 hooks
 The 992×460 DOM probe with 12 houses reports **zero overlaps and zero
 clipping**. The installed plugin is a directory link at
 `~/.hermes/plugins/superagent -> C:\Users\hongy\Desktop\hermes-superagent`, and
-`hermes plugins show superagent` reports **0.5.7**.
+`hermes plugins show superagent` reports **0.5.10**.
 
 ## Not verified / blockers
 
