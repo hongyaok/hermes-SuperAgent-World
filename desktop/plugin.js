@@ -4216,6 +4216,52 @@ function townStatusLabel(status) {
   return TOWN_STATUS_LABEL[status] || String(status || 'unknown')
 }
 
+/** Device-clock phase for the town sky: dawn / day / dusk / night.
+///
+/// Takes local hours (0-24, fractions allowed) so it stays pure and
+/// node-testable without a DOM. Boundaries favour day: 5-6.5 dawn,
+/// 6.5-17.5 day, 17.5-19.5 dusk, otherwise night. */
+function townTimePhase(hours) {
+  const h = Number(hours)
+  if (!isFinite(h)) return 'day'
+  const wrapped = ((h % 24) + 24) % 24
+  if (wrapped < 5) return 'night'
+  if (wrapped < 6.5) return 'dawn'
+  if (wrapped < 17.5) return 'day'
+  if (wrapped < 19.5) return 'dusk'
+  return 'night'
+}
+
+/** HH:MM device-clock label for the town HUD. Local getters on purpose. */
+function townTimeLabel(date) {
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  return `${hours}:${minutes}`
+}
+
+/** Sky-overlay fill for one phase. Day is transparent; night dims the town
+ *  so lamps read as light sources. */
+function townTimeOverlay(phase) {
+  if (phase === 'dawn') return 'rgba(255, 170, 120, 0.16)'
+  if (phase === 'dusk') return 'rgba(150, 80, 160, 0.22)'
+  if (phase === 'night') return 'rgba(8, 12, 52, 0.42)'
+  return 'rgba(0, 0, 0, 0)'
+}
+
+/** Device clock for the town: phase + label, re-checked every 30s so the
+ *  sky follows the machine without joining the 2s chat poll. */
+function useTownTime() {
+  const [now, setNow] = useState(() => new Date())
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.setInterval !== 'function') return undefined
+    const timer = window.setInterval(() => setNow(new Date()), 30000)
+    return () => window.clearInterval(timer)
+  }, [])
+  const current = now instanceof Date ? now : new Date()
+  const phase = townTimePhase(current.getHours() + current.getMinutes() / 60)
+  return { now: current, phase, label: townTimeLabel(current) }
+}
+
 const TOWN_CSS = `
 @keyframes superagent-town-build {
   0% { opacity: 0; transform: translateY(14px) scale(0.55); }
@@ -4240,6 +4286,8 @@ const TOWN_CSS = `
 .superagent-town-person { animation: superagent-town-walk 900ms steps(1,end) infinite; }
 .superagent-petdex-sprite { animation: superagent-petdex-anim 850ms steps(8, end) infinite; }
 .superagent-speech-bubble { animation: superagent-speech-float 2200ms ease-in-out infinite; }
+.superagent-town-sky { transition: background-color 800ms linear; }
+.superagent-town-clock { font-variant-numeric: tabular-nums; }
 @media (prefers-reduced-motion: reduce) {
   .superagent-town-build, .superagent-town-person, .superagent-petdex-sprite, .superagent-speech-bubble { animation: none !important; }
 }
@@ -4709,6 +4757,8 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
   const workers = Array.isArray(town.workers) ? town.workers : []
   const [filter, setFilter] = useState('all')
   const [paused, setPaused] = useState(false)
+  const townTime = useTownTime()
+  const isDark = townTime.phase === 'night' || townTime.phase === 'dusk'
   const actorMap = useTownSimulation(town, buildingIds, reducedMotion || paused)
   const counts = workers.reduce((acc, worker) => {
     const key = townStatusLabel(worker.status)
@@ -4750,10 +4800,10 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
     { key: 'bench-r', left: 57, top: 76, src: bench, width: 38 },
     { key: 'bench-park', left: 74, top: 73, src: bench, width: 36 },
     { key: 'bridge-sw', left: 24, top: 74, src: bridge, width: 56 },
-    { key: 'lamp-nw', left: 39, top: 48, src: lamp, width: 22, glow: anyRunning },
-    { key: 'lamp-ne', left: 61, top: 48, src: lamp, width: 22, glow: anyRunning },
-    { key: 'lamp-sw', left: 36, top: 68, src: lamp, width: 22, glow: anyRunning },
-    { key: 'lamp-se', left: 64, top: 68, src: lamp, width: 22, glow: anyRunning },
+    { key: 'lamp-nw', left: 39, top: 48, src: lamp, width: 22, glow: anyRunning || isDark },
+    { key: 'lamp-ne', left: 61, top: 48, src: lamp, width: 22, glow: anyRunning || isDark },
+    { key: 'lamp-sw', left: 36, top: 68, src: lamp, width: 22, glow: anyRunning || isDark },
+    { key: 'lamp-se', left: 64, top: 68, src: lamp, width: 22, glow: anyRunning || isDark },
     { key: 'bush-nw', left: 16, top: 32, src: bush, width: 44 },
     { key: 'bush-ne', left: 84, top: 32, src: bush, width: 44 },
     { key: 'bush-sw', left: 16, top: 66, src: bush, width: 44 },
@@ -4904,6 +4954,16 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
               imageRendering: 'pixelated',
             },
           }),
+          // Device-clock sky tint. Sits above roads/plaza (z-2) but below
+          // houses (z-4+) and actors, so it tints the ground, not the UI.
+          jsx('div', {
+            key: 'sky',
+            'aria-hidden': 'true',
+            'data-town-time': townTime.phase,
+            title: `Town time ${townTime.label} (${townTime.phase})`,
+            className: 'superagent-town-sky pointer-events-none absolute inset-0 z-[3]',
+            style: { backgroundColor: townTimeOverlay(townTime.phase) },
+          }),
           // Router ↔ Worker visual connection paths
           workers.length > 0
             ? jsx('svg', {
@@ -4942,7 +5002,7 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
               left: `${item.left}%`, top: `${item.top}%`,
               width: item.width, height: 'auto', imageRendering: 'pixelated',
               zIndex: Math.max(3, Math.min(22, Math.round(item.top / 5))),
-              filter: item.glow ? 'drop-shadow(0 0 6px rgba(255,214,102,0.85))' : undefined,
+              filter: item.glow ? (isDark ? 'drop-shadow(0 0 8px rgba(255,214,102,0.95)) drop-shadow(0 0 2px rgba(255,240,180,0.9))' : 'drop-shadow(0 0 6px rgba(255,214,102,0.85))') : undefined,
             },
           })),
           ...trees.map((tree, index) => jsx('img', {
@@ -5036,19 +5096,34 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
                   })
                 }),
               }),
-              jsx('button', {
-                key: 'pause',
-                type: 'button',
-                'aria-pressed': paused,
-                'aria-label': paused ? 'Resume character movement' : 'Pause character movement',
-                title: paused ? 'Resume autonomous character walking' : 'Pause autonomous character walking',
-                onClick: () => setPaused((prev) => !prev),
-                className: cn(
-                  'pointer-events-auto rounded-md border border-(--ui-stroke-secondary) bg-background/90',
-                  'px-2 py-0.5 text-[0.625rem] leading-tight text-(--ui-text-secondary) shadow-sm',
-                  'hover:bg-(--chrome-action-hover)',
-                ),
-                children: paused ? '▶ Walk' : '⏸ Pause',
+              jsxs('div', {
+                key: 'right',
+                className: 'pointer-events-auto inline-flex items-center gap-1.5',
+                children: [
+                  jsx('span', {
+                    key: 'clock',
+                    'data-town-clock': townTime.phase,
+                    title: `Town time follows this device (${townTime.phase})`,
+                    className: cn('superagent-town-clock inline-flex items-center gap-1 rounded-md border',
+                      'border-(--ui-stroke-secondary) bg-background/90 px-2 py-0.5',
+                      'text-[0.625rem] leading-tight text-(--ui-text-secondary) shadow-sm'),
+                    children: `${townTime.phase === 'night' ? '🌙' : (townTime.phase === 'day' ? '☀️' : '🌤️')} ${townTime.label}`,
+                  }),
+                  jsx('button', {
+                    key: 'pause',
+                    type: 'button',
+                    'aria-pressed': paused,
+                    'aria-label': paused ? 'Resume character movement' : 'Pause character movement',
+                    title: paused ? 'Resume autonomous character walking' : 'Pause autonomous character walking',
+                    onClick: () => setPaused((prev) => !prev),
+                    className: cn(
+                      'pointer-events-auto rounded-md border border-(--ui-stroke-secondary) bg-background/90',
+                      'px-2 py-0.5 text-[0.625rem] leading-tight text-(--ui-text-secondary) shadow-sm',
+                      'hover:bg-(--chrome-action-hover)',
+                    ),
+                    children: paused ? '▶ Walk' : '⏸ Pause',
+                  }),
+                ],
               }),
             ],
           }),
