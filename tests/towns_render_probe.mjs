@@ -130,6 +130,7 @@ function render(node) {
     'aria-label', 'data-town-house', 'data-town-actor', 'data-town-speech',
     'data-petdex-slug', 'data-petdex-state', 'data-town-road-network',
     'data-town-landmark', 'data-town-hud', 'data-town-connections',
+    'data-town-time', 'data-town-clock',
     'data-create-pr-box', 'data-town-dialog',
     'data-drawer', 'id', 'role',
   ]) {
@@ -205,6 +206,9 @@ assert.match(scene, /data-town-speech="1"/)
 // Bubbles are fixed-size and scrollable: long telemetry must not stretch the town.
 assert.match(scene, /overflow-y-auto/)
 assert.match(scene, /superagent-pixel-scroll/)
+// Pixel chrome: town canvas carries the pixel font; dialogs/panels use stepped borders.
+assert.match(scene, /superagent-pixel/)
+assert.match(scene, /data-town-time="/)
 assert.match(scene, /pytest -q/)
 assert.match(scene, /data-town-hud="1"/)
 assert.match(scene, /data-town-connections="1"/)
