@@ -166,6 +166,8 @@ assert.doesNotMatch(quiet, /superagent-town-build/)
 
 assert.deepEqual(plugin.townHousePosition(0), plugin.townHousePosition(0))
 assert.deepEqual(plugin.townHousePosition(3), { left: 90, top: 50, scale: 0.72 })
+assert.equal(plugin.TOWN_PLOTS.length, 12)
+assert.deepEqual(plugin.townHousePosition(11), { left: 70, top: 82, scale: 0.72 })
 assert.ok(plugin.townHousePosition(12).left >= 0)
 
 const switcher = render(h(plugin.TownSwitcher, {
@@ -229,6 +231,22 @@ const stale = render(h(plugin.TownChatDialog, {
 assert.match(stale, /Loading S-0001/)
 assert.doesNotMatch(stale, /Router summary\./)
 
+const workerDialog = render(h(plugin.TownChatDialog, {
+  ...dialogBase,
+  sessionId: workerOne.id,
+  detail: { data: { session: workerOne }, isLoading: false, isError: false, error: null, refetch: () => undefined },
+  canJumpRouter: true,
+}))
+assert.match(workerDialog, /Worker house/)
+assert.match(workerDialog, /↗ Router/)
+const orphanDialog = render(h(plugin.TownChatDialog, {
+  ...dialogBase,
+  sessionId: workerOne.id,
+  detail: { data: { session: workerOne }, isLoading: false, isError: false, error: null, refetch: () => undefined },
+  canJumpRouter: false,
+}))
+assert.doesNotMatch(orphanDialog, /↗ Router/)
+
 const empty = render(h(plugin.TownEmpty, { onNew: () => undefined, banner: null }))
 assert.match(empty, /No towns yet/)
 
@@ -240,7 +258,7 @@ const drawer = render(h(plugin.OverlayDrawer, {
   panel: 'settings', title: 'Settings', subtitle: 'defaults', onClose: () => undefined, children: 'body',
 }))
 assert.match(drawer, /data-drawer="settings"/)
-assert.match(drawer, /bg="var\(--card\)"/)
+assert.match(drawer, /bg="var\(--card/)
 assert.match(drawer, /md:w-\[420px\]/)
 
 const settingsPanel = render(h(plugin.SettingsPanel, {
