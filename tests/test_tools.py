@@ -82,7 +82,8 @@ def test_register_wires_tools_commands_blueprint_skill_and_docs(sa):
 
     assert set(ctx.tools) == {
         "superagent_ask", "superagent_tick", "superagent_status",
-        "superagent_run", "superagent_spawn",
+        "superagent_run", "superagent_spawn", "superagent_town_status",
+        "superagent_message_worker", "superagent_pr_create", "superagent_pr_review",
     }
     assert all(toolset == "superagent" for toolset, _, _ in ctx.tools.values())
     assert "superagent" in ctx.commands
@@ -118,4 +119,147 @@ def test_slash_command_subcommands(tmp_path, monkeypatch, sa):
 
     tick_out = sa.slash_command("tick", ctx)
     assert "polled=" in tick_out
+
+
+def test_town_status_and_message_worker(tmp_path, monkeypatch, sa):
+    monkeypatch.setattr(sa.sa_settings, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(sa.sa_settings, "load_settings", lambda: dict(sa.sa_settings.DEFAULTS))
+    store = sa.sa_chats.ChatStore(tmp_path / "superagent.db")
+    root = store.create_session("router town")
+    worker = store.create_session("fix parser", parent_session_id=root["id"], status="review")
+    store.add_message(worker["id"], "assistant", "Fixed the parser bug.")
+
+    status_res = json.loads(
+        sa.sa_tools.superagent_town_status(
+            {"parent_session_id": root["id"], "include_diff": False}, ctx=FakeCtx()
+        )
+    )
+    assert status_res["ok"] is True
+    assert status_res["town"]["worker_count"] == 1
+    assert status_res["workers"][0]["id"] == worker["id"]
+    assert status_res["workers"][0]["last_assistant_message"] == "Fixed the parser bug."
+
+    launches = []
+
+    class DummyRunner:
+        def launch_turn(self, session_id, prompt, **kwargs):
+            launches.append((session_id, prompt, kwargs))
+            store.update_session(session_id, status="running")
+
+    monkeypatch.setattr(sa.sa_runtime, "shared_runner", lambda _store: DummyRunner())
+
+    # approve_pr blocked when allow_router_pr_approve is False
+    denied = json.loads(
+        sa.sa_tools.superagent_message_worker(
+            {
+                "parent_session_id": root["id"],
+                "worker_session_id": worker["id"],
+                "message": "approve it",
+                "action": "approve_pr",
+            },
+            ctx=FakeCtx(),
+        )
+    )
+    assert denied["ok"] is False
+    assert "allow_router_pr_approve" in denied["error"]
+
+    # Normal follow-up succeeds
+    sent = json.loads(
+        sa.sa_tools.superagent_message_worker(
+            {
+                "parent_session_id": root["id"],
+                "worker_session_id": worker["id"],
+                "message": "add one more unit test",
+            },
+            ctx=FakeCtx(),
+        )
+    )
+    assert sent["ok"] is True
+    assert len(launches) == 1
+    assert launches[0][0] == worker["id"]
+    assert "add one more unit test" in launches[0][1]
+
+
+def test_pr_create_and_pr_review_tools(tmp_path, monkeypatch, sa):
+    monkeypatch.setattr(sa.sa_settings, "data_dir", lambda: tmp_path)
+    store = sa.sa_chats.ChatStore(tmp_path / "superagent.db")
+    root = store.create_session("router")
+    worker = store.create_session("worker", parent_session_id=root["id"], repo=str(tmp_path))
+
+    # Disabled by default
+    monkeypatch.setattr(sa.sa_settings, "load_settings", lambda: dict(sa.sa_settings.DEFAULTS))
+    disabled_pr = json.loads(
+        sa.sa_tools.superagent_pr_create(
+            {"session_id": worker["id"], "title": "Fix bug"}, ctx=FakeCtx()
+        )
+    )
+    assert disabled_pr["ok"] is False
+    assert "allow_worker_pr_create" in disabled_pr["error"]
+
+    disabled_rev = json.loads(
+        sa.sa_tools.superagent_pr_review(
+            {"session_id": root["id"], "pr_number": 7, "event": "APPROVE", "body": "LGTM"},
+            ctx=FakeCtx(),
+        )
+    )
+    assert disabled_rev["ok"] is False
+    assert "allow_router_pr_approve" in disabled_rev["error"]
+
+    # Enable both settings and mock git + GitHubClient
+    enabled = dict(
+        sa.sa_settings.DEFAULTS,
+        allow_worker_pr_create=True,
+        allow_router_pr_approve=True,
+        github_repo="acme/widgets",
+        github_token="ghp_testtoken123456",
+        github_pr_base_branch="main",
+    )
+    monkeypatch.setattr(sa.sa_settings, "load_settings", lambda: enabled)
+    monkeypatch.setattr(
+        sa.sa_github,
+        "commit_and_push_branch",
+        lambda *a, **kw: {"branch": kw["branch"], "sha": "abc1234", "committed": True, "pushed": True},
+    )
+    monkeypatch.setattr(
+        sa.sa_github.GitHubClient,
+        "create_pr",
+        lambda self, **kw: {
+            "number": 42,
+            "title": kw["title"],
+            "html_url": "https://github.com/acme/widgets/pull/42",
+            "head_ref": kw["head"],
+            "base_ref": kw["base"],
+            "draft": kw["draft"],
+        },
+    )
+    monkeypatch.setattr(
+        sa.sa_github.GitHubClient,
+        "create_review",
+        lambda self, number, event="COMMENT", body="": {
+            "id": 77,
+            "state": event,
+            "html_url": f"https://github.com/acme/widgets/pull/{number}#pullrequestreview-77",
+            "fallback": False,
+        },
+    )
+
+    created = json.loads(
+        sa.sa_tools.superagent_pr_create(
+            {"session_id": worker["id"], "title": "Fix parser crash", "body": "Closes #1"},
+            ctx=FakeCtx(),
+        )
+    )
+    assert created["ok"] is True
+    assert created["pr"]["number"] == 42
+    assert created["session"]["pr_number"] == 42
+
+    reviewed = json.loads(
+        sa.sa_tools.superagent_pr_review(
+            {"session_id": root["id"], "pr_number": 42, "event": "APPROVE", "body": "Ship it"},
+            ctx=FakeCtx(),
+        )
+    )
+    assert reviewed["ok"] is True
+    assert reviewed["review"]["state"] == "APPROVE"
+
 

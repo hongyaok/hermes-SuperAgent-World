@@ -40,6 +40,13 @@ def test_non_allowed_user_is_skipped(sa):
     assert inbound == []
 
 
+def test_empty_allowed_users_skips_everyone(sa):
+    source = make_source(sa, allowed=())
+    source._request = lambda *args, **kwargs: [comment(login="alice")]
+    inbound, _ = source.poll()
+    assert inbound == []
+
+
 def test_bot_and_self_are_skipped(sa):
     source = make_source(sa)
     source._request = lambda *args, **kwargs: [

@@ -78,7 +78,7 @@ let rewritten = source
     "import { memo, useEffect, useMemo, useRef, useState } from 'react'",
     'const { memo, useEffect, useMemo, useRef, useState } = globalThis.__React',
   )
-  .replace('\r\n', '\n')
+  .replaceAll('\r\n', '\n')
 
 if (/^import\s/m.test(rewritten) || /^import .*@hermes\/plugin-sdk/m.test(rewritten)) {
   throw new Error('probe failed to rewrite every import')
@@ -126,7 +126,12 @@ function render(node) {
   if (!node.type || node.type === 'style') return ''
   const props = node.props || {}
   const bits = []
-  for (const key of ['aria-label', 'data-town-house', 'data-town-dialog', 'data-drawer', 'id', 'role']) {
+  for (const key of [
+    'aria-label', 'data-town-house', 'data-town-actor', 'data-town-speech',
+    'data-petdex-slug', 'data-petdex-state', 'data-town-road-network',
+    'data-town-landmark', 'data-create-pr-box', 'data-town-dialog',
+    'data-drawer', 'id', 'role',
+  ]) {
     if (props[key] != null) bits.push(`${key}="${props[key]}"`)
   }
   if (props.className) bits.push(`class="${props.className}"`)
@@ -138,9 +143,42 @@ function render(node) {
 
 const h = (type, props) => ({ type, props: props || {} })
 
+const pets = {
+  'hermes-kody': {
+    slug: 'hermes-kody',
+    display_name: 'Hermes Kody',
+    cols: 8,
+    rows: 9,
+    frame_width: 48,
+    frame_height: 52,
+    rows_map: { idle: 0, 'running-right': 1, 'running-left': 2, waving: 3, jumping: 4, failed: 5, waiting: 6, running: 7, review: 8 },
+    data_url: 'data:image/webp;base64,AA==',
+  },
+  'coding-cat-pet': {
+    slug: 'coding-cat-pet',
+    display_name: 'Coding Cat',
+    cols: 8,
+    rows: 9,
+    frame_width: 48,
+    frame_height: 52,
+    rows_map: { idle: 0, 'running-right': 1, 'running-left': 2, waving: 3, jumping: 4, failed: 5, waiting: 6, running: 7, review: 8 },
+    data_url: 'data:image/webp;base64,AA==',
+  },
+}
+root.avatar_slug = 'hermes-kody'
+workerOne.avatar_slug = 'coding-cat-pet'
+workerOne.recent_events = [{ kind: 'tool', detail: 'pytest -q' }]
+
 const scene = render(h(plugin.TownScene, {
   town: root,
-  assets,
+  assets: {
+    ...assets,
+    'water.png': { data_url: 'data:image/png;base64,AA==' },
+    'road-h.png': { data_url: 'data:image/png;base64,AA==' },
+    'road-v.png': { data_url: 'data:image/png;base64,AA==' },
+    'plaza-stone.png': { data_url: 'data:image/png;base64,AA==' },
+  },
+  pets,
   buildingIds: { 'S-0002': true },
   onOpen: () => undefined,
   registerHouse: () => () => undefined,
@@ -153,6 +191,15 @@ assert.match(scene, /running/)
 assert.match(scene, /review/)
 assert.match(scene, /superagent-town-build/)
 assert.match(scene, /data-town-house="S-0002"/)
+assert.match(scene, /data-town-road-network="cobblestone"/)
+assert.match(scene, /data-town-landmark="plaza"/)
+assert.match(scene, /data-town-landmark="stream"/)
+assert.match(scene, /data-town-actor="S-0001"/)
+assert.match(scene, /data-town-actor="S-0002"/)
+assert.match(scene, /data-petdex-slug="hermes-kody"/)
+assert.match(scene, /data-petdex-slug="coding-cat-pet"/)
+assert.match(scene, /data-town-speech="1"/)
+assert.match(scene, /pytest -q/)
 
 const quiet = render(h(plugin.TownScene, {
   town: root,
@@ -177,6 +224,8 @@ const switcher = render(h(plugin.TownSwitcher, {
   onPrev: () => undefined,
   onNext: () => undefined,
   onNew: () => undefined,
+  onReroll: () => undefined,
+  rerolling: false,
   onSessions: () => undefined,
   canPrev: false,
   canNext: false,
@@ -184,6 +233,7 @@ const switcher = render(h(plugin.TownSwitcher, {
 assert.match(switcher, /Previous town/)
 assert.match(switcher, /Next town/)
 assert.match(switcher, /New town/)
+assert.match(switcher, /Reroll sprites/)
 assert.match(switcher, /2\/12 plots/)
 assert.match(switcher, /Sessions/)
 
@@ -279,6 +329,25 @@ assert.match(settingsPanel, /Extra high/)
 assert.match(settingsPanel, /Ultra/)
 assert.match(settingsPanel, /Model presets/)
 assert.match(settingsPanel, /Max parallel workers/)
+assert.match(settingsPanel, /Isolate workers in git worktrees/)
+assert.match(settingsPanel, /Allow workers to create GitHub PRs/)
+assert.match(settingsPanel, /Allow Router & workers to review\/approve PRs/)
+assert.match(settingsPanel, /Use Petdex\.dev random character sprites/)
+
+const commentBox = render(h(plugin.CommentBox, {
+  session: { ...workerTwo, pr_number: 42 },
+  onClose: () => undefined,
+}))
+assert.match(commentBox, /Comment on PR #42/)
+assert.match(commentBox, /Approve ✓/)
+assert.match(commentBox, /Request changes ✕/)
+
+const createPrBox = render(h(plugin.CreatePrBox, {
+  session: { ...workerOne, repo: '/tmp/repo', branch_name: 'superagent/s-0002-fix' },
+  onClose: () => undefined,
+}))
+assert.match(createPrBox, /data-create-pr-box="S-0002"/)
+assert.match(createPrBox, /Create Pull Request/)
 
 assert.equal(plugin.reasoningLabel('xhigh'), 'Extra high')
 const fallbackPicker = render(h(plugin.PresetSelect, {

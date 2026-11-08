@@ -12,6 +12,7 @@ database. The tables here are additive; nothing in the ticket schema changes.
 
 from __future__ import annotations
 
+import random
 import re
 import sqlite3
 import time
@@ -20,6 +21,36 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator, Optional, Sequence
+
+DEFAULT_PET_SLUGS = (
+    "boba",
+    "bravo",
+    "nyan-cat",
+    "pikachu",
+    "totoro",
+    "kirby",
+    "gengar",
+    "shiba",
+    "duck",
+    "robot",
+    "wizard",
+    "knight",
+)
+_SYS_RANDOM = random.SystemRandom()
+
+
+def _pick_slot(free_slots: Sequence[int]) -> int:
+    """Pick one free worker plot at random (monkeypatchable in tests)."""
+    return int(_SYS_RANDOM.choice(list(free_slots)))
+
+
+def _pick_avatar_slug(used: Sequence[str] = ()) -> str:
+    """Pick a random pet avatar slug, preferring ones not yet in ``used``."""
+    taken = {str(s).strip() for s in used if s}
+    available = [slug for slug in DEFAULT_PET_SLUGS if slug not in taken]
+    pool = available or list(DEFAULT_PET_SLUGS)
+    return str(_SYS_RANDOM.choice(pool))
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS chat_sessions (
@@ -43,6 +74,9 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     last_event        TEXT,
     parent_session_id TEXT,
     town_slot         INTEGER,
+    avatar_slug       TEXT,
+    branch_name       TEXT,
+    worktree_path     TEXT,
     created_at        REAL NOT NULL,
     updated_at        REAL NOT NULL,
     started_at        REAL,
@@ -117,6 +151,9 @@ UPDATABLE = (
     "duration_ms",
     "error",
     "last_event",
+    "avatar_slug",
+    "branch_name",
+    "worktree_path",
     "started_at",
     "finished_at",
     # set_archived() is the normal door; the column stays writable so a
@@ -393,6 +430,12 @@ class ChatStore:
             conn.execute("ALTER TABLE chat_sessions ADD COLUMN parent_session_id TEXT")
         if "town_slot" not in columns:
             conn.execute("ALTER TABLE chat_sessions ADD COLUMN town_slot INTEGER")
+        if "avatar_slug" not in columns:
+            conn.execute("ALTER TABLE chat_sessions ADD COLUMN avatar_slug TEXT")
+        if "branch_name" not in columns:
+            conn.execute("ALTER TABLE chat_sessions ADD COLUMN branch_name TEXT")
+        if "worktree_path" not in columns:
+            conn.execute("ALTER TABLE chat_sessions ADD COLUMN worktree_path TEXT")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS chat_sessions_archived"
             " ON chat_sessions(archived_at)"
@@ -462,6 +505,10 @@ class ChatStore:
         pr_url: Optional[str] = None,
         status: str = QUEUED,
         parent_session_id: Optional[str] = None,
+        avatar_slug: str = "",
+        branch_name: Optional[str] = None,
+        worktree_path: Optional[str] = None,
+        randomize_slot: bool = True,
     ) -> dict:
         """Create a chat session, optionally as a worker under a root town.
 
@@ -483,6 +530,7 @@ class ChatStore:
             raise ValueError(f"malformed parent session id: {parent!r}")
         session_id = self.new_session_id()
         slot: Optional[int] = None
+        clean_avatar = str(avatar_slug or "").strip()
         row = {
             "id": session_id,
             "title": _clip(title.strip() or derive_title(prompt), MAX_TITLE_CHARS),
@@ -504,6 +552,9 @@ class ChatStore:
             "last_event": None,
             "parent_session_id": parent or None,
             "town_slot": None,
+            "avatar_slug": clean_avatar or None,
+            "branch_name": (str(branch_name).strip() if branch_name else None),
+            "worktree_path": (str(worktree_path).strip() if worktree_path else None),
             "created_at": now,
             "updated_at": now,
             "started_at": None,
@@ -513,7 +564,8 @@ class ChatStore:
             if parent:
                 conn.execute("BEGIN IMMEDIATE")
                 parent_row = conn.execute(
-                    "SELECT id, parent_session_id, archived_at FROM chat_sessions WHERE id = ?",
+                    "SELECT id, parent_session_id, archived_at, avatar_slug"
+                    " FROM chat_sessions WHERE id = ?",
                     (parent,),
                 ).fetchone()
                 if parent_row is None:
@@ -524,32 +576,24 @@ class ChatStore:
                     )
                 if parent_row["archived_at"] is not None:
                     raise ValueError(f"parent session {parent} is archived")
-                children = int(
-                    conn.execute(
-                        "SELECT COUNT(*) AS n FROM chat_sessions WHERE parent_session_id = ?",
-                        (parent,),
-                    ).fetchone()["n"]
-                )
+                sibling_rows = conn.execute(
+                    "SELECT town_slot, avatar_slug FROM chat_sessions"
+                    " WHERE parent_session_id = ?",
+                    (parent,),
+                ).fetchall()
+                children = len(sibling_rows)
                 if children >= MAX_TOWN_WORKERS:
                     raise ValueError(
                         f"town {parent} already has {children} workers"
                         f" (max {MAX_TOWN_WORKERS})"
                     )
-                slot = None
                 used_slots = {
-                    int(row["town_slot"])
-                    for row in conn.execute(
-                        "SELECT town_slot FROM chat_sessions"
-                        " WHERE parent_session_id = ? AND town_slot IS NOT NULL",
-                        (parent,),
-                    )
-                    if row["town_slot"] is not None
+                    int(s_row["town_slot"])
+                    for s_row in sibling_rows
+                    if s_row["town_slot"] is not None
                 }
-                for candidate in range(MAX_TOWN_WORKERS):
-                    if candidate not in used_slots:
-                        slot = candidate
-                        break
-                if slot is None:
+                free_slots = [c for c in range(MAX_TOWN_WORKERS) if c not in used_slots]
+                if not free_slots:
                     # Count said there was room but every plot is taken; this
                     # can only happen with a hand-edited database, and a slot
                     # outside the desktop grid would draw a phantom house.
@@ -557,19 +601,29 @@ class ChatStore:
                         f"town {parent} has no free plot"
                         f" (max {MAX_TOWN_WORKERS})"
                     )
+                slot = _pick_slot(free_slots) if randomize_slot else free_slots[0]
                 row["town_slot"] = slot
+                if not row["avatar_slug"]:
+                    used_avatars = [parent_row["avatar_slug"] or ""] + [
+                        s_row["avatar_slug"] or "" for s_row in sibling_rows
+                    ]
+                    row["avatar_slug"] = _pick_avatar_slug(used_avatars)
+            else:
+                if not row["avatar_slug"]:
+                    row["avatar_slug"] = _pick_avatar_slug()
             conn.execute(
                 """INSERT INTO chat_sessions
                    (id, title, prompt, status, model, provider, reasoning_effort, repo,
                     hermes_session_id, source, github_repo, pr_number, pr_url, pid, tokens,
-                    duration_ms, error, last_event, parent_session_id, town_slot, created_at,
+                    duration_ms, error, last_event, parent_session_id, town_slot,
+                    avatar_slug, branch_name, worktree_path, created_at,
                     updated_at, started_at, finished_at)
                    VALUES (:id, :title, :prompt, :status, :model, :provider,
                            :reasoning_effort, :repo, :hermes_session_id, :source,
                            :github_repo, :pr_number, :pr_url, :pid, :tokens,
                            :duration_ms, :error, :last_event, :parent_session_id,
-                           :town_slot, :created_at, :updated_at, :started_at,
-                           :finished_at)""",
+                           :town_slot, :avatar_slug, :branch_name, :worktree_path,
+                           :created_at, :updated_at, :started_at, :finished_at)""",
                 row,
             )
         detail = f"{row['source']} chat -> {status}"
@@ -780,7 +834,8 @@ class ChatStore:
             roots = [
                 dict(row)
                 for row in conn.execute(
-                    "SELECT s.* FROM chat_sessions s WHERE "
+                    "SELECT s.*, (SELECT COUNT(*) FROM chat_messages m WHERE m.session_id = s.id)"
+                    " AS message_count FROM chat_sessions s WHERE "
                     + " AND ".join(root_clauses)
                     + " ORDER BY (s.pinned_at IS NOT NULL) DESC, s.updated_at DESC LIMIT ?",
                     (limit,),
@@ -788,17 +843,22 @@ class ChatStore:
             ]
             root_ids = [row["id"] for row in roots]
             workers: dict[str, list[dict]] = {root_id: [] for root_id in root_ids}
+            worker_ids: list[str] = []
             if root_ids:
                 placeholders = ", ".join("?" for _ in root_ids)
                 clause = f" WHERE s.parent_session_id IN ({placeholders})"
                 if worker_clauses:
                     clause += " AND " + " AND ".join(worker_clauses)
                 for row in conn.execute(
-                    "SELECT s.* FROM chat_sessions s" + clause
+                    "SELECT s.*, (SELECT COUNT(*) FROM chat_messages m WHERE m.session_id = s.id)"
+                    " AS message_count FROM chat_sessions s" + clause
                     + " ORDER BY s.town_slot, s.created_at, s.id",
                     root_ids,
                 ):
-                    workers.setdefault(row["parent_session_id"], []).append(dict(row))
+                    w_dict = dict(row)
+                    workers.setdefault(row["parent_session_id"], []).append(w_dict)
+                    worker_ids.append(w_dict["id"])
+            feeds = self._recent_events(conn, [*root_ids, *worker_ids])
             orphaned = [
                 dict(row)
                 for row in conn.execute(
@@ -846,10 +906,12 @@ class ChatStore:
                 used.add(slot)
                 worker["town_slot"] = slot
                 worker["elapsed_seconds"] = _elapsed_seconds(worker, now)
+                worker["recent_events"] = feeds.get(worker["id"], [])
                 counts[worker["status"]] += 1
             town["workers"] = town_workers
             town["worker_count"] = len(town_workers)
             town["elapsed_seconds"] = _elapsed_seconds(town, now)
+            town["recent_events"] = feeds.get(town["id"], [])
             counts[town["status"]] += 1
         return {
             "towns": roots,

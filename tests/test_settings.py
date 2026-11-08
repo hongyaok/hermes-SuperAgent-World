@@ -43,6 +43,28 @@ def test_defaults_are_complete(home):
     assert settings["github_watch_mode"] == "observe"
     assert settings["github_poll_seconds"] == 90
     assert settings["github_pr_limit"] == 10
+    assert settings["allow_worker_git_worktree"] is True
+    assert settings["allow_worker_pr_create"] is False
+    assert settings["allow_router_pr_approve"] is False
+    assert settings["github_pr_base_branch"] == ""
+    assert settings["github_pr_draft_by_default"] is False
+    assert settings["petdex_enabled"] is True
+
+
+def test_pr_and_worktree_env_overrides(home, monkeypatch):
+    monkeypatch.setenv("SUPERAGENT_ALLOW_WORKER_WORKTREE", "false")
+    monkeypatch.setenv("SUPERAGENT_ALLOW_WORKER_PR_CREATE", "true")
+    monkeypatch.setenv("SUPERAGENT_ALLOW_ROUTER_PR_APPROVE", "1")
+    monkeypatch.setenv("SUPERAGENT_GITHUB_PR_BASE_BRANCH", "develop")
+    monkeypatch.setenv("SUPERAGENT_GITHUB_PR_DRAFT", "yes")
+    monkeypatch.setenv("SUPERAGENT_PETDEX_ENABLED", "0")
+    settings = sa_settings.load_settings()
+    assert settings["allow_worker_git_worktree"] is False
+    assert settings["allow_worker_pr_create"] is True
+    assert settings["allow_router_pr_approve"] is True
+    assert settings["github_pr_base_branch"] == "develop"
+    assert settings["github_pr_draft_by_default"] is True
+    assert settings["petdex_enabled"] is False
 
 
 def test_defaults_match_plugin_yaml(home):

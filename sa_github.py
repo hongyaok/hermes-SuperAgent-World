@@ -179,6 +179,74 @@ class GitHubClient:
             raise GitHubError(f"pull request #{number} was not found", 404)
         return self._normalize_pr(data)
 
+    def create_pr(
+        self,
+        title: str,
+        head: str,
+        base: str,
+        body: str = "",
+        draft: bool = False,
+    ) -> dict[str, Any]:
+        clean_title = str(title or "").strip()[:256]
+        clean_head = str(head or "").strip()
+        clean_base = str(base or "").strip()
+        if not clean_title:
+            raise GitHubError("pull request title is required")
+        if not clean_head:
+            raise GitHubError("pull request head branch is required")
+        if not clean_base:
+            raise GitHubError("pull request base branch is required")
+        payload = {
+            "title": clean_title,
+            "head": clean_head,
+            "base": clean_base,
+            "body": str(body or "")[:BODY_LIMIT],
+            "draft": bool(draft),
+        }
+        data = self._call("POST", self._repo_path("pulls"), payload) or {}
+        if not isinstance(data, dict) or not data:
+            raise GitHubError("GitHub did not return a pull request object")
+        return self._normalize_pr(data)
+
+    def create_review(
+        self,
+        number: int,
+        event: str = "COMMENT",
+        body: str = "",
+        *,
+        fallback_on_self_approve: bool = True,
+    ) -> dict[str, Any]:
+        verdict = str(event or "COMMENT").strip().upper()
+        if verdict not in ("APPROVE", "REQUEST_CHANGES", "COMMENT"):
+            raise GitHubError(
+                f"review event must be APPROVE, REQUEST_CHANGES, or COMMENT (got {event!r})"
+            )
+        clean_body = str(body or "")[:BODY_LIMIT]
+        payload = {"event": verdict, "body": clean_body}
+        try:
+            data = self._call("POST", self._repo_path(f"pulls/{int(number)}/reviews"), payload) or {}
+        except GitHubError as exc:
+            if (
+                exc.status == 422
+                and verdict in ("APPROVE", "REQUEST_CHANGES")
+                and fallback_on_self_approve
+            ):
+                fallback_body = f"**[Superagent {verdict}]**\n\n{clean_body}".strip()
+                comment = self.post_comment(int(number), fallback_body)
+                return {
+                    "id": comment.get("id"),
+                    "state": f"{verdict}_COMMENT_FALLBACK",
+                    "html_url": str(comment.get("html_url") or ""),
+                    "fallback": True,
+                }
+            raise
+        return {
+            "id": data.get("id") if isinstance(data, dict) else None,
+            "state": str((data.get("state") if isinstance(data, dict) else None) or verdict),
+            "html_url": str((data.get("html_url") if isinstance(data, dict) else None) or ""),
+            "fallback": False,
+        }
+
     # -- comments --------------------------------------------------------
 
     def _normalize_comment(self, item: dict, kind: str) -> dict[str, Any]:
@@ -331,11 +399,181 @@ def prepare_pr_checkout(
     return {"path": str(dest), "reused": False, "branch_ref": ref}
 
 
+_PROTECTED_BRANCHES = {"main", "master", "head", "develop", "production"}
+_VALID_BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
+
+
+def sanitize_branch_name(session_id: str, title: str = "", explicit: str = "") -> str:
+    """Return a safe git branch name for a worker, rejecting protected branches."""
+    raw = str(explicit or "").strip()
+    if raw:
+        if (
+            ".." in raw
+            or raw.startswith(("/", ".", "-"))
+            or raw.endswith(("/", ".", ".lock"))
+            or "//" in raw
+            or not _VALID_BRANCH_RE.match(raw)
+        ):
+            raise GitHubError(f"invalid git branch name: {raw!r}")
+        if raw.lower() in _PROTECTED_BRANCHES:
+            raise GitHubError(f"refusing to use protected branch: {raw}")
+        return raw
+
+    sid = re.sub(r"[^a-z0-9-]+", "-", str(session_id or "worker").strip().lower()).strip("-") or "worker"
+    slug = re.sub(r"[^a-z0-9]+", "-", str(title or "").strip().lower()).strip("-")[:40].strip("-")
+    return f"superagent/{sid}-{slug}" if slug else f"superagent/{sid}"
+
+
+def prepare_worker_worktree(
+    repo_path: str,
+    session_id: str,
+    workspace_root: str,
+    *,
+    branch: str = "",
+    title: str = "",
+    base_ref: str = "HEAD",
+    git_runner: Optional[Handler] = None,
+) -> dict[str, Any]:
+    """Create an isolated git worktree and branch for a spawned worker session."""
+    source = Path(str(repo_path or "")).expanduser()
+    if not (source / ".git").exists():
+        raise GitHubError(f"not a git repository: {repo_path}")
+
+    branch_name = sanitize_branch_name(session_id, title=title, explicit=branch)
+    sid_clean = re.sub(r"[^a-z0-9-]+", "-", str(session_id or "worker").strip().lower()).strip("-") or "worker"
+    workspace = Path(str(workspace_root or "")).expanduser()
+    dest = workspace / f"worker-{sid_clean}"
+    if (dest / ".git").exists():
+        return {"path": str(dest), "branch": branch_name, "reused": True}
+    if dest.exists():
+        raise GitHubError(f"worktree path exists and is not a git checkout: {dest}")
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    run = git_runner or _default_git_runner
+    argv = [
+        "git",
+        "-C",
+        str(source),
+        "worktree",
+        "add",
+        "-B",
+        branch_name,
+        str(dest),
+        str(base_ref or "HEAD").strip() or "HEAD",
+    ]
+    try:
+        code, _out, err = run(argv, str(source), GIT_TIMEOUT)
+    except Exception as exc:
+        detail = _tail(_redact(exc)) or exc.__class__.__name__
+        raise GitHubError(f"could not create worker worktree for {session_id}: {detail}") from None
+    if code != 0:
+        detail = _tail(_redact(err)) or f"git exited with code {code}"
+        raise GitHubError(f"could not create worker worktree for {session_id}: {detail}")
+
+    return {"path": str(dest), "branch": branch_name, "reused": False}
+
+
+def commit_and_push_branch(
+    repo_path: str,
+    github_repo: str,
+    token: str,
+    *,
+    branch: str,
+    commit_message: str,
+    git_runner: Optional[Handler] = None,
+) -> dict[str, Any]:
+    """Stage, commit (if dirty), and push ``branch`` to GitHub with redacted errors."""
+    source = Path(str(repo_path or "")).expanduser()
+    if not (source / ".git").exists():
+        raise GitHubError(f"not a git repository: {repo_path}")
+    clean_repo = str(github_repo or "").strip()
+    if not clean_repo or "/" not in clean_repo:
+        raise GitHubError("no GitHub repository configured")
+    clean_token = str(token or "").strip()
+    if not clean_token:
+        raise GitHubError("no GitHub token configured")
+    branch_name = sanitize_branch_name("", explicit=branch)
+    message = str(commit_message or "").strip() or f"Superagent changes on {branch_name}"
+    run = git_runner or _default_git_runner
+
+    def _exec(argv: list[str], err_prefix: str) -> str:
+        try:
+            code, out, err = run(argv, str(source), GIT_TIMEOUT)
+        except Exception as exc:
+            detail = _tail(_redact(exc, clean_token)) or exc.__class__.__name__
+            raise GitHubError(f"{err_prefix}: {detail}") from None
+        if code != 0:
+            detail = _tail(_redact(err or out, clean_token)) or f"git exited with code {code}"
+            raise GitHubError(f"{err_prefix}: {detail}")
+        return out
+
+    status_out = _exec(
+        ["git", "-C", str(source), "status", "--porcelain=v1"],
+        "could not inspect git status",
+    )
+    _exec(
+        ["git", "-C", str(source), "checkout", "-B", branch_name],
+        f"could not switch to branch {branch_name}",
+    )
+    committed = False
+    if status_out.strip():
+        _exec(
+            ["git", "-C", str(source), "add", "-A"],
+            "could not stage changes",
+        )
+        _exec(
+            [
+                "git",
+                "-C",
+                str(source),
+                "-c",
+                "user.name=Superagent",
+                "-c",
+                "user.email=superagent@users.noreply.github.com",
+                "commit",
+                "-m",
+                message,
+            ],
+            "could not commit changes",
+        )
+        committed = True
+
+    auth = base64.b64encode(f"x-access-token:{clean_token}".encode("utf-8")).decode("ascii")
+    _exec(
+        [
+            "git",
+            "-C",
+            str(source),
+            "-c",
+            f"http.extraHeader=Authorization: Basic {auth}",
+            "push",
+            "https://github.com/" + clean_repo + ".git",
+            f"HEAD:refs/heads/{branch_name}",
+        ],
+        f"could not push branch {branch_name}",
+    )
+    sha_out = _exec(
+        ["git", "-C", str(source), "rev-parse", "HEAD"],
+        "could not resolve HEAD sha",
+    )
+    return {
+        "branch": branch_name,
+        "sha": sha_out.strip(),
+        "committed": committed,
+        "pushed": True,
+    }
+
+
 # -- prompt --------------------------------------------------------------
 
 
 def build_pr_prompt(
-    pr: dict[str, Any], comment: Optional[dict[str, Any]] = None, checkout: str = ""
+    pr: dict[str, Any],
+    comment: Optional[dict[str, Any]] = None,
+    checkout: str = "",
+    *,
+    can_create_pr: bool = False,
+    can_approve_pr: bool = False,
 ) -> str:
     """The worker prompt for one PR: context, the ask, and the ground rules."""
     pr = pr or {}
@@ -381,6 +619,17 @@ def build_pr_prompt(
     else:
         lines.append("No isolated checkout was prepared; work in the repository you were given.")
 
+    if can_create_pr:
+        commit_rule = (
+            "- Do NOT push directly to main/master or merge. To publish changes as a pull request"
+            " when asked, use the superagent_pr_create tool; otherwise leave changes in the working tree."
+        )
+    else:
+        commit_rule = (
+            "- Do NOT commit, push, merge, or open/update a pull request."
+            " Leave changes in the working tree for a human."
+        )
+
     lines += [
         "",
         "What to do:",
@@ -388,8 +637,13 @@ def build_pr_prompt(
         " (fetch the base branch first if that ref is missing).",
         "- Make the smallest fix that addresses the request; follow the repository's existing style.",
         "- Run the relevant tests or checks. If there are none, say what you checked instead.",
-        "- Do NOT commit, push, merge, or open/update a pull request."
-        " Leave changes in the working tree for a human.",
+        commit_rule,
+    ]
+    if can_approve_pr:
+        lines.append(
+            "- When asked to review or approve this pull request, use the superagent_pr_review tool."
+        )
+    lines += [
         "- If the request needs a design decision, ask one concrete question rather than guessing.",
         "- Finish with a summary of at most 200 words: what changed, files touched,"
         " checks run, and anything unresolved.",

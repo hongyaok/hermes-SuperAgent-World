@@ -45,6 +45,12 @@ DEFAULTS: dict[str, Any] = {
     "github_watch_mode": "observe",
     "github_watch_new_prs": False,
     "github_pr_limit": 10,
+    "allow_worker_git_worktree": True,
+    "allow_worker_pr_create": False,
+    "allow_router_pr_approve": False,
+    "github_pr_base_branch": "",
+    "github_pr_draft_by_default": False,
+    "petdex_enabled": True,
 }
 
 # Environment overrides, in the same order as DEFAULTS so a missing value in
@@ -67,6 +73,12 @@ ENV_VARS: dict[str, str] = {
     "github_watch_mode": "SUPERAGENT_GITHUB_WATCH_MODE",
     "github_watch_new_prs": "SUPERAGENT_GITHUB_WATCH_NEW_PRS",
     "github_pr_limit": "SUPERAGENT_GITHUB_PR_LIMIT",
+    "allow_worker_git_worktree": "SUPERAGENT_ALLOW_WORKER_WORKTREE",
+    "allow_worker_pr_create": "SUPERAGENT_ALLOW_WORKER_PR_CREATE",
+    "allow_router_pr_approve": "SUPERAGENT_ALLOW_ROUTER_PR_APPROVE",
+    "github_pr_base_branch": "SUPERAGENT_GITHUB_PR_BASE_BRANCH",
+    "github_pr_draft_by_default": "SUPERAGENT_GITHUB_PR_DRAFT",
+    "petdex_enabled": "SUPERAGENT_PETDEX_ENABLED",
 }
 
 CACHE_SECONDS = 5.0

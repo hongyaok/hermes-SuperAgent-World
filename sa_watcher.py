@@ -351,17 +351,27 @@ class GitHubWatcher:
             except sa_github.GitHubError as exc:
                 warning = str(exc)
 
-        prompt = sa_github.build_pr_prompt(pr, comment=comment, checkout=checkout)
+        prompt = sa_github.build_pr_prompt(
+            pr,
+            comment=comment,
+            checkout=checkout,
+            can_create_pr=bool(_field(settings, "allow_worker_pr_create", False)),
+            can_approve_pr=bool(_field(settings, "allow_router_pr_approve", False)),
+        )
         # Remember where this PR lives so a later chat message resumes in the
         # checkout (or the clone), not in the runner's default directory.
         session_repo = checkout
         if not session_repo and repo_path and Path(repo_path).expanduser().is_dir():
             session_repo = repo_path
+        effort = sa_settings.normalize_reasoning_effort(
+            _field(settings, "default_reasoning_effort", "")
+        )
         session = self.store.create_session(
             prompt,
             title=f"PR #{number}: {title}".strip(),
             model=_text(_field(settings, "default_model", "")),
             provider=_text(_field(settings, "default_provider", "")),
+            reasoning_effort=effort,
             repo=session_repo,
             source="github_pr",
             github_repo=repo,

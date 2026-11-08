@@ -82,6 +82,8 @@ def build_runner(store: Any, settings: Optional[dict[str, Any]] = None) -> Any:
         turn_timeout_seconds=_env_int(
             "SUPERAGENT_TURN_TIMEOUT_SECONDS", sa_runner.DEFAULT_TURN_TIMEOUT_SECONDS
         ),
+        can_create_pr=bool(settings.get("allow_worker_pr_create", False)),
+        can_approve_pr=bool(settings.get("allow_router_pr_approve", False)),
     )
 
 

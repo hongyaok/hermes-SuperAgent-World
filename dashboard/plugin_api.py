@@ -54,6 +54,7 @@ if str(_ROOT) not in sys.path:
 _DASHBOARD = Path(__file__).resolve().parent
 if str(_DASHBOARD) not in sys.path:
     sys.path.insert(0, str(_DASHBOARD))
+import petdex_assets  # noqa: E402  (local, after the path bootstrap)
 import town_assets  # noqa: E402  (local, after the path bootstrap)
 
 try:  # loaded as part of the plugin package
@@ -119,12 +120,18 @@ SETTINGS_KEYS = (
     "max_workers",
     "worker_yolo",
     "chat_max_turns",
+    "allow_worker_git_worktree",
+    "allow_worker_pr_create",
+    "allow_router_pr_approve",
     "github_repo",
     "github_agent_login",
     "github_allowed_users",
     "github_watch_mode",
     "github_watch_new_prs",
     "github_poll_seconds",
+    "github_pr_base_branch",
+    "github_pr_draft_by_default",
+    "petdex_enabled",
 )
 SETTINGS_EDITABLE = (
     "mode",
@@ -136,6 +143,12 @@ SETTINGS_EDITABLE = (
     "max_workers",
     "worker_yolo",
     "chat_max_turns",
+    "allow_worker_git_worktree",
+    "allow_worker_pr_create",
+    "allow_router_pr_approve",
+    "github_pr_base_branch",
+    "github_pr_draft_by_default",
+    "petdex_enabled",
 )
 MIN_WORKERS, MAX_WORKERS_SETTING = 1, 8
 MIN_CHAT_TURNS, MAX_CHAT_TURNS = 1, 500
@@ -777,7 +790,7 @@ def _settings_patch(data: Any) -> dict[str, Any]:
         if mode not in SETTINGS_MODES:
             raise HTTPException(status_code=400, detail="mode must be 'off', 'observe' or 'auto'")
         patch["mode"] = mode
-    for key in ("default_model", "default_provider"):
+    for key in ("default_model", "default_provider", "github_pr_base_branch"):
         if key not in data:
             continue
         value = data.get(key)
@@ -806,8 +819,16 @@ def _settings_patch(data: Any) -> dict[str, Any]:
         patch["max_workers"] = _settings_int(
             data.get("max_workers"), "max_workers", MIN_WORKERS, MAX_WORKERS_SETTING
         )
-    if "worker_yolo" in data:
-        patch["worker_yolo"] = _settings_bool(data.get("worker_yolo"), "worker_yolo")
+    for bool_key in (
+        "worker_yolo",
+        "allow_worker_git_worktree",
+        "allow_worker_pr_create",
+        "allow_router_pr_approve",
+        "github_pr_draft_by_default",
+        "petdex_enabled",
+    ):
+        if bool_key in data:
+            patch[bool_key] = _settings_bool(data.get(bool_key), bool_key)
     if "chat_max_turns" in data:
         patch["chat_max_turns"] = _settings_int(
             data.get("chat_max_turns"), "chat_max_turns", MIN_CHAT_TURNS, MAX_CHAT_TURNS
@@ -983,6 +1004,184 @@ def town_asset(name: str) -> Response:
         media_type=mime,
         headers={"Cache-Control": "public, max-age=86400"},
     )
+
+
+@router.get("/town/pets")
+def town_pets(slugs: str | None = None) -> dict[str, Any]:
+    """Return Petdex character/creature sprite sheets (8x9, 48x52 frames) as data URLs."""
+    settings = sa_settings.load_settings()
+    allow_remote = bool(settings.get("petdex_enabled", True))
+    cache_dir = sa_settings.data_dir() / "cache"
+    raw_slugs = [part.strip() for part in str(slugs or "").split(",") if part.strip()]
+    if not raw_slugs:
+        raw_slugs = [item["slug"] for item in petdex_assets.bundled_catalog()]
+    pets = petdex_assets.get_pets_bundle(
+        raw_slugs, cache_dir=cache_dir, allow_remote=allow_remote
+    )
+    return {
+        "ok": True,
+        "petdex_enabled": allow_remote,
+        "pets": pets,
+        "catalog": petdex_assets.bundled_catalog(),
+    }
+
+
+@router.post("/town/pets/reroll")
+def reroll_town_pets(body: dict | None = None) -> dict[str, Any]:
+    """Reroll the Petdex avatar for one session or an entire town (root + workers)."""
+    data = body if isinstance(body, dict) else {}
+    raw_session_id = str(data.get("session_id") or "").strip()
+    raw_town_id = str(data.get("town_id") or "").strip()
+    if not raw_session_id and not raw_town_id:
+        raise HTTPException(status_code=400, detail="session_id or town_id is required")
+
+    store = _chat_store()
+    settings = sa_settings.load_settings()
+    allow_remote = bool(settings.get("petdex_enabled", True))
+    cache_dir = sa_settings.data_dir() / "cache"
+
+    target_ids: list[str] = []
+    if raw_town_id:
+        town_id = _check_session_id(raw_town_id)
+        root = store.get_session(town_id, message_limit=0)
+        if root is None:
+            raise HTTPException(status_code=404, detail=f"unknown chat session {town_id}")
+        target_ids.append(town_id)
+        towns_payload = store.list_towns(limit=500, archived="all")
+        town_row = next(
+            (t for t in towns_payload.get("towns", []) if t.get("id") == town_id), None
+        )
+        for worker in (town_row or {}).get("workers", []):
+            wid = str(worker.get("id") or "")
+            if wid:
+                target_ids.append(wid)
+    else:
+        sid = _check_session_id(raw_session_id)
+        sess = store.get_session(sid, message_limit=0)
+        if sess is None:
+            raise HTTPException(status_code=404, detail=f"unknown chat session {sid}")
+        target_ids.append(sid)
+
+    used_slugs: set[str] = set()
+    updated_map: dict[str, str] = {}
+    for sid in target_ids:
+        current = store.get_session(sid, message_limit=0) or {}
+        current_slug = str(current.get("avatar_slug") or "").strip()
+        exclude = set(used_slugs)
+        if current_slug:
+            exclude.add(current_slug)
+        picked = petdex_assets.pick_random_pet(
+            exclude=exclude, allow_remote=allow_remote, cache_dir=cache_dir
+        )
+        new_slug = str(picked["slug"])
+        used_slugs.add(new_slug)
+        store.update_session(sid, avatar_slug=new_slug)
+        updated_map[sid] = new_slug
+
+    pets = petdex_assets.get_pets_bundle(
+        list(updated_map.values()), cache_dir=cache_dir, allow_remote=allow_remote
+    )
+    return {
+        "ok": True,
+        "updated": updated_map,
+        "pets": pets,
+    }
+
+
+@router.post("/towns/{root_id}/dispatch")
+def town_dispatch(root_id: str, body: dict | None = None) -> dict[str, Any]:
+    """Send a Router -> Worker coordination instruction (follow_up, create_pr, review_pr, approve_pr)."""
+    root_id = _check_session_id(root_id)
+    data = body if isinstance(body, dict) else {}
+    worker_id = _check_session_id(str(data.get("worker_session_id") or ""))
+    action = str(data.get("action") or "follow_up").strip().lower()
+    message = _scrub(str(data.get("message") or "").strip())
+    raw_pr_number = data.get("pr_number")
+    if action not in ("follow_up", "create_pr", "review_pr", "approve_pr"):
+        raise HTTPException(
+            status_code=400,
+            detail="action must be follow_up, create_pr, review_pr, or approve_pr",
+        )
+    if not message:
+        if action == "create_pr":
+            message = "Please review your changes, commit and push your branch, and open a pull request."
+        elif action == "approve_pr":
+            message = "Please inspect the pull request diff and submit an APPROVE review if everything is clean."
+        elif action == "review_pr":
+            message = "Please inspect the pull request diff and submit a detailed review."
+        else:
+            raise HTTPException(status_code=400, detail="message is required")
+    if len(message) > MAX_CONTENT_CHARS:
+        raise HTTPException(
+            status_code=400, detail=f"message is too long (max {MAX_CONTENT_CHARS} chars)"
+        )
+
+    store = _chat_store()
+    parent = store.get_session(root_id, message_limit=0)
+    if parent is None:
+        raise HTTPException(status_code=404, detail=f"unknown chat session {root_id}")
+    if parent.get("parent_session_id") is not None:
+        raise HTTPException(status_code=400, detail=f"session {root_id} is a worker, not a router town")
+
+    worker = store.get_session(worker_id, message_limit=0)
+    if worker is None:
+        raise HTTPException(status_code=404, detail=f"unknown worker session {worker_id}")
+    if worker.get("parent_session_id") != root_id:
+        raise HTTPException(
+            status_code=400, detail=f"worker {worker_id} does not belong to town {root_id}"
+        )
+    if worker.get("status") in (sa_chats.QUEUED, sa_chats.RUNNING):
+        raise HTTPException(
+            status_code=409,
+            detail=f"worker {worker_id} is {worker.get('status')}; wait for its turn to finish",
+        )
+
+    pr_number = raw_pr_number if raw_pr_number is not None else worker.get("pr_number")
+    if action == "create_pr":
+        formatted = (
+            f"[Router instruction from {root_id} — Create Pull Request]\n"
+            f"{message}\n\n"
+            f'When ready, call superagent_pr_create with session_id="{worker_id}".'
+        )
+    elif action in ("review_pr", "approve_pr"):
+        verdict_hint = "APPROVE" if action == "approve_pr" else "APPROVE, REQUEST_CHANGES, or COMMENT"
+        pr_part = f", pr_number={int(pr_number)}" if pr_number else ""
+        formatted = (
+            f"[Router instruction from {root_id} — {action.replace('_', ' ').title()}]\n"
+            f"{message}\n\n"
+            f'Submit your review using superagent_pr_review(session_id="{worker_id}"{pr_part}, event="{verdict_hint}", body="...").'
+        )
+    else:
+        formatted = f"[Router follow-up from {root_id}]\n{message}"
+
+    store.add_message(worker_id, "user", formatted)
+    store.add_event(root_id, "router_message", f"-> {worker_id} ({action}): {message[:120]}")
+    store.add_event(worker_id, "router_message", f"from {root_id} ({action}): {message[:120]}")
+
+    model = _scrub(str(worker.get("model") or ""))
+    provider = _scrub(str(worker.get("provider") or ""))
+    repo = _validated_repo(str(worker.get("repo") or ""))
+    resume_id = str(worker.get("hermes_session_id") or "").strip() or None
+    try:
+        _get_runner().launch_turn(
+            worker_id,
+            formatted,
+            resume_session_id=resume_id,
+            model=model,
+            provider=provider,
+            repo=repo,
+        )
+    except Exception as exc:
+        return _fail_session(store, worker_id, str(exc) or exc.__class__.__name__)
+
+    return {
+        "ok": True,
+        "launched": True,
+        "parent_session_id": root_id,
+        "worker_session_id": worker_id,
+        "action": action,
+        "session": store.get_session(worker_id),
+    }
 
 
 @router.get("/chats/{session_id}")
@@ -1257,10 +1456,12 @@ def post_chat_message(session_id: str, body: dict) -> dict[str, Any]:
     if not resume_id:
         # Nothing to resume (the first turn never started). Keep the user's
         # message by starting a new chat instead of dropping it.
+        effort = _reasoning_effort(session.get("reasoning_effort"))
         replacement = store.create_session(
             content,
             model=model,
             provider=provider,
+            reasoning_effort=effort,
             repo=repo,
             source=session.get("source") or "desktop",
         )
@@ -1634,6 +1835,148 @@ def chat_comment(session_id: str, body: dict | None = None) -> dict[str, Any]:
     }
 
 
+@router.post("/chats/{session_id}/pr")
+def chat_create_pr(session_id: str, body: dict | None = None) -> dict[str, Any]:
+    """Commit, push a branch for this session's repo/worktree, and open a GitHub PR."""
+    session_id = _check_session_id(session_id)
+    data = body if isinstance(body, dict) else {}
+    store = _chat_store()
+    session = _session_or_404(store, session_id)
+    settings = sa_settings.load_settings()
+
+    token = _comment_token()
+    github_repo = str(
+        data.get("github_repo")
+        or session.get("github_repo")
+        or settings.get("github_repo")
+        or ""
+    ).strip()
+    if not sa_settings.valid_repo_name(github_repo):
+        raise HTTPException(status_code=400, detail="no GitHub repository (owner/name) is configured")
+
+    repo_path = _session_repo(session)
+    diff = _session_diff(session)
+
+    raw_title = _scrub(str(data.get("title") or session.get("title") or f"Superagent {session_id}").strip())
+    if not raw_title:
+        raise HTTPException(status_code=400, detail="title is required")
+    title = raw_title[:200]
+
+    supplied_body = data.get("body")
+    if supplied_body is not None and len(str(supplied_body)) > COMMENT_BODY_LIMIT:
+        raise HTTPException(
+            status_code=400, detail=f"PR body is too long (max {COMMENT_BODY_LIMIT} chars)"
+        )
+    pr_body = _comment_body(session, supplied_body, diff)
+
+    explicit_branch = str(data.get("branch") or session.get("branch_name") or "").strip()
+    branch = sa_github.sanitize_branch_name(session_id, title=title, explicit=explicit_branch)
+    commit_message = _scrub(str(data.get("commit_message") or title).strip()) or title
+
+    try:
+        push_info = sa_github.commit_and_push_branch(
+            repo_path,
+            github_repo,
+            token,
+            branch=branch,
+            commit_message=commit_message,
+        )
+    except sa_github.GitHubError as exc:
+        raise HTTPException(status_code=400, detail=_scrub_github(str(exc))) from exc
+
+    client = sa_github.GitHubClient(token, github_repo)
+    base = str(data.get("base") or settings.get("github_pr_base_branch") or "").strip()
+    if not base:
+        try:
+            base = str(client.repo_info().get("default_branch") or "").strip() or "main"
+        except sa_github.GitHubError:
+            base = "main"
+    draft_arg = data.get("draft")
+    draft = (
+        _settings_bool(draft_arg, "draft")
+        if draft_arg is not None
+        else bool(settings.get("github_pr_draft_by_default", False))
+    )
+
+    try:
+        pr = client.create_pr(title=title, head=branch, base=base, body=pr_body, draft=draft)
+    except sa_github.GitHubError as exc:
+        raise HTTPException(status_code=502, detail=_scrub_github(str(exc))) from exc
+
+    updated = store.update_session(
+        session_id,
+        pr_number=pr.get("number"),
+        pr_url=pr.get("html_url"),
+        github_repo=github_repo,
+        branch_name=branch,
+    )
+    detail = f"PR #{pr.get('number')} ({branch} -> {base}) {pr.get('html_url') or ''}".strip()
+    store.add_event(session_id, "pr_created", detail)
+    if session.get("parent_session_id"):
+        store.add_event(str(session["parent_session_id"]), "pr_created", f"{session_id}: {detail}")
+
+    return {
+        "ok": True,
+        "pr": pr,
+        "branch": branch,
+        "base": base,
+        "push": push_info,
+        "session": updated,
+    }
+
+
+@router.post("/chats/{session_id}/review")
+def chat_review_pr(session_id: str, body: dict | None = None) -> dict[str, Any]:
+    """Submit a formal GitHub PR review (APPROVE, REQUEST_CHANGES, or COMMENT)."""
+    session_id = _check_session_id(session_id)
+    data = body if isinstance(body, dict) else {}
+    event = str(data.get("event") or "COMMENT").strip().upper()
+    if event not in ("APPROVE", "REQUEST_CHANGES", "COMMENT"):
+        raise HTTPException(
+            status_code=400, detail="event must be APPROVE, REQUEST_CHANGES, or COMMENT"
+        )
+
+    store = _chat_store()
+    session = _session_or_404(store, session_id)
+    pr_number, github_repo = _comment_pr(session)
+    token = _comment_token()
+
+    supplied_body = data.get("body")
+    if supplied_body is not None and len(str(supplied_body)) > COMMENT_BODY_LIMIT:
+        raise HTTPException(
+            status_code=400, detail=f"review body is too long (max {COMMENT_BODY_LIMIT} chars)"
+        )
+    diff: dict[str, Any] | None = None
+    try:
+        diff = _session_diff(session)
+    except HTTPException:
+        diff = None
+    text = _comment_body(session, supplied_body, diff) if (supplied_body or event != "APPROVE") else _scrub(str(supplied_body or "Approved via Hermes Superagent.").strip())
+
+    client = sa_github.GitHubClient(token, github_repo)
+    try:
+        review = client.create_review(pr_number, event=event, body=text)
+    except sa_github.GitHubError as exc:
+        raise HTTPException(status_code=502, detail=_scrub_github(str(exc))) from exc
+
+    state = str(review.get("state") or event)
+    url = str(review.get("html_url") or "")
+    detail = f"PR #{pr_number} {state}" + (f": {url}" if url else "")
+    store.add_event(session_id, "pr_reviewed", detail)
+    if session.get("parent_session_id"):
+        store.add_event(str(session["parent_session_id"]), "pr_reviewed", f"{session_id}: {detail}")
+
+    return {
+        "ok": True,
+        "pr_number": pr_number,
+        "github_repo": github_repo,
+        "event": event,
+        "review": review,
+        "url": url,
+        "session": store.get_session(session_id, message_limit=0),
+    }
+
+
 # -- GitHub (v0.3) -------------------------------------------------------
 #
 # Connect a repository, poll its pull requests and comments, and start work on
@@ -1946,16 +2289,24 @@ def github_pr_work(number: int, body: dict | None = None) -> dict[str, Any]:
 
     request_text = _scrub(str((body or {}).get("request") or "").strip())
     comment = {"author": "you", "body": request_text} if request_text else None
-    prompt = sa_github.build_pr_prompt(pr, comment=comment, checkout=checkout)
+    prompt = sa_github.build_pr_prompt(
+        pr,
+        comment=comment,
+        checkout=checkout,
+        can_create_pr=bool(settings.get("allow_worker_pr_create", False)),
+        can_approve_pr=bool(settings.get("allow_router_pr_approve", False)),
+    )
     session_repo = checkout
     if not session_repo and repo_path and Path(repo_path).expanduser().is_dir():
         session_repo = repo_path
+    effort = _reasoning_effort(settings.get("default_reasoning_effort"))
     store = _chat_store()
     session = store.create_session(
         prompt,
         title=f"PR #{number}: {pr.get('title') or ''}".strip(),
         model=str(settings.get("default_model") or ""),
         provider=str(settings.get("default_provider") or ""),
+        reasoning_effort=effort,
         repo=session_repo,
         source="github_pr",
         github_repo=repo,

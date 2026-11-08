@@ -13,6 +13,10 @@ provides_tools:
   - superagent_status
   - superagent_run
   - superagent_spawn
+  - superagent_town_status
+  - superagent_message_worker
+  - superagent_pr_create
+  - superagent_pr_review
 config_schema:
   mode:
     type: str
@@ -133,3 +137,33 @@ config_schema:
     description: >-
       A queued or running chat turn older than this many seconds is cancelled by the
       next reap or chat-list read (env SUPERAGENT_TURN_TIMEOUT_SECONDS). 0 disables the guard.
+  allow_worker_git_worktree:
+    type: bool
+    default: true
+    label: Isolate workers in git worktrees
+    description: Give each spawned worker its own git worktree and branch so concurrent workers never collide.
+  allow_worker_pr_create:
+    type: bool
+    default: false
+    label: Allow workers to create pull requests
+    description: Let workers commit, push a branch, and open a GitHub pull request via superagent_pr_create.
+  allow_router_pr_approve:
+    type: bool
+    default: false
+    label: Allow router/workers to review & approve pull requests
+    description: Let the router or workers post formal APPROVE / REQUEST_CHANGES reviews on GitHub pull requests.
+  github_pr_base_branch:
+    type: str
+    default: ""
+    label: Default PR base branch
+    description: Base branch for worker pull requests. Empty uses the repository default branch.
+  github_pr_draft_by_default:
+    type: bool
+    default: false
+    label: Create PRs as drafts by default
+    description: Open worker pull requests in draft mode unless explicitly overridden.
+  petdex_enabled:
+    type: bool
+    default: true
+    label: Enable Petdex companions
+    description: Assign pixel pet avatars to towns and workers in the desktop town canvas.

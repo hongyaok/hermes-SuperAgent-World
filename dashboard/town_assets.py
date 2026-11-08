@@ -29,6 +29,9 @@ ASSETS: dict[str, str] = {
     "house-b.png": PNG,
     "house-c.png": PNG,
     "house-d.png": PNG,
+    "house-e.png": PNG,
+    "house-f.png": PNG,
+    "house-g.png": PNG,
     "person.png": PNG,
     "tree-a.png": PNG,
     "tree-b.png": PNG,
@@ -37,6 +40,15 @@ ASSETS: dict[str, str] = {
     "fountain.png": PNG,
     "rock.png": PNG,
     "lamp.png": PNG,
+    "road-h.png": PNG,
+    "road-v.png": PNG,
+    "plaza-stone.png": PNG,
+    "water.png": PNG,
+    "bridge.png": PNG,
+    "well.png": PNG,
+    "signpost.png": PNG,
+    "bench.png": PNG,
+    "flowers.png": PNG,
 }
 
 

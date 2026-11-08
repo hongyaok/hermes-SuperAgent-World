@@ -115,15 +115,22 @@ def test_workers_group_under_one_root_with_stable_slots(chat):
 
     assert first["parent_session_id"] == root["id"]
     assert second["parent_session_id"] == root["id"]
-    assert first["town_slot"] == 0
-    assert second["town_slot"] == 1
+    assert 0 <= first["town_slot"] < sa_chats.MAX_TOWN_WORKERS
+    assert 0 <= second["town_slot"] < sa_chats.MAX_TOWN_WORKERS
+    assert first["town_slot"] != second["town_slot"]
+    assert first["avatar_slug"] in sa_chats.DEFAULT_PET_SLUGS
+    assert second["avatar_slug"] in sa_chats.DEFAULT_PET_SLUGS
+    assert first["avatar_slug"] != second["avatar_slug"]
+
+    expected_order = [
+        w["id"]
+        for w in sorted([first, second], key=lambda w: (w["town_slot"], w["created_at"]))
+    ]
+    expected_slots = sorted([first["town_slot"], second["town_slot"]])
 
     towns = chat.list_towns()
     assert [town["id"] for town in towns["towns"]] == [root["id"]]
-    assert [worker["id"] for worker in towns["towns"][0]["workers"]] == [
-        first["id"],
-        second["id"],
-    ]
+    assert [worker["id"] for worker in towns["towns"][0]["workers"]] == expected_order
     assert towns["town_count"] == 1
     assert towns["worker_count"] == 2
 
@@ -136,7 +143,7 @@ def test_workers_group_under_one_root_with_stable_slots(chat):
     # Listing again returns the same plot numbers: polling cannot move a house.
     again = chat.list_towns()
     by_id = {town["id"]: town for town in again["towns"]}
-    assert [worker["town_slot"] for worker in by_id[root["id"]]["workers"]] == [0, 1]
+    assert [worker["town_slot"] for worker in by_id[root["id"]]["workers"]] == expected_slots
 
 
 def test_create_session_rejects_bad_parents(chat, sa, monkeypatch):
@@ -195,23 +202,25 @@ def test_full_town_assigns_every_grid_slot(chat):
         chat.create_session(f"worker-{index}", parent_session_id=root["id"])["town_slot"]
         for index in range(sa_chats.MAX_TOWN_WORKERS)
     ]
-    assert slots == list(range(sa_chats.MAX_TOWN_WORKERS))
+    assert sorted(slots) == list(range(sa_chats.MAX_TOWN_WORKERS))
     with pytest.raises(ValueError, match="max 12"):
         chat.create_session("overflow", parent_session_id=root["id"])
     town = chat.list_towns()["towns"][0]
     assert town["worker_count"] == sa_chats.MAX_TOWN_WORKERS
-    assert [worker["town_slot"] for worker in town["workers"]] == slots
+    assert [worker["town_slot"] for worker in town["workers"]] == list(
+        range(sa_chats.MAX_TOWN_WORKERS)
+    )
 
 
 def test_slot_reuses_a_gap_after_delete(chat):
     root = chat.create_session("root")
-    first = chat.create_session("first", parent_session_id=root["id"])
-    second = chat.create_session("second", parent_session_id=root["id"])
-    third = chat.create_session("third", parent_session_id=root["id"])
+    first = chat.create_session("first", parent_session_id=root["id"], randomize_slot=False)
+    second = chat.create_session("second", parent_session_id=root["id"], randomize_slot=False)
+    third = chat.create_session("third", parent_session_id=root["id"], randomize_slot=False)
     assert [first["town_slot"], second["town_slot"], third["town_slot"]] == [0, 1, 2]
 
     assert chat.delete_session(second["id"]) is True
-    replacement = chat.create_session("replacement", parent_session_id=root["id"])
+    replacement = chat.create_session("replacement", parent_session_id=root["id"], randomize_slot=False)
     assert replacement["town_slot"] == 1
     slots = [worker["town_slot"] for worker in chat.list_towns()["towns"][0]["workers"]]
     assert slots == [0, 1, 2]
@@ -352,7 +361,7 @@ def test_spawn_tool_creates_and_launches_one_real_worker(tmp_path, monkeypatch, 
     child = first["session"]
     assert child["id"] != root["id"]
     assert child["parent_session_id"] == root["id"]
-    assert child["town_slot"] == 0
+    assert 0 <= child["town_slot"] < sa_chats.MAX_TOWN_WORKERS
     assert child["status"] == "running"
     assert child["reasoning_effort"] == "max"
     assert runner.launches[0]["prompt"] == "fix the parser"
@@ -363,7 +372,8 @@ def test_spawn_tool_creates_and_launches_one_real_worker(tmp_path, monkeypatch, 
             {"parent_session_id": root["id"], "prompt": "add a test"}, ctx=object()
         )
     )
-    assert second["session"]["town_slot"] == 1
+    assert 0 <= second["session"]["town_slot"] < sa_chats.MAX_TOWN_WORKERS
+    assert second["session"]["town_slot"] != child["town_slot"]
 
     nested = json.loads(
         sa.sa_tools.superagent_spawn(
@@ -407,9 +417,12 @@ def test_town_assets_are_an_explicit_allowlist_with_correct_mime():
     assert manifest["ok"] is True
     assert set(manifest["assets"]) == {
         "grass.png", "house-router.png", "house-a.png", "house-b.png",
-        "house-c.png", "house-d.png", "person.png", "tree-a.png",
-        "tree-b.png", "tree-c.png", "bush.png", "fountain.png",
-        "rock.png", "lamp.png",
+        "house-c.png", "house-d.png", "house-e.png", "house-f.png",
+        "house-g.png", "person.png", "tree-a.png", "tree-b.png",
+        "tree-c.png", "bush.png", "fountain.png", "rock.png",
+        "lamp.png", "road-h.png", "road-v.png", "plaza-stone.png",
+        "water.png", "bridge.png", "bench.png", "well.png",
+        "flowers.png", "signpost.png",
     }
     for name, item in manifest["assets"].items():
         assert item["mime"] == "image/png"
@@ -423,3 +436,43 @@ def test_town_assets_are_an_explicit_allowlist_with_correct_mime():
         with pytest.raises(HTTPException) as excinfo:
             module.town_asset(name)
         assert excinfo.value.status_code == 404
+
+
+def test_town_pets_and_reroll_and_dispatch_endpoints(tmp_path, monkeypatch):
+    path = tmp_path / "superagent.db"
+    store = sa_chats.ChatStore(path)
+    api = load_api()
+    runner = FakeRunner(store)
+    monkeypatch.setattr(api, "_db_path", lambda: path)
+    monkeypatch.setattr(api, "_get_runner", lambda: runner)
+    monkeypatch.setattr(api.sa_settings, "data_dir", lambda: tmp_path)
+
+    root = api.create_chat({"prompt": "router"})["session"]
+    worker = api.create_chat(
+        {"prompt": "worker", "parent_session_id": root["id"]}
+    )["session"]
+    store.update_session(worker["id"], status="review")
+
+    pets_resp = api.town_pets(slugs=f"{root['avatar_slug']},{worker['avatar_slug']}")
+    assert pets_resp["ok"] is True
+    assert root["avatar_slug"] in pets_resp["pets"]
+    assert worker["avatar_slug"] in pets_resp["pets"]
+
+    reroll_resp = api.reroll_town_pets({"town_id": root["id"]})
+    assert reroll_resp["ok"] is True
+    assert root["id"] in reroll_resp["updated"]
+    assert worker["id"] in reroll_resp["updated"]
+
+    dispatch_resp = api.town_dispatch(
+        root["id"],
+        {
+            "worker_session_id": worker["id"],
+            "action": "approve_pr",
+            "pr_number": 42,
+            "message": "Looks great, please approve PR #42",
+        },
+    )
+    assert dispatch_resp["ok"] is True
+    assert dispatch_resp["action"] == "approve_pr"
+    assert dispatch_resp["worker_session_id"] == worker["id"]
+    assert "superagent_pr_review" in runner.launches[-1]["prompt"]

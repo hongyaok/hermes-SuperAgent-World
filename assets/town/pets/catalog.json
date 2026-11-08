@@ -1,0 +1,68 @@
+{
+  "pets": [
+    {
+      "slug": "hermes-kody",
+      "display_name": "Hermes Kody",
+      "kind": "creature",
+      "submitted_by": "Calvin N.",
+      "sprite_version": 1,
+      "spritesheet_url": "https://assets.petdex.dev/pets/hermes-kody-eaa709eb1878/sprite.webp"
+    },
+    {
+      "slug": "coding-cat-pet",
+      "display_name": "Coding Cat",
+      "kind": "creature",
+      "submitted_by": "jiantao y.",
+      "sprite_version": 1,
+      "spritesheet_url": "https://assets.petdex.dev/pets/coding-cat-pet-a6c5f67fb340/sprite.webp"
+    },
+    {
+      "slug": "ai-workbot",
+      "display_name": "AI Workbot",
+      "kind": "character",
+      "submitted_by": "jhao",
+      "sprite_version": 1,
+      "spritesheet_url": "https://assets.petdex.dev/pets/ai-workbot-e43165f9d978/sprite.webp"
+    },
+    {
+      "slug": "knight-shiba",
+      "display_name": "Knight Shiba",
+      "kind": "creature",
+      "submitted_by": "ibreeze2017",
+      "sprite_version": 1,
+      "spritesheet_url": "https://assets.petdex.dev/pets/knight-shiba-eab5820187e8/sprite.webp"
+    },
+    {
+      "slug": "wizard",
+      "display_name": "Wizard",
+      "kind": "character",
+      "submitted_by": "Wu W.",
+      "sprite_version": 1,
+      "spritesheet_url": "https://assets.petdex.dev/pets/wizard-e57ea7c76dc9/sprite.png"
+    },
+    {
+      "slug": "green-slime",
+      "display_name": "Green Slime",
+      "kind": "creature",
+      "submitted_by": "nergy101",
+      "sprite_version": 1,
+      "spritesheet_url": "https://assets.petdex.dev/pets/green-slime-1608538321f1/sprite.webp"
+    },
+    {
+      "slug": "cyberknight",
+      "display_name": "CyberKnight",
+      "kind": "character",
+      "submitted_by": "jddd-hy",
+      "sprite_version": 2,
+      "spritesheet_url": "https://assets.petdex.dev/pets/cyberknight-1ecd539bc050/sprite.webp"
+    },
+    {
+      "slug": "peri-the-owl",
+      "display_name": "Peri the Owl",
+      "kind": "creature",
+      "submitted_by": "asyncsan",
+      "sprite_version": 1,
+      "spritesheet_url": "https://assets.petdex.dev/pets/peri-the-owl-f84579a04c4c/sprite.webp"
+    }
+  ]
+}

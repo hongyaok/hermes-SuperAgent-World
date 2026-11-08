@@ -171,6 +171,8 @@ def build_prompt(
     session_id: str,
     source: str = "desktop",
     can_spawn: bool = False,
+    can_create_pr: bool = False,
+    can_approve_pr: bool = False,
 ) -> str:
     """Instructions for the first turn of a session (resume turns send raw text).
 
@@ -181,13 +183,35 @@ def build_prompt(
     """
     town = ""
     if can_spawn:
+        extra_router = ""
+        if can_approve_pr:
+            extra_router += (
+                f'\n- To review or approve a PR directly or via a worker, use superagent_pr_review(session_id="{session_id}", pr_number=..., event="APPROVE"|"REQUEST_CHANGES"|"COMMENT", body="...") or instruct a worker via superagent_message_worker.'
+            )
+        if can_create_pr:
+            extra_router += (
+                '\n- Workers can open pull requests with superagent_pr_create when instructed.'
+            )
         town = f"""
 Town mode:
 - You are the Router for this town. Split the request into independent jobs when that is the honest reading; do not invent parallel work.
 - For each job, call the superagent_spawn tool with parent_session_id="{session_id}" and a self-contained prompt. Each call creates one real worker session, one house, and one person.
+- To check on your workers, their diffs, and PRs, call superagent_town_status(parent_session_id="{session_id}").
+- To send follow-up instructions to an idle/review worker (or ask it to create/review/approve a PR), call superagent_message_worker(parent_session_id="{session_id}", worker_session_id="...", message="...").
 - Spawn at most {sa_chats.MAX_TOWN_WORKERS} workers. Workers cannot spawn more workers.
-- Do not do the delegated jobs yourself. Finish with a short summary of what you delegated and why.
+- Do not do the delegated jobs yourself. Finish with a short summary of what you delegated and why.{extra_router}
 """
+    if can_create_pr:
+        commit_rule = (
+            f'- Do NOT push directly to main/master or merge. To publish changes as a pull request when asked, use the superagent_pr_create tool (with session_id="{session_id}"); otherwise leave changes in the working tree.'
+        )
+    else:
+        commit_rule = "- Do NOT commit, push, merge, or open a pull request. Leave changes in the working tree."
+    approve_rule = ""
+    if can_approve_pr and not can_spawn:
+        approve_rule = (
+            f'\n- When asked to review or approve a pull request, use superagent_pr_review(session_id="{session_id}", pr_number=..., event="APPROVE"|"REQUEST_CHANGES"|"COMMENT", body="...").'
+        )
     return f"""You are one Superagent worker session ({session_id}), started from {source}.
 
 Request:
@@ -197,7 +221,7 @@ Rules:
 - Work only inside the repository: {repo or "the current working directory"}. Do not touch files outside it.
 - Make the smallest change that satisfies the request; follow the repository's existing style.
 - Run the relevant tests or checks. If there are none, say what you checked instead.
-- Do NOT commit, push, merge, or open a pull request. Leave changes in the working tree.
+{commit_rule}{approve_rule}
 - If the request needs a design decision, ask one concrete question rather than guessing.
 - Finish with a summary of at most 200 words: what changed, files touched, checks run, and anything unresolved.
 """
@@ -373,6 +397,8 @@ class Runner:
         turn_timeout_seconds: Optional[int] = None,
         env: Optional[dict] = None,
         source_tag: Optional[str] = None,
+        can_create_pr: bool = False,
+        can_approve_pr: bool = False,
     ):
         if hasattr(store_or_chatstore, "create_session"):
             self.chat = store_or_chatstore
@@ -400,6 +426,8 @@ class Runner:
         # on this version), so `superagent` cannot be used here. "tool" is the
         # documented tag for third-party integrations: hidden from user lists.
         self.source_tag = (source_tag or os.environ.get("SUPERAGENT_CHAT_SOURCE") or "tool").strip() or "tool"
+        self.can_create_pr = bool(can_create_pr)
+        self.can_approve_pr = bool(can_approve_pr)
 
         self._sem = threading.Semaphore(self.max_workers)
         self._lock = threading.Lock()
@@ -435,6 +463,8 @@ class Runner:
         reasoning_effort: Optional[str] = None,
         repo: Optional[str] = None,
         block: bool = False,
+        can_create_pr: Optional[bool] = None,
+        can_approve_pr: Optional[bool] = None,
     ) -> dict:
         """Start one turn in a daemon thread; raises RuntimeError if it cannot."""
         prompt = (prompt or "").strip()
@@ -453,8 +483,11 @@ class Runner:
         session = self.chat.get_session(session_id, message_limit=0) or {}
         is_router = session.get("parent_session_id") is None
         can_spawn = bool(is_router and self.router_toolset)
+        eff_create_pr = self.can_create_pr if can_create_pr is None else bool(can_create_pr)
+        eff_approve_pr = self.can_approve_pr if can_approve_pr is None else bool(can_approve_pr)
+        needs_plugin_tools = can_spawn or eff_create_pr or eff_approve_pr
         toolsets = self.toolsets
-        if can_spawn and self.router_toolset not in toolsets:
+        if needs_plugin_tools and self.router_toolset and self.router_toolset not in toolsets:
             toolsets = toolsets + (self.router_toolset,)
         resume = (resume_session_id or "").strip() or None
         if resume:
@@ -466,6 +499,8 @@ class Runner:
                 session_id=session_id,
                 source=session.get("source") or "desktop",
                 can_spawn=can_spawn,
+                can_create_pr=eff_create_pr,
+                can_approve_pr=eff_approve_pr,
             )
 
         fields: dict[str, Any] = {"status": sa_chats.QUEUED, "error": None, "pid": None}

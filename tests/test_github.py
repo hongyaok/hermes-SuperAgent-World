@@ -393,3 +393,143 @@ def test_build_pr_prompt_clips_long_bodies():
     prompt = sa_github.build_pr_prompt(pr_payload(body="x" * 5000), comment={"body": "y" * 5000})
     assert "…" in prompt
     assert len(prompt) < 6000
+
+
+def test_build_pr_prompt_can_create_and_approve():
+    prompt = sa_github.build_pr_prompt(
+        pr_payload(9),
+        can_create_pr=True,
+        can_approve_pr=True,
+    )
+    assert "superagent_pr_create" in prompt
+    assert "superagent_pr_review" in prompt
+
+
+# -- create_pr and create_review -----------------------------------------
+
+
+def test_create_pr_posts_and_normalizes(http):
+    http.responses["/repos/owner/name/pulls"] = pr_payload(12, title="New feature", draft=True)
+    client = sa_github.GitHubClient(TOKEN, "owner/name")
+    pr = client.create_pr("New feature", "superagent/s-0002-new", "main", body="Details", draft=True)
+    assert pr["number"] == 12
+    assert pr["title"] == "New feature"
+    assert pr["draft"] is True
+    req = http.request_for("/repos/owner/name/pulls")
+    assert req.get_method() == "POST"
+    sent = json.loads(req.data.decode("utf-8"))
+    assert sent == {
+        "title": "New feature",
+        "head": "superagent/s-0002-new",
+        "base": "main",
+        "body": "Details",
+        "draft": True,
+    }
+
+
+def test_create_review_approve_and_self_approve_fallback(http):
+    http.responses["/pulls/7/reviews"] = {
+        "id": 99,
+        "state": "APPROVED",
+        "html_url": "https://github.com/owner/name/pull/7#pullrequestreview-99",
+    }
+    client = sa_github.GitHubClient(TOKEN, "owner/name")
+    rev = client.create_review(7, event="APPROVE", body="LGTM")
+    assert rev == {
+        "id": 99,
+        "state": "APPROVED",
+        "html_url": "https://github.com/owner/name/pull/7#pullrequestreview-99",
+        "fallback": False,
+    }
+
+    # Simulate GitHub 422 "Can not approve your own pull request"
+    http.responses["/pulls/8/reviews"] = http_error(422, "Can not approve your own pull request")
+    http.responses["/issues/8/comments"] = {
+        "id": 501,
+        "html_url": "https://github.com/owner/name/pull/8#issuecomment-501",
+    }
+    fallback = client.create_review(8, event="APPROVE", body="Looks good!")
+    assert fallback["fallback"] is True
+    assert fallback["state"] == "APPROVE_COMMENT_FALLBACK"
+    assert fallback["id"] == 501
+
+
+def test_create_review_rejects_invalid_event(http):
+    client = sa_github.GitHubClient(TOKEN, "owner/name")
+    with pytest.raises(sa_github.GitHubError, match="review event"):
+        client.create_review(7, event="MERGE")
+
+
+# -- worker worktree & branch push ---------------------------------------
+
+
+def test_sanitize_branch_name():
+    assert sa_github.sanitize_branch_name("S-0002", title="Fix parser crash!") == "superagent/s-0002-fix-parser-crash"
+    assert sa_github.sanitize_branch_name("S-0002", explicit="feature/clean_branch") == "feature/clean_branch"
+    for bad in ("main", "master", "HEAD", "develop", "production", "bad..branch", "bad branch", "/leading"):
+        with pytest.raises(sa_github.GitHubError):
+            sa_github.sanitize_branch_name("S-0001", explicit=bad)
+
+
+def test_prepare_worker_worktree_creates_and_reuses(tmp_path):
+    repo = make_clone(tmp_path)
+    ws = tmp_path / "workspaces"
+    git = FakeGit()
+    res = sa_github.prepare_worker_worktree(
+        str(repo), "S-0003", str(ws), title="Add widgets", git_runner=git
+    )
+    assert res["reused"] is False
+    assert res["branch"] == "superagent/s-0003-add-widgets"
+    assert Path(res["path"]) == ws / "worker-s-0003"
+    assert git.calls[0]["argv"] == [
+        "git",
+        "-C",
+        str(repo),
+        "worktree",
+        "add",
+        "-B",
+        "superagent/s-0003-add-widgets",
+        str(ws / "worker-s-0003"),
+        "HEAD",
+    ]
+
+    # Simulate existing worktree (.git file in worktree)
+    (ws / "worker-s-0003").mkdir(parents=True, exist_ok=True)
+    (ws / "worker-s-0003" / ".git").write_text("gitdir: ...", encoding="utf-8")
+    git2 = FakeGit()
+    res2 = sa_github.prepare_worker_worktree(
+        str(repo), "S-0003", str(ws), title="Add widgets", git_runner=git2
+    )
+    assert res2["reused"] is True
+    assert git2.calls == []
+
+
+def test_commit_and_push_branch_stages_commits_and_pushes(tmp_path):
+    repo = make_clone(tmp_path)
+    calls = []
+
+    def runner(argv, cwd, timeout):
+        calls.append(argv)
+        if "status" in argv:
+            return 0, " M parser.py\n", ""
+        if "rev-parse" in argv:
+            return 0, "deadbeef1234\n", ""
+        return 0, "", ""
+
+    res = sa_github.commit_and_push_branch(
+        str(repo),
+        "owner/name",
+        TOKEN,
+        branch="superagent/s-0002-fix",
+        commit_message="Fix parser",
+        git_runner=runner,
+    )
+    assert res == {
+        "branch": "superagent/s-0002-fix",
+        "sha": "deadbeef1234",
+        "committed": True,
+        "pushed": True,
+    }
+    assert any("commit" in c for c in calls)
+    assert any("push" in c for c in calls)
+

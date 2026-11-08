@@ -37,6 +37,10 @@ def register(ctx: Any) -> None:
         (sa_schemas.STATUS, sa_tools.superagent_status),
         (sa_schemas.RUN, sa_tools.superagent_run),
         (sa_schemas.SPAWN, sa_tools.superagent_spawn),
+        (sa_schemas.TOWN_STATUS, sa_tools.superagent_town_status),
+        (sa_schemas.MESSAGE_WORKER, sa_tools.superagent_message_worker),
+        (sa_schemas.PR_CREATE, sa_tools.superagent_pr_create),
+        (sa_schemas.PR_REVIEW, sa_tools.superagent_pr_review),
     ):
         ctx.register_tool(
             name=schema["name"],

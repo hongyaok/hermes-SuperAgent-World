@@ -114,7 +114,7 @@ class GitHubSource:
             return None
         if str(user.get("type") or "") == "Bot":
             return None
-        if self.allowed_users and login.lower() not in self.allowed_users:
+        if not self.allowed_users or login.lower() not in self.allowed_users:
             return None
 
         body = str(comment.get("body") or "")

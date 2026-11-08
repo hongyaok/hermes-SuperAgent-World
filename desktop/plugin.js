@@ -107,13 +107,20 @@ const TOWN_PLOTS = [
   { left: 70, top: 82, scale: 0.72 },
 ]
 const TOWN_MAX_WORKERS = TOWN_PLOTS.length
-const TOWN_HOUSE_SPRITES = ['house-a.png', 'house-b.png', 'house-c.png', 'house-d.png']
+const TOWN_HOUSE_SPRITES = [
+  'house-a.png', 'house-b.png', 'house-c.png', 'house-d.png',
+  'house-e.png', 'house-f.png', 'house-g.png',
+]
 const TOWN_BUILD_MS = 900
 const TOWN_STATUS_LABEL = {
   queued: 'queued', running: 'running', review: 'review', idle: 'idle',
   failed: 'failed', cancelled: 'cancelled', observed: 'observed',
 }
 const TOWN_PERSON_TONES = [0, 32, 68, 104, 148, 196, 244, 292]
+const PETDEX_ROW_STATES = [
+  'idle', 'running-right', 'running-left', 'waving', 'jumping',
+  'failed', 'waiting', 'running', 'review',
+]
 
 
 // Chat statuses plus the ticket statuses the pane still renders.
@@ -488,6 +495,21 @@ function useTownAssets() {
   return useQuery({
     queryKey: [ID, 'town', 'assets'], queryFn: fetchTownAssets,
     staleTime: Infinity, retry: false,
+  })
+}
+
+function fetchTownPets(slugs) {
+  if (!rest) return Promise.reject(new Error('backend not ready'))
+  const query = slugs ? `?slugs=${encodeURIComponent(slugs)}` : ''
+  return rest(`/town/pets${query}`)
+}
+
+function useTownPets(slugsKey) {
+  return useQuery({
+    queryKey: [ID, 'town', 'pets', slugsKey || 'default'],
+    queryFn: () => fetchTownPets(slugsKey),
+    staleTime: 600000,
+    retry: false,
   })
 }
 
@@ -1925,6 +1947,10 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
   const [maxWorkers, setMaxWorkers] = useState(() => Number(settings && settings.max_workers) || 2)
   const [maxTurns, setMaxTurns] = useState(() => Number(settings && settings.chat_max_turns) || 120)
   const [yolo, setYolo] = useState(() => !(settings && settings.worker_yolo === false))
+  const [allowWorktree, setAllowWorktree] = useState(() => !(settings && settings.allow_worker_git_worktree === false))
+  const [allowPrCreate, setAllowPrCreate] = useState(() => !!(settings && settings.allow_worker_pr_create))
+  const [allowPrApprove, setAllowPrApprove] = useState(() => !!(settings && settings.allow_router_pr_approve))
+  const [petdexEnabled, setPetdexEnabled] = useState(() => !(settings && settings.petdex_enabled === false))
   const [notice, setNotice] = useState('')
 
   const signature = useMemo(() => JSON.stringify({
@@ -1935,6 +1961,10 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
     workers: Number(settings && settings.max_workers) || 2,
     turns: Number(settings && settings.chat_max_turns) || 120,
     yolo: !(settings && settings.worker_yolo === false),
+    allowWorktree: !(settings && settings.allow_worker_git_worktree === false),
+    allowPrCreate: !!(settings && settings.allow_worker_pr_create),
+    allowPrApprove: !!(settings && settings.allow_router_pr_approve),
+    petdexEnabled: !(settings && settings.petdex_enabled === false),
   }), [settings])
 
   useEffect(() => {
@@ -1948,6 +1978,10 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
     setMaxWorkers(Number(settings.max_workers) || 2)
     setMaxTurns(Number(settings.chat_max_turns) || 120)
     setYolo(settings.worker_yolo !== false)
+    setAllowWorktree(settings.allow_worker_git_worktree !== false)
+    setAllowPrCreate(!!settings.allow_worker_pr_create)
+    setAllowPrApprove(!!settings.allow_router_pr_approve)
+    setPetdexEnabled(settings.petdex_enabled !== false)
   }, [signature]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const edited = () => setNotice('')
@@ -1976,6 +2010,10 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
         max_workers: Number(maxWorkers) || 1,
         chat_max_turns: Number(maxTurns) || 1,
         worker_yolo: !!yolo,
+        allow_worker_git_worktree: !!allowWorktree,
+        allow_worker_pr_create: !!allowPrCreate,
+        allow_router_pr_approve: !!allowPrApprove,
+        petdex_enabled: !!petdexEnabled,
       },
     }),
     onSuccess: (result) => {
@@ -2143,9 +2181,57 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
                       jsx('span', { key: 'l', className: 'min-w-0 flex-1', children: 'Run workers unattended (--yolo)' }),
                     ],
                   }),
+                  jsxs('label', {
+                    key: 'worktree', className: 'flex items-center gap-2 text-[0.6875rem] text-(--ui-text-tertiary)',
+                    children: [
+                      jsx('input', {
+                        key: 'i', type: 'checkbox', checked: !!allowWorktree,
+                        'aria-label': 'Isolate workers in git worktrees',
+                        onChange: (event) => { edited(); setAllowWorktree(!!event.target.checked) },
+                        className: 'accent-(--ui-accent)',
+                      }),
+                      jsx('span', { key: 'l', className: 'min-w-0 flex-1', children: 'Isolate workers in git worktrees' }),
+                    ],
+                  }),
+                  jsxs('label', {
+                    key: 'pr-create', className: 'flex items-center gap-2 text-[0.6875rem] text-(--ui-text-tertiary)',
+                    children: [
+                      jsx('input', {
+                        key: 'i', type: 'checkbox', checked: !!allowPrCreate,
+                        'aria-label': 'Allow workers to create GitHub PRs',
+                        onChange: (event) => { edited(); setAllowPrCreate(!!event.target.checked) },
+                        className: 'accent-(--ui-accent)',
+                      }),
+                      jsx('span', { key: 'l', className: 'min-w-0 flex-1', children: 'Allow workers to create GitHub PRs' }),
+                    ],
+                  }),
+                  jsxs('label', {
+                    key: 'pr-approve', className: 'flex items-center gap-2 text-[0.6875rem] text-(--ui-text-tertiary)',
+                    children: [
+                      jsx('input', {
+                        key: 'i', type: 'checkbox', checked: !!allowPrApprove,
+                        'aria-label': 'Allow Router and workers to approve PRs',
+                        onChange: (event) => { edited(); setAllowPrApprove(!!event.target.checked) },
+                        className: 'accent-(--ui-accent)',
+                      }),
+                      jsx('span', { key: 'l', className: 'min-w-0 flex-1', children: 'Allow Router & workers to review/approve PRs' }),
+                    ],
+                  }),
+                  jsxs('label', {
+                    key: 'petdex', className: 'flex items-center gap-2 text-[0.6875rem] text-(--ui-text-tertiary)',
+                    children: [
+                      jsx('input', {
+                        key: 'i', type: 'checkbox', checked: !!petdexEnabled,
+                        'aria-label': 'Use Petdex.dev random character sprites',
+                        onChange: (event) => { edited(); setPetdexEnabled(!!event.target.checked) },
+                        className: 'accent-(--ui-accent)',
+                      }),
+                      jsx('span', { key: 'l', className: 'min-w-0 flex-1', children: 'Use Petdex.dev random character sprites' }),
+                    ],
+                  }),
                   jsx('div', {
                     key: 'yolo-help', className: 'text-[0.6875rem] leading-snug text-(--ui-text-tertiary)',
-                    children: 'Skips approval prompts inside a turn; workers still never commit, push or merge. 1–8 workers, 1–500 turns.',
+                    children: 'Skips approval prompts inside a turn; PR creation and PR approval stay off unless explicitly enabled above.',
                   }),
                 ],
               }),
@@ -2808,6 +2894,7 @@ function CommentBox({ session, onClose }) {
   })
   const [text, setText] = useState('')
   const [edited, setEdited] = useState(false)
+  const [verdict, setVerdict] = useState('COMMENT')
 
   // Prefill from the server once; a preview refetch must never overwrite what
   // the user typed.
@@ -2817,22 +2904,30 @@ function CommentBox({ session, onClose }) {
   }, [preview.data, edited])
 
   const post = useMutation({
-    mutationFn: () => rest(`/chats/${encodeURIComponent(session.id)}/comment`, {
-      method: 'POST', body: { body: text },
-    }),
+    mutationFn: () => {
+      if (verdict === 'COMMENT') {
+        return rest(`/chats/${encodeURIComponent(session.id)}/comment`, {
+          method: 'POST', body: { body: text },
+        })
+      }
+      return rest(`/chats/${encodeURIComponent(session.id)}/review`, {
+        method: 'POST', body: { event: verdict, body: text },
+      })
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [ID, 'chat', session.id] })
       queryClient.invalidateQueries({ queryKey: [ID, 'chats'] })
+      queryClient.invalidateQueries({ queryKey: [ID, 'towns'] })
     },
   })
 
   const posted = post.data && post.data.ok ? post.data : null
-  const canPost = !!String(text || '').trim() && !post.isPending
+  const canPost = (verdict === 'APPROVE' || !!String(text || '').trim()) && !post.isPending
   const error = errorText(post.error) || errorText(preview.error) ||
     (post.data && post.data.ok === false && post.data.error) || ''
 
   return jsxs('div', {
-    className: cn('flex max-h-[22rem] min-h-0 flex-col gap-1.5 overflow-y-auto rounded border',
+    className: cn('flex max-h-[24rem] min-h-0 flex-col gap-1.5 overflow-y-auto rounded border',
       'border-(--ui-stroke-secondary) p-2'),
     children: [
       jsxs('div', {
@@ -2841,6 +2936,23 @@ function CommentBox({ session, onClose }) {
           jsx('span', {
             key: 't', className: 'text-(--ui-text-secondary)',
             children: `Comment on PR #${session.pr_number}`,
+          }),
+          jsxs('div', {
+            key: 'verdict', className: 'flex items-center gap-1',
+            children: [
+              jsx(ModeButton, {
+                key: 'comment', label: 'Comment',
+                active: verdict === 'COMMENT', onClick: () => setVerdict('COMMENT'),
+              }),
+              jsx(ModeButton, {
+                key: 'approve', label: 'Approve ✓',
+                active: verdict === 'APPROVE', onClick: () => setVerdict('APPROVE'),
+              }),
+              jsx(ModeButton, {
+                key: 'changes', label: 'Request changes ✕',
+                active: verdict === 'REQUEST_CHANGES', onClick: () => setVerdict('REQUEST_CHANGES'),
+              }),
+            ],
           }),
           jsx('span', {
             key: 's', className: 'text-(--ui-text-quaternary)',
@@ -2868,7 +2980,12 @@ function CommentBox({ session, onClose }) {
         ? jsxs('div', {
             key: 'ok', className: 'flex flex-wrap items-center gap-2 text-[0.6875rem] text-(--ui-text-secondary)',
             children: [
-              jsx('span', { key: 'm', children: 'Comment posted.' }),
+              jsx('span', {
+                key: 'm',
+                children: verdict === 'APPROVE'
+                  ? 'PR approved.'
+                  : (verdict === 'REQUEST_CHANGES' ? 'Changes requested.' : 'Comment posted.'),
+              }),
               posted.url
                 ? jsx('button', {
                     key: 'open', type: 'button', onClick: () => openUrl(posted.url),
@@ -2884,10 +3001,125 @@ function CommentBox({ session, onClose }) {
         children: [
           jsx(GhostButton, {
             key: 'post', onClick: () => { if (canPost) post.mutate() }, disabled: !canPost,
-            children: post.isPending ? 'Posting…' : 'Post',
+            children: post.isPending
+              ? 'Posting…'
+              : (verdict === 'APPROVE'
+                  ? 'Approve PR'
+                  : (verdict === 'REQUEST_CHANGES' ? 'Request changes' : 'Post')),
           }),
           jsx(GhostButton, {
             key: 'cancel', onClick: onClose, disabled: post.isPending, children: 'Cancel',
+          }),
+        ],
+      }),
+    ],
+  })
+}
+
+function CreatePrBox({ session, onClose }) {
+  const queryClient = useQueryClient()
+  const [title, setTitle] = useState(() => sessionTitle(session))
+  const [branch, setBranch] = useState(() => String(session.branch_name || '').trim())
+  const [body, setBody] = useState(() => String(session.prompt || '').trim())
+  const [draft, setDraft] = useState(false)
+
+  const createPr = useMutation({
+    mutationFn: () => rest(`/chats/${encodeURIComponent(session.id)}/pr`, {
+      method: 'POST',
+      body: {
+        title: String(title || '').trim(),
+        branch: String(branch || '').trim() || undefined,
+        body: String(body || '').trim(),
+        draft: !!draft,
+      },
+    }),
+    onSuccess: () => {
+      invalidateChats(queryClient, session.id)
+      invalidateGithub(queryClient)
+    },
+  })
+
+  const created = createPr.data && createPr.data.ok ? createPr.data : null
+  const prUrl = created && created.pr && created.pr.html_url
+  const canCreate = !!String(title || '').trim() && !createPr.isPending
+  const error = errorText(createPr.error) ||
+    (createPr.data && createPr.data.ok === false && createPr.data.error) || ''
+
+  return jsxs('div', {
+    'data-create-pr-box': session.id,
+    className: cn('flex max-h-[24rem] min-h-0 flex-col gap-1.5 overflow-y-auto rounded border',
+      'border-(--ui-stroke-secondary) p-2'),
+    children: [
+      jsxs('div', {
+        key: 'head', className: 'flex shrink-0 flex-wrap items-center justify-between gap-2 text-[0.6875rem]',
+        children: [
+          jsx('span', { key: 't', className: 'font-medium text-(--ui-text-secondary)', children: 'Create Pull Request' }),
+          jsx('span', { key: 's', className: 'text-(--ui-text-quaternary)', children: 'Commits, pushes branch & opens a GitHub PR.' }),
+        ],
+      }),
+      jsxs('div', {
+        key: 'fields', className: 'flex flex-wrap gap-1.5',
+        children: [
+          jsx('input', {
+            key: 'title', type: 'text', value: title, placeholder: 'PR title',
+            'aria-label': 'Pull request title',
+            onChange: (e) => setTitle(e.target.value),
+            className: cn(GITHUB_FIELD, 'flex-1'),
+          }),
+          jsx('input', {
+            key: 'branch', type: 'text', value: branch, placeholder: 'branch (auto if blank)',
+            'aria-label': 'Branch name',
+            onChange: (e) => setBranch(e.target.value),
+            className: cn(GITHUB_FIELD, 'w-44 font-mono'),
+          }),
+        ],
+      }),
+      jsx('textarea', {
+        key: 'body', rows: 4, value: body,
+        onChange: (e) => setBody(e.target.value),
+        placeholder: 'Pull request description…',
+        className: cn('min-h-16 w-full resize-y rounded border border-(--ui-stroke-secondary)',
+          'bg-transparent px-2 py-1.5 font-mono text-[0.6875rem] text-(--ui-text-secondary)',
+          'placeholder:text-(--ui-text-quaternary) focus:outline-none'),
+      }),
+      jsxs('label', {
+        key: 'draft', className: 'flex items-center gap-1.5 text-[0.6875rem] text-(--ui-text-tertiary)',
+        children: [
+          jsx('input', {
+            key: 'i', type: 'checkbox', checked: !!draft,
+            onChange: (e) => setDraft(!!e.target.checked),
+            className: 'accent-(--ui-accent)',
+          }),
+          jsx('span', { key: 'l', children: 'Open as draft PR' }),
+        ],
+      }),
+      error
+        ? jsx('div', { key: 'err', className: 'break-words text-[0.6875rem] text-(--ui-text-quaternary)', children: error })
+        : null,
+      created
+        ? jsxs('div', {
+            key: 'ok', className: 'flex flex-wrap items-center gap-2 text-[0.6875rem] text-(--ui-text-secondary)',
+            children: [
+              jsx('span', { key: 'm', children: `PR #${created.pr && created.pr.number} created on ${created.branch || 'branch'}.` }),
+              prUrl
+                ? jsx('button', {
+                    key: 'open', type: 'button', onClick: () => openUrl(prUrl),
+                    className: 'text-(--ui-text-secondary) underline',
+                    children: 'Open on GitHub',
+                  })
+                : null,
+            ],
+          })
+        : null,
+      jsxs('div', {
+        key: 'actions', className: 'flex shrink-0 items-center gap-1',
+        children: [
+          jsx(GhostButton, {
+            key: 'create', onClick: () => { if (canCreate) createPr.mutate() }, disabled: !canCreate,
+            children: createPr.isPending ? 'Creating PR…' : 'Create PR',
+          }),
+          jsx(GhostButton, {
+            key: 'cancel', onClick: onClose, disabled: createPr.isPending, children: 'Cancel',
           }),
         ],
       }),
@@ -2957,7 +3189,7 @@ function OverflowMenu({ items, label }) {
 
 /** Two lines and three actions: title + status dot, then model · repo · PR.
  *  Comment-on-PR and the workspace tile live behind the ⋯ menu. */
-function ChatHeader({ session, tile, diff, comment, retry, exportMd }) {
+function ChatHeader({ session, tile, diff, comment, createPr, retry, exportMd }) {
   const canOpen = !!session.hermes_session_id && !!(host && typeof host.openSession === 'function')
   const canTile = !tile && !!(host && typeof host.openWorkspace === 'function')
   const repo = String(session.repo || '').trim()
@@ -2970,6 +3202,14 @@ function ChatHeader({ session, tile, diff, comment, retry, exportMd }) {
       label: comment.open ? 'Close the comment box' : `Comment on PR #${session.pr_number}`,
       disabled: comment.disabled,
       onSelect: comment.onToggle,
+    })
+  }
+  if (!tile && createPr) {
+    overflow.push({
+      id: 'create-pr',
+      label: createPr.open ? 'Close Create PR' : 'Create Pull Request…',
+      disabled: createPr.disabled,
+      onSelect: createPr.onToggle,
     })
   }
   if (exportMd) {
@@ -3089,6 +3329,7 @@ function ChatCenter(props) {
   const busy = isBusy(session)
   const [diffOpen, setDiffOpen] = useState(false)
   const [commentOpen, setCommentOpen] = useState(false)
+  const [createPrOpen, setCreatePrOpen] = useState(false)
   // Unconditional hooks: `enabled` stays false until the panel is opened.
   const diffQuery = useChatDiff(sessionId, diffOpen, busy)
 
@@ -3096,6 +3337,7 @@ function ChatCenter(props) {
   useEffect(() => {
     setDiffOpen(false)
     setCommentOpen(false)
+    setCreatePrOpen(false)
   }, [sessionId])
 
   if (!session) {
@@ -3127,13 +3369,19 @@ function ChatCenter(props) {
         onToggle: () => setCommentOpen((value) => !value),
       }
     : null
+  const createPrAction = hasRepo && canComment
+    ? {
+        open: createPrOpen, disabled: busy,
+        onToggle: () => setCreatePrOpen((value) => !value),
+      }
+    : null
 
   return jsxs('div', {
     className: 'flex min-h-0 min-w-0 flex-1 flex-col gap-3',
     children: [
       jsx(ChatHeader, {
         key: 'head', session,
-        diff: diffAction, comment: commentAction, retry, exportMd,
+        diff: diffAction, comment: commentAction, createPr: createPrAction, retry, exportMd,
       }),
       banner ? jsx('div', { key: 'banner', className: 'shrink-0', children: banner }) : null,
       detail && detail.isError
@@ -3150,6 +3398,11 @@ function ChatCenter(props) {
       commentOpen && commentAction
         ? jsx(CommentBox, {
             key: 'comment', session, onClose: () => setCommentOpen(false),
+          })
+        : null,
+      createPrOpen && createPrAction
+        ? jsx(CreatePrBox, {
+            key: 'create-pr', session, onClose: () => setCreatePrOpen(false),
           })
         : null,
       jsx(LiveWorkerStrip, { key: 'workers', sessions, selectedId: sessionId, onSelect }),
@@ -3871,11 +4124,17 @@ function writeKnownWorkers(rootId, ids) {
 
 function townHash(value) {
   const text = String(value || '')
-  let hash = 0
+  let hash = 2166136261 >>> 0
   for (let index = 0; index < text.length; index += 1) {
-    hash = ((hash * 31) + text.charCodeAt(index)) >>> 0
+    hash ^= text.charCodeAt(index)
+    hash = Math.imul(hash, 16777619) >>> 0
   }
-  return hash
+  hash ^= hash >>> 16
+  hash = Math.imul(hash, 0x85ebca6b) >>> 0
+  hash ^= hash >>> 13
+  hash = Math.imul(hash, 0xc2b2ae35) >>> 0
+  hash ^= hash >>> 16
+  return hash >>> 0
 }
 
 function townHouseSprite(sessionId) {
@@ -3888,18 +4147,33 @@ function townPersonFilter(sessionId, isRouter) {
   return `hue-rotate(${degrees}deg) saturate(1.08)`
 }
 
-/** Plot for a worker slot: static for the first ten, a stable ring after. */
-function townHousePosition(slot) {
+/** Plot for a worker slot: static for the first twelve, a stable ring after.
+ *  When `sessionId` is supplied, adds subtle deterministic micro-jitter so
+ *  houses feel organically placed along the town lanes. */
+function townHousePosition(slot, sessionId) {
   const index = Math.max(0, Number(slot) || 0)
-  if (index < TOWN_PLOTS.length) return TOWN_PLOTS[index]
-  const extra = index - TOWN_PLOTS.length
-  const ring = Math.floor(extra / 8) + 1
-  const angle = (extra % 8) * (Math.PI * 2 / 8)
-  const radius = Math.max(28, 38 - ring * 4)
+  let base
+  if (index < TOWN_PLOTS.length) {
+    base = TOWN_PLOTS[index]
+  } else {
+    const extra = index - TOWN_PLOTS.length
+    const ring = Math.floor(extra / 8) + 1
+    const angle = (extra % 8) * (Math.PI * 2 / 8)
+    const radius = Math.max(28, 38 - ring * 4)
+    base = {
+      left: 50 + Math.cos(angle) * radius,
+      top: 54 + Math.sin(angle) * radius * 0.62,
+      scale: Math.max(0.62, 0.86 - ring * 0.08),
+    }
+  }
+  if (!sessionId) return base
+  const h = townHash(sessionId)
+  const dx = (((h & 0xff) / 255) - 0.5) * 2.8
+  const dy = ((((h >>> 8) & 0xff) / 255) - 0.5) * 2.2
   return {
-    left: 50 + Math.cos(angle) * radius,
-    top: 54 + Math.sin(angle) * radius * 0.62,
-    scale: Math.max(0.62, 0.86 - ring * 0.08),
+    left: Math.round((base.left + dx) * 10) / 10,
+    top: Math.round((base.top + dy) * 10) / 10,
+    scale: base.scale,
   }
 }
 
@@ -3919,10 +4193,20 @@ const TOWN_CSS = `
   66.66% { background-position-x: calc(var(--town-person-step, 36px) * -2); }
   100% { background-position-x: 0; }
 }
+@keyframes superagent-petdex-anim {
+  from { background-position-x: 0px; }
+  to { background-position-x: calc(var(--pet-frame-w, 48px) * -8); }
+}
+@keyframes superagent-speech-float {
+  0%, 100% { transform: translate(-50%, 0px); }
+  50% { transform: translate(-50%, -2px); }
+}
 .superagent-town-build { animation: superagent-town-build 900ms cubic-bezier(.2,.8,.2,1) both; }
 .superagent-town-person { animation: superagent-town-walk 900ms steps(1,end) infinite; }
+.superagent-petdex-sprite { animation: superagent-petdex-anim 850ms steps(8, end) infinite; }
+.superagent-speech-bubble { animation: superagent-speech-float 2200ms ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) {
-  .superagent-town-build, .superagent-town-person { animation: none !important; }
+  .superagent-town-build, .superagent-town-person, .superagent-petdex-sprite, .superagent-speech-bubble { animation: none !important; }
 }
 `
 
@@ -3930,25 +4214,361 @@ function TownStyles() {
   return jsx('style', { children: TOWN_CSS })
 }
 
-function TownHouse({ session, isRouter, slot, onOpen, houseRef, building, reducedMotion, assets }) {
+const TOWN_BANTER = [
+  '👋 Hey neighbor!',
+  'Checking the diff…',
+  'Tests are green! ✨',
+  'Shipping clean code!',
+  'Need a PR review?',
+  'On my way to Plaza!',
+]
+
+function deriveSpeechBubble(session, isRouter, socialText) {
+  if (!session) return ''
+  const events = Array.isArray(session.recent_events) ? session.recent_events.filter(Boolean) : []
+  const latest = events.length ? events[0] : null
+  if (latest) {
+    const kind = String(latest.kind || '').trim()
+    const detail = String(latest.detail || '').replace(/\s+/g, ' ').trim()
+    if (kind === 'pr_created') return `📬 ${clip(detail || 'Opened PR!', 36)}`
+    if (kind === 'pr_reviewed') return `✅ ${clip(detail || 'Reviewed PR!', 36)}`
+    if (kind === 'router_message') return `📣 ${clip(detail || 'Message sent', 36)}`
+    if (kind === 'spawned' && isRouter) return `🏘️ Spawned ${clip(detail, 28)}`
+    if (session.status === 'running' && detail) return `⚡ ${clip(detail, 34)}`
+  }
+  if (session.status === 'running') {
+    const raw = String(session.last_event || '').replace(/\s+/g, ' ').trim()
+    return raw ? `🔧 ${clip(raw, 34)}` : (isRouter ? '🧭 Coordinating town…' : '🔨 Working on task…')
+  }
+  if (session.status === 'queued') return '⏳ Waiting in queue…'
+  if (session.status === 'failed') {
+    const err = firstLine(session.error)
+    return `❌ ${clip(err || 'Turn failed', 32)}`
+  }
+  if (socialText) return socialText
+  if (session.status === 'review') {
+    return session.pr_number ? `🎉 PR #${session.pr_number} ready!` : '✨ Ready for review!'
+  }
+  return ''
+}
+
+function PetdexSprite({ session, isRouter, pet, personArt, animState, facingLeft, scale, reducedMotion }) {
+  const s = Math.max(0.6, Number(scale) || 1)
+  if (pet && pet.data_url) {
+    const fw = Math.round((Number(pet.frame_width) || 48) * s)
+    const fh = Math.round((Number(pet.frame_height) || 52) * s)
+    const cols = Number(pet.cols) || 8
+    const rows = Number(pet.rows) || 9
+    const rowsMap = pet.rows_map || {}
+    const rowIdx = typeof rowsMap[animState] === 'number'
+      ? rowsMap[animState]
+      : Math.max(0, PETDEX_ROW_STATES.indexOf(animState || 'idle'))
+    const flip = facingLeft && animState !== 'running-left' && animState !== 'running-right'
+    return jsx('span', {
+      'data-petdex-slug': pet.slug,
+      'data-petdex-state': animState || 'idle',
+      'aria-hidden': 'true',
+      className: cn('block select-none', !reducedMotion && 'superagent-petdex-sprite'),
+      style: {
+        width: `${fw}px`,
+        height: `${fh}px`,
+        backgroundImage: `url("${pet.data_url}")`,
+        backgroundSize: `${fw * cols}px ${fh * rows}px`,
+        backgroundPositionY: `${-rowIdx * fh}px`,
+        '--pet-frame-w': `${fw}px`,
+        imageRendering: 'pixelated',
+        transform: flip ? 'scaleX(-1)' : undefined,
+      },
+    })
+  }
+  if (!personArt) return null
+  const personSize = Math.round((isRouter ? 42 : 36) * s)
+  const dirRow = animState === 'running-left' ? 1 : (animState === 'running-right' ? 2 : (animState === 'jumping' ? 3 : 0))
+  return jsx('span', {
+    'data-petdex-fallback': 'person.png',
+    'aria-hidden': 'true',
+    className: cn('block select-none', !reducedMotion && 'superagent-town-person'),
+    style: {
+      width: `${personSize}px`,
+      height: `${personSize}px`,
+      backgroundImage: `url("${personArt}")`,
+      backgroundSize: `${personSize * 3}px ${personSize * 4}px`,
+      backgroundPosition: `0 ${-dirRow * personSize}px`,
+      '--town-person-step': `${personSize}px`,
+      imageRendering: 'pixelated',
+      filter: townPersonFilter(session.id, isRouter),
+    },
+  })
+}
+
+function TownSpeechBubble({ text, status }) {
+  if (!text) return null
+  const toneClass = status === 'failed'
+    ? 'border-red-500/50 bg-background/95 text-(--ui-text-secondary)'
+    : (status === 'review'
+        ? 'border-amber-500/50 bg-background/95 text-(--ui-text-secondary)'
+        : 'border-(--ui-stroke-secondary) bg-background/95 text-(--ui-text-secondary)')
+  return jsx('span', {
+    'data-town-speech': '1',
+    className: cn(
+      'superagent-speech-bubble pointer-events-none absolute -top-6 left-1/2 z-30',
+      'max-w-[11.5rem] -translate-x-1/2 truncate whitespace-nowrap rounded-full border px-2 py-0.5',
+      'text-[0.625rem] font-medium leading-tight shadow-md',
+      toneClass,
+    ),
+    title: text,
+    children: text,
+  })
+}
+
+const TOWN_WAYPOINTS = [
+  { left: 50, top: 64 }, // Central Plaza North
+  { left: 50, top: 75 }, // Central Fountain
+  { left: 37, top: 63 }, // Noticeboard / West Plaza
+  { left: 63, top: 63 }, // Wishing Well / East Plaza
+  { left: 22, top: 52 }, // West Avenue Crossroad
+  { left: 78, top: 52 }, // East Avenue Crossroad
+  { left: 26, top: 76 }, // Southwest Stream Bridge
+  { left: 74, top: 74 }, // Southeast Park Bench
+  { left: 38, top: 34 }, // North Promenade West
+  { left: 62, top: 34 }, // North Promenade East
+]
+
+function actorHomePosition(session, isRouter) {
+  if (isRouter) return { left: 50, top: 57 }
+  const pos = townHousePosition(session.town_slot, session.id)
+  const towardCenter = pos.left < 50 ? 4.5 : -4.5
+  return {
+    left: Math.max(8, Math.min(92, pos.left + towardCenter)),
+    top: Math.max(18, Math.min(90, pos.top + 6.5)),
+  }
+}
+
+function defaultAnimForStatus(status) {
+  if (status === 'running') return 'running'
+  if (status === 'review') return 'review'
+  if (status === 'queued' || status === 'observed') return 'waiting'
+  if (status === 'failed' || status === 'cancelled') return 'failed'
+  return 'idle'
+}
+
+function useTownSimulation(town, buildingIds, reducedMotion) {
+  const simRef = useRef({})
+  const [, setTick] = useState(0)
+
+  const members = useMemo(() => {
+    if (!town) return []
+    const list = [{ session: town, isRouter: true }]
+    for (const w of town.workers || []) {
+      list.push({ session: w, isRouter: false })
+    }
+    return list
+  }, [town])
+
+  // Sync actors with current sessions synchronously so initial render & render probe have positions immediately.
+  const stateMap = simRef.current
+  const seenIds = new Set()
+  for (const { session, isRouter } of members) {
+    seenIds.add(session.id)
+    const home = actorHomePosition(session, isRouter)
+    const isBuilding = !!(buildingIds && buildingIds[session.id])
+    const existing = stateMap[session.id]
+    if (!existing) {
+      const h = townHash(session.id)
+      const startLeft = isBuilding && !reducedMotion ? 50 : home.left
+      const startTop = isBuilding && !reducedMotion ? 57 : home.top
+      stateMap[session.id] = {
+        left: startLeft,
+        top: startTop,
+        targetLeft: home.left,
+        targetTop: home.top,
+        animState: isBuilding && !reducedMotion ? 'jumping' : defaultAnimForStatus(session.status),
+        facingLeft: home.left < 50,
+        socialText: '',
+        pauseTicks: (h % 14) + 4,
+        stepCount: h % 7,
+      }
+    } else {
+      existing.homeLeft = home.left
+      existing.homeTop = home.top
+      if (reducedMotion) {
+        existing.left = home.left
+        existing.top = home.top
+        existing.animState = defaultAnimForStatus(session.status)
+        existing.socialText = ''
+      }
+    }
+  }
+  for (const oldId of Object.keys(stateMap)) {
+    if (!seenIds.has(oldId)) delete stateMap[oldId]
+  }
+
+  useEffect(() => {
+    if (reducedMotion || !members.length || typeof window === 'undefined') return undefined
+    const timer = window.setInterval(() => {
+      const map = simRef.current
+      const ids = members.map((m) => m.session.id)
+      for (const { session, isRouter } of members) {
+        const actor = map[session.id]
+        if (!actor) continue
+        const home = actorHomePosition(session, isRouter)
+        const status = session.status
+        const dx = actor.targetLeft - actor.left
+        const dy = actor.targetTop - actor.top
+        const dist = Math.hypot(dx, dy)
+
+        if (dist > 0.9) {
+          const speed = status === 'running' ? 1.35 : (status === 'review' ? 1.05 : 0.8)
+          const step = Math.min(dist, speed)
+          actor.left = Math.round((actor.left + (dx / dist) * step) * 100) / 100
+          actor.top = Math.round((actor.top + (dy / dist) * step) * 100) / 100
+          actor.facingLeft = dx < -0.05
+          actor.animState = dx < -0.15 ? 'running-left' : (dx > 0.15 ? 'running-right' : 'running')
+        } else {
+          actor.left = actor.targetLeft
+          actor.top = actor.targetTop
+          if (actor.pauseTicks > 0) {
+            actor.pauseTicks -= 1
+            actor.animState = actor.socialText ? 'waving' : defaultAnimForStatus(status)
+          } else {
+            actor.stepCount = (actor.stepCount || 0) + 1
+            actor.socialText = ''
+            const h = townHash(`${session.id}:${actor.stepCount}`)
+            if (status === 'failed' || status === 'cancelled') {
+              actor.targetLeft = home.left
+              actor.targetTop = home.top
+              actor.pauseTicks = 25
+            } else if (status === 'queued' || status === 'observed') {
+              // Pace near the town signpost / noticeboard
+              actor.targetLeft = 37 + ((h % 5) - 2)
+              actor.targetTop = 63 + (((h >>> 4) % 5) - 2)
+              actor.pauseTicks = 18
+            } else if (status === 'review') {
+              // Celebrate at the central plaza fountain or home
+              const goPlaza = (actor.stepCount % 2) === 0
+              actor.targetLeft = goPlaza ? 46 + (h % 9) : home.left
+              actor.targetTop = goPlaza ? 71 + ((h >>> 3) % 6) : home.top
+              actor.pauseTicks = 22
+            } else if (status === 'running') {
+              // Commute between workshop and plaza / Router hall
+              const leg = actor.stepCount % 3
+              if (leg === 0) {
+                actor.targetLeft = home.left
+                actor.targetTop = home.top
+              } else if (leg === 1) {
+                const wp = TOWN_WAYPOINTS[h % TOWN_WAYPOINTS.length]
+                actor.targetLeft = wp.left
+                actor.targetTop = wp.top
+              } else {
+                actor.targetLeft = 50 + ((h % 9) - 4)
+                actor.targetTop = 61 + (((h >>> 4) % 7) - 3)
+              }
+              actor.pauseTicks = 12 + (h % 10)
+            } else {
+              // Idle / Router: stroll around town landmarks and greet neighbors
+              const goHome = (actor.stepCount % 3) === 0
+              if (goHome) {
+                actor.targetLeft = home.left
+                actor.targetTop = home.top
+              } else {
+                const wp = TOWN_WAYPOINTS[h % TOWN_WAYPOINTS.length]
+                actor.targetLeft = wp.left + ((h % 5) - 2)
+                actor.targetTop = wp.top + (((h >>> 5) % 5) - 2)
+              }
+              actor.pauseTicks = 18 + (h % 16)
+            }
+          }
+        }
+      }
+
+      // Check proximity between actors for friendly town banter & waving
+      for (let i = 0; i < ids.length; i += 1) {
+        for (let j = i + 1; j < ids.length; j += 1) {
+          const a = map[ids[i]]
+          const b = map[ids[j]]
+          if (!a || !b) continue
+          const d = Math.hypot(a.left - b.left, a.top - b.top)
+          if (d > 1.5 && d < 10.5 && !a.socialText && !b.socialText) {
+            const pick = TOWN_BANTER[(townHash(ids[i]) + (a.stepCount || 0)) % TOWN_BANTER.length]
+            a.socialText = pick
+            b.socialText = '👋'
+          }
+        }
+      }
+      setTick((t) => (t + 1) % 1000000)
+    }, 120)
+    return () => window.clearInterval(timer)
+  }, [members, reducedMotion])
+
+  return simRef.current
+}
+
+function TownActor({ session, isRouter, actorState, pet, personArt, reducedMotion, onOpen }) {
+  const pos = actorState || actorHomePosition(session, isRouter)
+  const animState = (actorState && actorState.animState) || defaultAnimForStatus(session.status)
+  const facingLeft = !!(actorState && actorState.facingLeft)
+  const speech = deriveSpeechBubble(session, isRouter, actorState && actorState.socialText)
+  const petName = (pet && pet.display_name) || session.avatar_slug || (isRouter ? 'Router' : 'Worker')
+  const zIndex = Math.max(6, Math.round((Number(pos.top) || 50) * 10) + 3)
+
+  return jsxs('button', {
+    type: 'button',
+    'data-town-actor': session.id,
+    onClick: () => onOpen(session.id),
+    'aria-label': `${isRouter ? 'Router' : 'Worker'} character ${session.id} (${petName})`,
+    title: `${sessionTitle(session)} · ${petName} (${townStatusLabel(session.status)})`,
+    className: cn(
+      'group absolute flex flex-col items-center focus:outline-none',
+      'transition-[left,top] duration-150 ease-linear',
+    ),
+    style: {
+      left: `${pos.left}%`,
+      top: `${pos.top}%`,
+      transform: 'translate(-50%, -85%)',
+      zIndex,
+    },
+    children: [
+      jsx(TownSpeechBubble, { key: 'speech', text: speech, status: session.status }),
+      jsx(PetdexSprite, {
+        key: 'sprite',
+        session,
+        isRouter,
+        pet,
+        personArt,
+        animState,
+        facingLeft,
+        scale: isRouter ? 0.96 : 0.86,
+        reducedMotion,
+      }),
+      jsx('span', {
+        key: 'shadow',
+        'aria-hidden': 'true',
+        className: ' -mt-1 h-1.5 w-6 rounded-full bg-black/30',
+      }),
+    ],
+  })
+}
+
+function TownHouse({ session, isRouter, slot, onOpen, houseRef, building, reducedMotion, assets, pet }) {
   const sprite = isRouter ? 'house-router.png' : townHouseSprite(session.id)
   const art = assets && assets[sprite] && assets[sprite].data_url
-  const person = assets && assets['person.png'] && assets['person.png'].data_url
-  const position = isRouter ? { left: 50, top: 50, scale: 1.06 } : townHousePosition(slot)
+  const position = isRouter ? { left: 50, top: 47, scale: 1.06 } : townHousePosition(slot, session.id)
   const scale = Math.max(0.5, Number(position.scale) || 1)
   const width = Math.round((isRouter ? 178 : 136) * scale)
   const fallbackHeight = Math.round((isRouter ? 194 : 140) * scale)
-  const personSize = Math.round((isRouter ? 44 : 38) * scale)
   const label = townStatusLabel(session.status)
+  const petLabel = (pet && pet.display_name) || session.avatar_slug || ''
+  const zIndex = Math.max(4, Math.round((Number(position.top) || 50) * 10))
   return jsxs('div', {
     'data-town-house': session.id,
-    className: 'absolute z-10 flex flex-col items-center',
+    className: 'absolute flex flex-col items-center',
     style: {
       left: `${position.left}%`,
       top: `${position.top}%`,
       transform: 'translate(-50%, -50%)',
       transformOrigin: '50% 100%',
       width: `${width + 22}px`,
+      zIndex,
     },
     children: [
       jsxs('button', {
@@ -3957,7 +4577,7 @@ function TownHouse({ session, isRouter, slot, onOpen, houseRef, building, reduce
         type: 'button',
         onClick: () => onOpen(session.id),
         'aria-label': `${isRouter ? 'Router' : 'Worker'} house ${session.id}: ${sessionTitle(session)} — ${label}`,
-        title: `${sessionTitle(session)} (${session.id}) · ${label}`,
+        title: `${sessionTitle(session)} (${session.id}) · ${label}${petLabel ? ` · ${petLabel}` : ''}`,
         className: cn('relative flex w-full flex-col items-center rounded',
           'focus-visible:outline focus-visible:outline-2 focus-visible:outline-(--ui-accent)',
           'hover:brightness-110',
@@ -3981,37 +4601,27 @@ function TownHouse({ session, isRouter, slot, onOpen, houseRef, building, reduce
           jsxs('span', {
             key: 'badge',
             className: cn('absolute left-0 top-0 inline-flex items-center gap-1 rounded border',
-              'border-(--ui-stroke-secondary) bg-background px-1 py-0.5',
+              'border-(--ui-stroke-secondary) bg-background/95 px-1 py-0.5',
               'text-[0.625rem] leading-none text-(--ui-text-secondary) shadow-sm'),
             children: [
               jsx(ChatDot, { key: 'dot', status: session.status }),
               jsx('span', { key: 's', className: 'whitespace-nowrap', children: label }),
             ],
           }),
-          building
+          session.pr_number
             ? jsx('span', {
-                key: 'new',
-                className: 'absolute right-0 top-0 rounded bg-background px-1 text-[0.625rem] text-(--ui-text-tertiary)',
-                children: 'new',
+                key: 'pr-chip',
+                className: cn('absolute right-0 top-0 rounded border border-(--ui-stroke-secondary)',
+                  'bg-background/95 px-1 font-mono text-[0.625rem] leading-tight text-(--ui-text-secondary) shadow-sm'),
+                children: `#${session.pr_number}`,
               })
-            : null,
-          person
-            ? jsx('span', {
-                key: 'person',
-                'aria-hidden': 'true',
-                className: cn('relative -mt-1 block', !reducedMotion && 'superagent-town-person'),
-                style: {
-                  width: `${personSize}px`,
-                  height: `${personSize}px`,
-                  backgroundImage: `url("${person}")`,
-                  backgroundSize: `${personSize * 3}px ${personSize * 4}px`,
-                  backgroundPosition: '0 0',
-                  '--town-person-step': `${personSize}px`,
-                  imageRendering: 'pixelated',
-                  filter: townPersonFilter(session.id, isRouter),
-                },
-              })
-            : null,
+            : (building
+                ? jsx('span', {
+                    key: 'new',
+                    className: 'absolute right-0 top-0 rounded bg-background px-1 text-[0.625rem] text-(--ui-text-tertiary)',
+                    children: 'new',
+                  })
+                : null),
         ],
       }),
       jsx('button', {
@@ -4021,17 +4631,26 @@ function TownHouse({ session, isRouter, slot, onOpen, houseRef, building, reduce
         onClick: () => onOpen(session.id),
         'aria-label': `Open ${isRouter ? 'Router' : 'worker'} ${session.id}: ${sessionTitle(session)}`,
         className: cn('mt-0.5 block max-w-[11rem] truncate rounded border px-1.5 py-0.5',
-          'border-(--ui-stroke-secondary) bg-background text-center text-[0.625rem]',
+          'border-(--ui-stroke-secondary) bg-background/95 text-center text-[0.625rem]',
           'leading-tight text-(--ui-text-secondary) shadow-sm hover:bg-(--chrome-action-hover)'),
         title: sessionTitle(session),
-        children: isRouter ? 'Router' : sessionTitle(session),
+        children: isRouter ? 'Router Hall' : sessionTitle(session),
       }),
     ],
   })
 }
 
-function TownScene({ town, assets, buildingIds, onOpen, registerHouse, reducedMotion }) {
+function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, reducedMotion }) {
   const grass = assets && assets['grass.png'] && assets['grass.png'].data_url
+  const roadH = assets && assets['road-h.png'] && assets['road-h.png'].data_url
+  const roadV = assets && assets['road-v.png'] && assets['road-v.png'].data_url
+  const plazaStone = assets && assets['plaza-stone.png'] && assets['plaza-stone.png'].data_url
+  const water = assets && assets['water.png'] && assets['water.png'].data_url
+  const bridge = assets && assets['bridge.png'] && assets['bridge.png'].data_url
+  const bench = assets && assets['bench.png'] && assets['bench.png'].data_url
+  const well = assets && assets['well.png'] && assets['well.png'].data_url
+  const flowers = assets && assets['flowers.png'] && assets['flowers.png'].data_url
+  const signpost = assets && assets['signpost.png'] && assets['signpost.png'].data_url
   const treeA = assets && assets['tree-a.png'] && assets['tree-a.png'].data_url
   const treeB = assets && assets['tree-b.png'] && assets['tree-b.png'].data_url
   const treeC = assets && assets['tree-c.png'] && assets['tree-c.png'].data_url
@@ -4039,34 +4658,60 @@ function TownScene({ town, assets, buildingIds, onOpen, registerHouse, reducedMo
   const fountain = assets && assets['fountain.png'] && assets['fountain.png'].data_url
   const lamp = assets && assets['lamp.png'] && assets['lamp.png'].data_url
   const rock = assets && assets['rock.png'] && assets['rock.png'].data_url
+  const personArt = assets && assets['person.png'] && assets['person.png'].data_url
   const workers = Array.isArray(town.workers) ? town.workers : []
+  const actorMap = useTownSimulation(town, buildingIds, reducedMotion)
   const counts = workers.reduce((acc, worker) => {
     const key = townStatusLabel(worker.status)
     acc[key] = (acc[key] || 0) + 1
     return acc
   }, {})
+  const anyRunning = town.status === 'running' || (counts.running || 0) > 0
   const summary = [
     workers.length === 1 ? '1 worker' : `${workers.length} workers`,
     ...Object.keys(counts).sort().map((key) => `${counts[key]} ${key}`),
   ].join(' · ')
+
   const trees = [
-    { left: 5, top: 74, src: treeA, width: 84 },
-    { left: 94, top: 70, src: treeB, width: 76 },
-    { left: 3, top: 31, src: treeC, width: 56 },
-    { left: 95, top: 28, src: treeA, width: 70 },
-    { left: 24, top: 24, src: treeC, width: 48 },
-    { left: 76, top: 23, src: treeB, width: 56 },
-    { left: 46, top: 24, src: treeB, width: 62 },
+    { left: 4, top: 72, src: treeA, width: 82 },
+    { left: 95, top: 68, src: treeB, width: 76 },
+    { left: 3, top: 32, src: treeC, width: 58 },
+    { left: 95, top: 29, src: treeA, width: 70 },
+    { left: 20, top: 14, src: treeC, width: 50 },
+    { left: 80, top: 14, src: treeB, width: 56 },
+    { left: 44, top: 18, src: treeB, width: 62 },
+    { left: 57, top: 17, src: treeC, width: 52 },
+    { left: 19, top: 93, src: treeA, width: 68 },
+    { left: 82, top: 93, src: treeB, width: 64 },
   ].filter((tree) => tree.src)
+
   const decorations = [
-    { key: 'fountain', left: 50, top: 83, src: fountain, width: 82 },
-    { key: 'lamp-l', left: 36, top: 64, src: lamp, width: 22 },
-    { key: 'lamp-r', left: 64, top: 64, src: lamp, width: 22 },
-    { key: 'bush-l', left: 15, top: 26, src: bush, width: 48 },
-    { key: 'bush-r', left: 85, top: 27, src: bush, width: 48 },
-    { key: 'rock-l', left: 8, top: 87, src: rock, width: 25 },
-    { key: 'rock-r', left: 91, top: 86, src: rock, width: 25 },
+    { key: 'fountain', left: 50, top: 76, src: fountain, width: 84 },
+    { key: 'well', left: 63, top: 63, src: well, width: 42 },
+    { key: 'signpost', left: 37, top: 63, src: signpost, width: 28 },
+    { key: 'bench-l', left: 43, top: 76, src: bench, width: 38 },
+    { key: 'bench-r', left: 57, top: 76, src: bench, width: 38 },
+    { key: 'bench-park', left: 74, top: 73, src: bench, width: 36 },
+    { key: 'bridge-sw', left: 24, top: 74, src: bridge, width: 56 },
+    { key: 'lamp-nw', left: 39, top: 48, src: lamp, width: 22, glow: anyRunning },
+    { key: 'lamp-ne', left: 61, top: 48, src: lamp, width: 22, glow: anyRunning },
+    { key: 'lamp-sw', left: 36, top: 68, src: lamp, width: 22, glow: anyRunning },
+    { key: 'lamp-se', left: 64, top: 68, src: lamp, width: 22, glow: anyRunning },
+    { key: 'bush-nw', left: 16, top: 32, src: bush, width: 44 },
+    { key: 'bush-ne', left: 84, top: 32, src: bush, width: 44 },
+    { key: 'bush-sw', left: 16, top: 66, src: bush, width: 44 },
+    { key: 'bush-se', left: 84, top: 66, src: bush, width: 44 },
+    { key: 'flowers-1', left: 34, top: 36, src: flowers, width: 32 },
+    { key: 'flowers-2', left: 66, top: 36, src: flowers, width: 32 },
+    { key: 'flowers-3', left: 40, top: 84, src: flowers, width: 32 },
+    { key: 'flowers-4', left: 60, top: 84, src: flowers, width: 32 },
+    { key: 'rock-l', left: 6, top: 89, src: rock, width: 25 },
+    { key: 'rock-r', left: 93, top: 88, src: rock, width: 25 },
   ].filter((item) => item.src)
+
+  const petMap = pets || {}
+  const routerPet = petMap[town.avatar_slug] || null
+
   return jsxs('div', {
     className: 'flex min-h-0 flex-1 flex-col gap-2',
     children: [
@@ -4075,7 +4720,8 @@ function TownScene({ town, assets, buildingIds, onOpen, registerHouse, reducedMo
         role: 'group',
         'aria-label': `${sessionTitle(town)} — town`,
         'data-town-workers': workers.length,
-        className: cn('relative min-h-[360px] flex-1 overflow-hidden rounded-lg border',
+        'data-town-road-network': 'cobblestone',
+        className: cn('relative min-h-[390px] flex-1 overflow-hidden rounded-lg border',
           'border-(--ui-stroke-secondary)'),
         style: grass
           ? {
@@ -4086,13 +4732,116 @@ function TownScene({ town, assets, buildingIds, onOpen, registerHouse, reducedMo
             }
           : undefined,
         children: [
+          // Stream & meadow pond in the southwest quarter
+          water
+            ? jsx('div', {
+                key: 'water-pond',
+                'aria-hidden': 'true',
+                'data-town-landmark': 'stream',
+                className: 'pointer-events-none absolute z-0 rounded-full opacity-90',
+                style: {
+                  left: '24%', top: '73%', width: '16%', height: '14%',
+                  transform: 'translate(-50%, -50%)',
+                  backgroundImage: `url("${water}")`,
+                  backgroundSize: '48px 48px',
+                  backgroundRepeat: 'repeat',
+                  imageRendering: 'pixelated',
+                  boxShadow: 'inset 0 0 8px rgba(20,55,90,0.45)',
+                },
+              })
+            : null,
+          // Cobblestone road network connecting every plot to the Central Plaza
+          jsx('div', {
+            key: 'road-west-ave', 'aria-hidden': 'true',
+            className: 'pointer-events-none absolute z-[1] opacity-90',
+            style: {
+              left: '20%', top: '51%', width: '24px', height: '70%',
+              transform: 'translate(-50%, -50%)',
+              backgroundImage: roadV ? `url("${roadV}")` : undefined,
+              backgroundColor: roadV ? undefined : 'rgba(145,132,114,0.65)',
+              backgroundSize: '24px 48px',
+              backgroundRepeat: 'repeat-y',
+              imageRendering: 'pixelated',
+            },
+          }),
+          jsx('div', {
+            key: 'road-east-ave', 'aria-hidden': 'true',
+            className: 'pointer-events-none absolute z-[1] opacity-90',
+            style: {
+              left: '80%', top: '51%', width: '24px', height: '70%',
+              transform: 'translate(-50%, -50%)',
+              backgroundImage: roadV ? `url("${roadV}")` : undefined,
+              backgroundColor: roadV ? undefined : 'rgba(145,132,114,0.65)',
+              backgroundSize: '24px 48px',
+              backgroundRepeat: 'repeat-y',
+              imageRendering: 'pixelated',
+            },
+          }),
+          jsx('div', {
+            key: 'road-north-st', 'aria-hidden': 'true',
+            className: 'pointer-events-none absolute z-[1] opacity-90',
+            style: {
+              left: '50%', top: '24%', width: '82%', height: '22px',
+              transform: 'translate(-50%, -50%)',
+              backgroundImage: roadH ? `url("${roadH}")` : undefined,
+              backgroundColor: roadH ? undefined : 'rgba(145,132,114,0.65)',
+              backgroundSize: '48px 22px',
+              backgroundRepeat: 'repeat-x',
+              imageRendering: 'pixelated',
+            },
+          }),
+          jsx('div', {
+            key: 'road-main-st', 'aria-hidden': 'true',
+            className: 'pointer-events-none absolute z-[1] opacity-95',
+            style: {
+              left: '50%', top: '55%', width: '84%', height: '26px',
+              transform: 'translate(-50%, -50%)',
+              backgroundImage: roadH ? `url("${roadH}")` : undefined,
+              backgroundColor: roadH ? undefined : 'rgba(145,132,114,0.75)',
+              backgroundSize: '48px 26px',
+              backgroundRepeat: 'repeat-x',
+              imageRendering: 'pixelated',
+            },
+          }),
+          jsx('div', {
+            key: 'road-south-st', 'aria-hidden': 'true',
+            className: 'pointer-events-none absolute z-[1] opacity-90',
+            style: {
+              left: '50%', top: '84%', width: '82%', height: '22px',
+              transform: 'translate(-50%, -50%)',
+              backgroundImage: roadH ? `url("${roadH}")` : undefined,
+              backgroundColor: roadH ? undefined : 'rgba(145,132,114,0.65)',
+              backgroundSize: '48px 22px',
+              backgroundRepeat: 'repeat-x',
+              imageRendering: 'pixelated',
+            },
+          }),
+          jsx('div', {
+            key: 'road-center-promenade', 'aria-hidden': 'true',
+            className: 'pointer-events-none absolute z-[1] opacity-95',
+            style: {
+              left: '50%', top: '54%', width: '28px', height: '62%',
+              transform: 'translate(-50%, -50%)',
+              backgroundImage: roadV ? `url("${roadV}")` : undefined,
+              backgroundColor: roadV ? undefined : 'rgba(145,132,114,0.75)',
+              backgroundSize: '28px 48px',
+              backgroundRepeat: 'repeat-y',
+              imageRendering: 'pixelated',
+            },
+          }),
+          // Paved Central Town Square around Router Hall & Fountain
           jsx('div', {
             key: 'plaza', 'aria-hidden': 'true',
-            className: 'pointer-events-none absolute z-0',
+            'data-town-landmark': 'plaza',
+            className: 'pointer-events-none absolute z-[2] rounded-2xl border border-black/15 shadow-inner',
             style: {
-              left: '50%', top: '58%', width: '74%', height: '66%',
-              transform: 'translate(-50%, -50%)', borderRadius: '50%',
-              background: 'radial-gradient(ellipse at center, rgba(151,112,63,0.40) 0%, rgba(151,112,63,0.16) 56%, transparent 74%)',
+              left: '50%', top: '63%', width: '32%', height: '34%',
+              transform: 'translate(-50%, -50%)',
+              backgroundImage: plazaStone ? `url("${plazaStone}")` : undefined,
+              backgroundColor: plazaStone ? undefined : 'rgba(165,148,126,0.7)',
+              backgroundSize: '48px 48px',
+              backgroundRepeat: 'repeat',
+              imageRendering: 'pixelated',
             },
           }),
           ...decorations.map((item) => jsx('img', {
@@ -4101,22 +4850,25 @@ function TownScene({ town, assets, buildingIds, onOpen, registerHouse, reducedMo
             alt: '',
             'aria-hidden': 'true',
             draggable: false,
-            className: 'pointer-events-none absolute z-0 -translate-x-1/2 -translate-y-full opacity-95',
+            className: 'pointer-events-none absolute -translate-x-1/2 -translate-y-full opacity-95',
             style: {
               left: `${item.left}%`, top: `${item.top}%`,
               width: item.width, height: 'auto', imageRendering: 'pixelated',
+              zIndex: Math.max(3, Math.round(item.top * 10)),
+              filter: item.glow ? 'drop-shadow(0 0 6px rgba(255,214,102,0.85))' : undefined,
             },
           })),
-          trees.map((tree, index) => jsx('img', {
+          ...trees.map((tree, index) => jsx('img', {
             key: `tree:${index}`,
             src: tree.src,
             alt: '',
             'aria-hidden': 'true',
             draggable: false,
-            className: 'pointer-events-none absolute z-0 -translate-x-1/2 -translate-y-full opacity-90',
+            className: 'pointer-events-none absolute -translate-x-1/2 -translate-y-full opacity-95',
             style: {
               left: `${tree.left}%`, top: `${tree.top}%`,
               width: tree.width, height: 'auto', imageRendering: 'pixelated',
+              zIndex: Math.max(3, Math.round(tree.top * 10)),
             },
           })),
           jsx(TownHouse, {
@@ -4129,6 +4881,7 @@ function TownScene({ town, assets, buildingIds, onOpen, registerHouse, reducedMo
             building: false,
             reducedMotion,
             assets,
+            pet: routerPet,
           }),
           ...workers.map((worker) => jsx(TownHouse, {
             key: worker.id,
@@ -4140,6 +4893,27 @@ function TownScene({ town, assets, buildingIds, onOpen, registerHouse, reducedMo
             building: !!(buildingIds && buildingIds[worker.id]),
             reducedMotion,
             assets,
+            pet: petMap[worker.avatar_slug] || null,
+          })),
+          jsx(TownActor, {
+            key: `actor:${town.id}`,
+            session: town,
+            isRouter: true,
+            actorState: actorMap[town.id],
+            pet: routerPet,
+            personArt,
+            reducedMotion,
+            onOpen,
+          }),
+          ...workers.map((worker) => jsx(TownActor, {
+            key: `actor:${worker.id}`,
+            session: worker,
+            isRouter: false,
+            actorState: actorMap[worker.id],
+            pet: petMap[worker.avatar_slug] || null,
+            personArt,
+            reducedMotion,
+            onOpen,
           })),
         ],
       }),
@@ -4153,7 +4927,7 @@ function TownScene({ town, assets, buildingIds, onOpen, registerHouse, reducedMo
   })
 }
 
-function TownSwitcher({ towns, value, onChange, onPrev, onNext, onNew, onSessions, canPrev, canNext, sessionsRef }) {
+function TownSwitcher({ towns, value, onChange, onPrev, onNext, onNew, onReroll, rerolling, onSessions, canPrev, canNext, sessionsRef }) {
   const current = towns.find((town) => town.id === value)
   return jsxs('div', {
     className: 'flex min-w-0 flex-wrap items-center gap-1.5',
@@ -4202,6 +4976,16 @@ function TownSwitcher({ towns, value, onChange, onPrev, onNext, onNew, onSession
             title: `${(current.workers || []).length} of ${TOWN_MAX_WORKERS} plots used`,
             className: 'hidden shrink-0 text-[0.6875rem] text-(--ui-text-tertiary) sm:inline',
             children: `${(current.workers || []).length}/${TOWN_MAX_WORKERS} plots`,
+          })
+        : null,
+      current && typeof onReroll === 'function'
+        ? jsx('button', {
+            key: 'reroll', type: 'button', onClick: onReroll, disabled: !!rerolling,
+            'aria-label': 'Reroll character sprites',
+            title: 'Randomise Petdex.dev character sprites for this town',
+            className: cn('shrink-0 rounded border border-(--ui-stroke-secondary) px-2 py-1',
+              'text-xs text-(--ui-text-secondary) hover:bg-(--chrome-action-hover) disabled:opacity-50'),
+            children: rerolling ? 'Rerolling…' : '🎲 Reroll sprites',
           })
         : null,
       jsx('button', {
@@ -4549,6 +5333,7 @@ function SuperagentPage() {
   const sessionsRef = useRef(null)
   const railSearchRef = useRef(null)
   const houseRefs = useRef({})
+  const houseCallbacksRef = useRef({})
   const knownWorkersRef = useRef({})
   const buildTimers = useRef({})
   const [shortcuts, setShortcuts] = useState(false)
@@ -4695,9 +5480,14 @@ function SuperagentPage() {
     buildTimers.current = {}
   }, [])
 
-  const registerHouse = (id) => (element) => {
-    if (element) houseRefs.current[id] = element
-    else delete houseRefs.current[id]
+  const registerHouse = (id) => {
+    if (!houseCallbacksRef.current[id]) {
+      houseCallbacksRef.current[id] = (element) => {
+        if (element) houseRefs.current[id] = element
+        else delete houseRefs.current[id]
+      }
+    }
+    return houseCallbacksRef.current[id]
   }
 
   const openHouse = (id) => {
@@ -5026,6 +5816,8 @@ function SuperagentPage() {
   // drawer owns Escape, so this only handles the three global commands.
   const newChatRef = useRef(newChat)
   newChatRef.current = newChat
+  const townNavRef = useRef({ towns, townId, selectTown })
+  townNavRef.current = { towns, townId, selectTown }
   useEffect(() => {
     const onKeyDown = (event) => {
       if (!event || event.defaultPrevented) return
@@ -5057,13 +5849,14 @@ function SuperagentPage() {
         return
       }
       if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
-        if (!towns.length) return
+        const nav = townNavRef.current
+        if (!nav || !nav.towns || !nav.towns.length) return
         const step = event.key === 'ArrowLeft' ? -1 : 1
-        const index = towns.findIndex((item) => item.id === townId)
+        const index = nav.towns.findIndex((item) => item.id === nav.townId)
         const next = index < 0 ? 0 : index + step
-        if (next < 0 || next >= towns.length) return
+        if (next < 0 || next >= nav.towns.length) return
         if (typeof event.preventDefault === 'function') event.preventDefault()
-        selectTown(towns[next].id)
+        nav.selectTown(nav.towns[next].id)
         return
       }
       if (event.key === 'n' || event.key === 'N') {
@@ -5158,8 +5951,70 @@ function SuperagentPage() {
     if (title) renameSession(session.id, title)
   }
 
+  const petSlugsKey = useMemo(() => {
+    if (!town) return ''
+    const slugs = [town.avatar_slug, ...(town.workers || []).map((w) => w.avatar_slug)]
+      .filter(Boolean)
+      .map(String)
+    return Array.from(new Set(slugs)).sort().join(',')
+  }, [town])
+  const petsQuery = useTownPets(petSlugsKey)
+  const petMap = (petsQuery.data && petsQuery.data.pets) || null
+
+  const rerollPets = useMutation({
+    mutationFn: (vars) => rest('/town/pets/reroll', { method: 'POST', body: vars }),
+    onSuccess: () => {
+      invalidateChats(queryClient, selectedId)
+      queryClient.invalidateQueries({ queryKey: [ID, 'town', 'pets'] })
+    },
+  })
+
+  const dispatchWorker = useMutation({
+    mutationFn: (vars) => rest(`/towns/${encodeURIComponent(vars.rootId)}/dispatch`, {
+      method: 'POST',
+      body: {
+        worker_session_id: vars.workerId,
+        action: vars.action,
+        pr_number: vars.prNumber || undefined,
+        message: vars.message || undefined,
+      },
+    }),
+    onSuccess: () => invalidateChats(queryClient, selectedId),
+  })
+
   const houseMenu = dialogSession ? [
     { id: 'rename', label: 'Rename…', onSelect: () => renameHouse(dialogSession) },
+    {
+      id: 'reroll-sprite',
+      label: '🎲 Reroll character sprite',
+      disabled: rerollPets.isPending,
+      onSelect: () => rerollPets.mutate({ session_id: dialogSession.id }),
+    },
+    ...(dialogSession.parent_session_id && dialogTown
+      ? [
+          {
+            id: 'dispatch-create-pr',
+            label: 'Instruct worker to open PR',
+            disabled: isBusy(dialogSession) || dispatchWorker.isPending,
+            onSelect: () => dispatchWorker.mutate({
+              rootId: dialogTown.id,
+              workerId: dialogSession.id,
+              action: 'create_pr',
+            }),
+          },
+          {
+            id: 'dispatch-approve-pr',
+            label: 'Instruct worker to approve PR',
+            disabled: isBusy(dialogSession) || !dialogSession.pr_number || dispatchWorker.isPending,
+            onSelect: () => dispatchWorker.mutate({
+              rootId: dialogTown.id,
+              workerId: dialogSession.id,
+              action: 'approve_pr',
+              prNumber: dialogSession.pr_number,
+            }),
+          },
+        ]
+      : []),
     {
       id: 'pin',
       label: dialogSession.pinned_at ? 'Unpin from the top' : 'Pin to the top',
@@ -5223,7 +6078,10 @@ function SuperagentPage() {
             key: 'switcher', towns, value: townId, onChange: selectTown,
             onPrev: () => { if (townIndex > 0) selectTown(towns[townIndex - 1].id) },
             onNext: () => { if (townIndex >= 0 && townIndex < towns.length - 1) selectTown(towns[townIndex + 1].id) },
-            onNew: newChat, onSessions: openSessions,
+            onNew: newChat,
+            onReroll: town ? () => rerollPets.mutate({ town_id: town.id }) : undefined,
+            rerolling: rerollPets.isPending,
+            onSessions: openSessions,
             canPrev: townIndex > 0,
             canNext: townIndex >= 0 && townIndex < towns.length - 1,
             sessionsRef,
@@ -5302,7 +6160,7 @@ function SuperagentPage() {
           : !town
             ? jsx(TownEmpty, { onNew: newChat, banner: onboarding, assets: assetMap })
             : jsx(TownScene, {
-                town, assets: assetMap, buildingIds: newWorkerIds,
+                town, assets: assetMap, pets: petMap, buildingIds: newWorkerIds,
                 onOpen: openHouse, registerHouse, reducedMotion,
               }),
       }),
@@ -5562,8 +6420,9 @@ function SuperagentChip() {
 export {
   SuperagentPage, SettingsPanel, OverlayDrawer, ModelPicker, PresetSelect,
   modelWithThinking, reasoningLabel, backendNeedsRestart,
-  TownScene, TownHouse, TownSwitcher, TownChatDialog, TownEmpty,
-  townHousePosition, townHouseSprite, townStatusLabel, TOWN_PLOTS,
+  TownScene, TownHouse, TownActor, PetdexSprite, TownSpeechBubble,
+  TownSwitcher, TownChatDialog, TownEmpty, CommentBox, CreatePrBox,
+  townHousePosition, townHouseSprite, townStatusLabel, deriveSpeechBubble, TOWN_PLOTS,
 }
 
 export default {

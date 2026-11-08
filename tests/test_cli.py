@@ -18,6 +18,8 @@ def _engine(sa, store, fake_executor, **overrides):
 
 
 def _patch_engine(sa, monkeypatch, engine):
+    from pathlib import Path
+    monkeypatch.setenv("HERMES_HOME", str(Path(engine.store.path).parent))
     monkeypatch.setattr(sa.sa_engine, "build_engine", lambda ctx: engine)
     # sa_cli imported sa_engine as a module object; ensure it sees the patch.
     try:
