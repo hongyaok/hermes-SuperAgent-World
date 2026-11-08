@@ -1628,19 +1628,41 @@ function PresetSelect({ value, models, onChange }) {
   const presets = (models && models.models) || []
   const current = value.model || ''
   const options = current && presets.indexOf(current) === -1 ? [current].concat(presets) : presets
-  return jsxs('select', {
-    value: current,
-    onChange: (event) => onChange({
-      model: event.target.value, provider: '',
-      // Keep the chosen thinking level when only the model changes; the
-      // fallback picker has no effort control of its own.
-      effort: String(value.effort || ''),
-    }),
-    className: cn('max-w-[14rem] rounded border border-(--ui-stroke-secondary) bg-transparent',
-      'px-1.5 py-1 text-[0.6875rem] text-(--ui-text-secondary)'),
+  return jsxs('span', {
+    className: 'flex min-w-0 items-center gap-1',
     children: [
-      jsx('option', { key: 'default', value: '', children: 'Default model' }),
-      ...options.map((name) => jsx('option', { key: name, value: name, children: name })),
+      jsxs('select', {
+        key: 'model',
+        value: current,
+        'aria-label': 'Model',
+        onChange: (event) => onChange({
+          model: event.target.value, provider: '',
+          // Keep the chosen thinking level when only the model changes; the
+          // fallback picker has no effort control of its own.
+          effort: String(value.effort || ''),
+        }),
+        className: cn('max-w-[14rem] rounded border border-(--ui-stroke-secondary) bg-transparent',
+          'px-1.5 py-1 text-[0.6875rem] text-(--ui-text-secondary)'),
+        children: [
+          jsx('option', { key: 'default', value: '', children: 'Default model' }),
+          ...options.map((name) => jsx('option', { key: name, value: name, children: name })),
+        ],
+      }),
+      jsx('select', {
+        key: 'effort',
+        value: String(value.effort || ''),
+        'aria-label': 'Thinking level',
+        title: 'Thinking level for this chat',
+        onChange: (event) => onChange({
+          model: current, provider: String(value.provider || ''),
+          effort: String(event.target.value || ''),
+        }),
+        className: cn('max-w-[8rem] rounded border border-(--ui-stroke-secondary) bg-transparent',
+          'px-1.5 py-1 text-[0.6875rem] text-(--ui-text-secondary)'),
+        children: REASONING_LEVELS.map((level) => jsx('option', {
+          key: level.value || 'default', value: level.value, children: level.label,
+        })),
+      }),
     ],
   })
 }
@@ -1723,8 +1745,9 @@ function SessionModelControl({ session, models, onChange, pending }) {
           className: 'shrink-0',
           disabled,
           title: busy
-            ? 'The model can change when this turn finishes'
-            : 'Change the model for future turns of this chat',
+            ? 'The model and thinking level can change when this turn finishes'
+            : 'Change the model or thinking level for future turns',
+          'aria-label': 'Change model or thinking level',
           onClick: () => setEditing(true),
           children: pending ? 'Saving…' : 'Change model',
         }),
@@ -5527,7 +5550,7 @@ function SuperagentChip() {
 // Named exports for the render probe. The app only consumes the default
 // export; these let a Node test render the town tree without Electron.
 export {
-  SuperagentPage, SettingsPanel, OverlayDrawer, ModelPicker,
+  SuperagentPage, SettingsPanel, OverlayDrawer, ModelPicker, PresetSelect,
   modelWithThinking, reasoningLabel, backendNeedsRestart,
   TownScene, TownHouse, TownSwitcher, TownChatDialog, TownEmpty,
   townHousePosition, townHouseSprite, townStatusLabel, TOWN_PLOTS,

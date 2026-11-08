@@ -3,6 +3,24 @@
 All notable changes to the `superagent` Hermes plugin. Plain bullets, newest
 first.
 
+## 0.5.9 — 2026-11-08
+
+### Added
+
+- The fallback model picker (shells without the SDK catalog menu) now includes a
+  **Thinking level** select, so `xhigh`, `max` and `ultra` are reachable even
+  there.
+
+### Changed
+
+- The existing-chat “Change model” control names the thinking level in its
+  tooltip and accessible label; it edits both through the same picker.
+
+### Fixed
+
+- A shell without `ModelCatalogMenu` could choose a model but had no way to
+  choose a thinking level from the composer; the fallback now exposes both.
+
 ## 0.5.8 — 2026-11-08
 
 ### Added
