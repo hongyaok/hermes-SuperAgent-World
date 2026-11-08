@@ -29,7 +29,7 @@ It separates **routing** from **execution**, and keeps every result behind one r
 - **GitHub connect & PR watch** — one repository, an allow-list, `observe` or `auto` mode, open-PR list with **Work on this PR**, and one isolated `git worktree` per pull request.
 - **Review handoff** — a lazy diff panel, a human-confirmed PR comment/review, an optional **Create PR** sheet, plus `hermes superagent diff|comment`.
 - **Tickets for everything else** — deterministic zero-token triage, `superagent_ask/tick/status/run` tools, `/superagent`, and the **Superagent watch** cron blueprint.
-- **A CLI for the same state** — `hermes superagent status|chat|sessions|search|retry|export|usage|pin|unpin|show|stop|models|settings|github|diff|comment|doctor`, all with `--json` and stable exit codes.
+- **A CLI for the same state** — `hermes superagent status|chat|sessions|towns|search|retry|export|usage|pin|unpin|show|stop|models|settings|github|diff|comment|doctor`, all with `--json` and stable exit codes.
 
 ## How it works
 
@@ -212,6 +212,10 @@ hermes superagent settings --json
 hermes superagent search "rollback never ran"
 hermes superagent search "rollback" --archived all --json
 
+# See the router/worker town hierarchy: slots, statuses and linked PRs
+hermes superagent towns
+hermes superagent towns --limit 10 --show-archived --json
+
 # Re-run the last prompt of a failed or cancelled chat
 hermes superagent retry S-0001
 hermes superagent retry S-0001 --detach
@@ -238,6 +242,8 @@ hermes superagent comment S-0001 --body-file review.md
 hermes superagent doctor
 ```
 
+`hermes superagent towns` prints the same hierarchy the desktop town view draws: each root town (newest activity first) with its worker and worker-status counts, then one indented line per worker showing the plot slot, session id, status, elapsed time and any linked PR number and URL. The default limit is 50 (`--limit`, clamped to 1–200); archived towns and workers are hidden unless `--show-archived` is passed, and orphaned workers (whose parent town row is gone) are counted at the end.
+
 | Command | Behaviour |
 | :--- | :--- |
 | `hermes superagent status` | Mode, running/queued counts, the "Needs you" list and recent tickets. |
@@ -247,6 +253,7 @@ hermes superagent doctor
 | `hermes superagent show <id>` | A ticket's full detail, or a chat session (`S-…`) with messages and events. |
 | `hermes superagent chat "<prompt>"` | Start a headless chat turn (blocking; `--detach` returns immediately). `--preset <name>` resolves a named preset; `--model`/`--provider` still win. `--reasoning <level>` selects `none…ultra` for this session. |
 | `hermes superagent sessions` / `stop <id>` | List chat sessions (archived ones are hidden; `--all` shows them) / cancel a queued or running turn. |
+| `hermes superagent towns` | Router towns with their worker houses: worker/status counts, then slot, session id, status, elapsed time and linked PR per worker. `--limit` (1-200), `--show-archived`, `--json`. |
 | `hermes superagent diff <id>` | `git status` + `git diff --stat` + the (capped) patch for the session's repository; `--json` returns the full dict. `1` for an unknown session or one without a repository. |
 | `hermes superagent comment <id> [--body TEXT \| --body-file PATH]` | Post one summary comment to the session's pull request and print its URL. `1` without a PR/token or when GitHub refuses, `2` for bad usage. |
 | `hermes superagent models` | Default model/provider plus the preset section (`name -> provider: model`). |
@@ -565,7 +572,7 @@ Run the test suite from the repository root:
 pytest -q
 ```
 
-The suite is hermetic (538 tests): `tests/test_runner.py` and `tests/test_hardening.py` replace `Popen` with a fake, so no real `hermes` process is spawned. `tests/test_hardening.py` covers repo containment (missing/file/dot-dot/symlink escape), secret redaction, the 20k/2k caps, every `POST /ask` triage branch, and the runaway watchdog. `tests/test_towns.py` covers the parent/worker migration, randomised and deterministic slot allocation, parent rejection, orphan/archive behaviour, real spawning and the 26-file town asset allowlist; `tests/test_petdex_assets.py` covers the bundled Petdex catalog, 4× Pillow downsampling (`1536×1872 → 384×468`), domain allowlist enforcement, offline fallback and `/town/pets` + `/town/pets/reroll`; `tests/test_reasoning.py` covers the thinking ladder from storage to `--reasoning`; `tests/test_towns_render.py` runs the Node render probe (`tests/towns_render_probe.mjs`) for the town scene, cobblestone roads/plaza, Petdex sprites, waypoint simulation, speech bubbles, switcher, house dialog, settings drawer and one-shot construction. The GitHub and tool tests (`tests/test_github.py`, `tests/test_tools.py`, `tests/test_watcher.py`, `tests/test_github_api.py`, `tests/test_diff.py`, `tests/test_handoff_api.py`, `tests/test_cli_handoff.py`) cover worktree creation, `commit_and_push_session`, `create_pr`, `create_review` (including 422 self-approval fallback), and the Router/Worker coordination tools (`superagent_town_status`, `superagent_message_worker`, `superagent_pr_create`, `superagent_pr_review`) completely offline.
+The suite is hermetic (545 tests): `tests/test_runner.py` and `tests/test_hardening.py` replace `Popen` with a fake, so no real `hermes` process is spawned. `tests/test_hardening.py` covers repo containment (missing/file/dot-dot/symlink escape), secret redaction, the 20k/2k caps, every `POST /ask` triage branch, and the runaway watchdog. `tests/test_towns.py` covers the parent/worker migration, randomised and deterministic slot allocation, parent rejection, orphan/archive behaviour, real spawning and the 26-file town asset allowlist; `tests/test_petdex_assets.py` covers the bundled Petdex catalog, 4× Pillow downsampling (`1536×1872 → 384×468`), domain allowlist enforcement, offline fallback and `/town/pets` + `/town/pets/reroll`; `tests/test_reasoning.py` covers the thinking ladder from storage to `--reasoning`; `tests/test_towns_render.py` runs the Node render probe (`tests/towns_render_probe.mjs`) for the town scene, cobblestone roads/plaza, Petdex sprites, waypoint simulation, speech bubbles, switcher, house dialog, settings drawer and one-shot construction. The GitHub and tool tests (`tests/test_github.py`, `tests/test_tools.py`, `tests/test_watcher.py`, `tests/test_github_api.py`, `tests/test_diff.py`, `tests/test_handoff_api.py`, `tests/test_cli_handoff.py`) cover worktree creation, `commit_and_push_session`, `create_pr`, `create_review` (including 422 self-approval fallback), and the Router/Worker coordination tools (`superagent_town_status`, `superagent_message_worker`, `superagent_pr_create`, `superagent_pr_review`) completely offline.
 
 Validate the plugin manifest and its registrations before shipping:
 
