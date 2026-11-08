@@ -1601,11 +1601,11 @@ function Transcript({ session, optimistic }) {
           stickRef.current = atBottom
           setAway(!atBottom)
         },
-        // Viewport cap as well as flex: on hosts with no definite height
-        // (full page, tile) flex-1 alone would let the column grow with the
-        // chat. A max-height can only limit, never force growth, so the
-        // fixed dialog is unaffected while unbounded hosts scroll instead.
-        className: cn('flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto superagent-pixel-scroll max-h-[min(60vh,32rem)] px-1 py-1'),
+        // Viewport-proportional cap on top of flex: on hosts with no definite
+        // height flex-1 alone would let the column grow with the chat. A
+        // max-height can only limit, never force growth, so the fixed dialog
+        // is unaffected while unbounded hosts scroll instead.
+        className: cn('flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto superagent-pixel-scroll max-h-[56vh] px-1 py-1'),
         children: body,
       }),
       away
@@ -3379,7 +3379,7 @@ function ChatCenter(props) {
 
   if (!session) {
     return jsxs('div', {
-      className: 'mx-auto flex min-h-0 min-w-0 w-full max-w-[560px] flex-1 flex-col gap-3',
+      className: 'mx-auto flex min-h-0 min-w-0 w-[52vw] flex-1 flex-col gap-3',
       children: [
         banner ? jsx('div', { key: 'banner', className: 'shrink-0', children: banner }) : null,
         jsx('div', {
@@ -3414,7 +3414,7 @@ function ChatCenter(props) {
     : null
 
   return jsxs('div', {
-    className: 'mx-auto flex min-h-0 min-w-0 w-full max-w-[560px] flex-1 flex-col gap-3',
+    className: 'mx-auto flex min-h-0 min-w-0 w-[52vw] flex-1 flex-col gap-3',
     children: [
       jsx(ChatHeader, {
         key: 'head', session,
@@ -3457,7 +3457,7 @@ function ChatTile({ sessionId }) {
     return jsx('div', { className: 'p-4 text-xs text-(--ui-text-tertiary)', children: 'Loading chat…' })
   }
   return jsxs('div', {
-    className: 'mx-auto flex h-full min-h-0 w-full max-w-[560px] flex-col gap-2 p-3',
+    className: 'mx-auto flex h-full min-h-0 w-[52vw] flex-col gap-2 p-3',
     children: [
       jsx(ChatHeader, { key: 'head', session, tile: true }),
       jsx(Transcript, { key: 'transcript', session }),
@@ -5320,10 +5320,10 @@ function TownChatDialog({
       'aria-labelledby': 'superagent-town-dialog-title',
       ref: panelRef,
       tabIndex: -1,
-      // Fixed compact popup: 460px wide, 560px tall at most, transcript
-      // scrolls inside (Transcript owns overflow-y-auto) so a long chat
-      // never covers the town.
-      className: cn('superagent-pixel superagent-pixel-panel flex h-[min(78vh,560px)] w-[min(92vw,460px)] flex-col overflow-hidden rounded-lg',
+      // Fixed viewport-proportional popup: 54% of the viewport wide, 78%
+      // tall. No content-driven sizing anywhere, so a long chat can never
+      // push the frame past the viewport; the transcript scrolls inside.
+      className: cn('superagent-pixel superagent-pixel-panel flex h-[78vh] w-[54vw] flex-col overflow-hidden rounded-lg',
         'border border-(--ui-stroke-secondary) shadow-xl focus:outline-none'),
       style: { backgroundColor: 'var(--card, var(--background, #1c1c1e))', color: 'var(--foreground, #f5f5f5)' },
       children: [
@@ -5450,9 +5450,9 @@ function TownModal({ title, subtitle, onClose, children }) {
     children: jsxs('section', {
       role: 'dialog', 'aria-modal': 'true', 'aria-label': title,
       ref: panelRef, tabIndex: -1,
-      // Fixed compact popup like the chat dialog: 440px wide, 540px tall
-      // at most, body scrolls inside.
-      className: cn('superagent-pixel superagent-pixel-panel superagent-pixel-scroll flex h-[min(78vh,540px)] w-[min(92vw,440px)] flex-col gap-2 overflow-y-auto rounded-lg border',
+      // Fixed viewport-proportional popup like the chat dialog: 40% of the
+      // viewport wide, 70% tall. Body scrolls inside.
+      className: cn('superagent-pixel superagent-pixel-panel superagent-pixel-scroll flex h-[70vh] w-[40vw] flex-col gap-2 overflow-y-auto rounded-lg border',
         'border-(--ui-stroke-secondary) p-3 shadow-xl focus:outline-none'),
       style: { backgroundColor: 'var(--card, var(--background, #1c1c1e))', color: 'var(--foreground, #f5f5f5)' },
       children: [
