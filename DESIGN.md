@@ -134,7 +134,7 @@ Autonomy must be earned on each repository before it is granted.
 
 ---
 
-## 6. The v0.4 Chat Workspace
+## 6. The Chat Workspace and Towns
 
 ### Sessions
 
@@ -142,17 +142,45 @@ A chat session is a durable conversation, not a ticket. `ChatStore.create_sessio
 
 Statuses are deliberately narrow: `queued` (waiting for a worker slot), `running`, `review` (a turn finished and a human should look), `observed` (recorded GitHub request), `failed`, `cancelled`. `idle` is defined in the status enum as a "finished, waiting for the next message" state, but the runner does not currently emit it: every successful turn ends in `review`, which also accepts a follow-up. Treat `idle` as reserved until the runner starts using it.
 
+### Towns
+
+A town is not a second store. It is a read model over `chat_sessions`:
+
+- `parent_session_id IS NULL` is a root and therefore a town. A worker points at
+  one root; the hierarchy is deliberately one level, so workers cannot create
+  towns or nested trees.
+- `town_slot` is allocated under the same `BEGIN IMMEDIATE` as the child insert
+  and never recomputed. The desktop maps slot `n` to a fixed plot, so polling,
+  switching or reloading cannot move a house.
+- `GET /towns` groups roots with their workers, reports status counts and an
+  `orphaned` list for workers whose root was deleted. A worker is never promoted
+  to a town; an orphan gets no phantom building. `/chats` stays flat, so every
+  pre-town consumer keeps working.
+- The central house is the Router. `ChatStore` is the only writer of the
+  parent/slot relationship; `superagent_spawn` uses it and the shared
+  `sa_runtime.Runner`, so a router cannot exceed the same worker cap as the UI.
+- Construction is a client event, not a render effect: a persisted known-worker
+  baseline distinguishes a genuinely new id from a poll. The animation is CSS,
+  one-shot, and skipped under reduced motion.
+- Clicking a house opens the existing `ChatHeader`/`Transcript`/`Composer` in a
+  dialog. It is deliberately a reuse, not a second chat implementation: stop,
+  retry, follow-up, model/thinking changes, diff/export and PR comment all go
+  through the same mutations. Closing the dialog never stops the worker.
+- Town art is served from a code allowlist (`GET /town/assets`) because the
+  desktop plugin has no static-file mount. The sprites are vendored with their
+  own licences; see `assets/town/ATTRIBUTION.md`.
+
 ### Live grid
 
-Every queued/running/review/failed chat is a card in the right-hand **Live workers** column: status, model, a client-side elapsed timer, tokens, and a three-event mini-feed. A card is a projection of the same `/chats` list, not a separate query, so the grid costs one poll. The rail filters All / Live / Review client-side without unmounting the open transcript; list polling is 2 s while anything runs and 8 s when quiet.
+Every queued/running/review/failed chat still appears as a live-worker card inside the house dialog: status, model, a client-side elapsed timer, tokens, and a three-event mini-feed. The card is a projection of the same `/chats` list, not a separate query, so the grid costs one poll. List polling is 2 s while anything runs and 8 s when quiet.
 
 ### Models, presets and settings
 
-- A session owns `model`/`provider`; `POST /chats/{id}/model` changes them for future turns and is rejected with 409 while a turn is queued/running.
+- A session owns `model`/`provider`/`reasoning_effort`; `POST /chats/{id}/model` changes them for future turns and is rejected with 409 while a turn is queued/running. `reasoning_effort` accepts Hermes' full ladder, including `xhigh`, `max` and `ultra`, and the Runner passes it as `--reasoning`.
 - Presets are named `(model, provider)` pairs normalised by one function (`sa_settings.normalize_presets`) for `config.yaml`, `settings.json`, the HTTP API and the CLI. Three spellings are accepted; the cap is 12 with unique names.
 - An empty preset list means **no presets**, not a built-in catalogue. `GET /models` returns `presets: []` and the composer hides the chip row: offering a model the machine may have no credentials for guarantees a failed worker.
-- `POST /chats` resolves `preset` after explicit `model`/`provider` and before defaults; a `preset` event records the choice.
-- The ⚙ Settings panel edits mode, repository, default model/provider, presets, `max_workers`, `worker_yolo` and `chat_max_turns` through `GET/POST /settings`. The panel, CLI and backend agree because they read the same merged settings.
+- `POST /chats` resolves `preset` after explicit `model`/`provider` and before defaults; a `preset` event records the choice. A worker inherits its router's model, provider, repository and thinking level.
+- The Settings panel edits mode, repository, default model/provider/thinking, presets, `max_workers`, `worker_yolo` and `chat_max_turns` through `GET/POST /settings`. The panel, CLI and backend agree because they read the same merged settings.
 
 ### Completion toasts and the status chip
 
@@ -222,7 +250,7 @@ Every user-facing surface filters tickets through `NEEDS_ATTENTION = ("observed"
 
 - **CLI & slash (`sa_cli.py`):** `render_status()` prints the `"Needs you:"` section first, or `"Nothing needs you."`; ignored and routine `queued`/`running` noise never clutter it. `run <id>` promotes to `queued` (the ticket worker starts on the next agent turn); `show <id>` renders the full ticket plus audit history, or a chat transcript.
 - **Automation blueprint (`__init__.py`):** `Superagent watch` calls `superagent_tick(wait=true)` and reports only `blocked`, `review`, `failed` or `observed` — otherwise one line: `'Superagent: nothing needs you.'`
-- **Desktop page:** the chat rail and live grid answer "what is running / what needs me"; the diff and comment controls appear only on a finished session with a repository/PR. The chip shows only running and waiting counts.
+- **Desktop page:** the town scene answers "what is running / what needs me" at a glance; each house carries a text status badge and the dialog holds the diff/comment controls that only make sense on a finished session with a repository/PR. The chip shows only running and waiting counts.
 - **Desktop side pane:** latest chats, then ticket attention, then recent tickets.
 - **Completion toasts:** exactly one notification per completed/failed turn, never a replay on page load.
 

@@ -162,7 +162,7 @@ const quiet = render(h(plugin.TownScene, {
 assert.doesNotMatch(quiet, /superagent-town-build/)
 
 assert.deepEqual(plugin.townHousePosition(0), plugin.townHousePosition(0))
-assert.deepEqual(plugin.townHousePosition(3), { left: 88, top: 62, scale: 1 })
+assert.deepEqual(plugin.townHousePosition(3), { left: 90, top: 50, scale: 0.72 })
 assert.ok(plugin.townHousePosition(12).left >= 0)
 
 const switcher = render(h(plugin.TownSwitcher, {

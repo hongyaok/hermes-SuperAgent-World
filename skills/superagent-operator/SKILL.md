@@ -1,7 +1,7 @@
 ---
 name: superagent-operator
 description: Operate Superagent chats, workers and GitHub watch.
-version: 0.4.0
+version: 0.5.1
 platforms: [linux, macos, windows]
 metadata:
   hermes:
@@ -15,8 +15,10 @@ Use this guide when operating, triaging, or tuning the `superagent` plugin in He
 `superagent` has two execution paths that share one SQLite database and one
 attention budget:
 
-- **Chat sessions** — the desktop **Superagent** tab starts one headless
-  `hermes chat` process per turn. You watch the transcript, resume it, stop it.
+- **Chat sessions** — the desktop **Superagent** page draws a town: one root
+  chat is the Router house, every worker it spawns is a house with its own
+  transcript. The page starts one headless `hermes chat` process per turn; you
+  watch, resume, stop, or open any house's dialog.
 - **Tickets** — a deterministic, zero-token router turns accepted
   requests into tickets; worker subagents run inside a Hermes agent turn.
 
@@ -32,7 +34,7 @@ possible.**
 
 | Surface | What it is for |
 | :--- | :--- |
-| Desktop **Superagent** tab (`/superagent`) | Chat rail, transcript, composer, live-workers grid, ⚙ Settings, GitHub panel, diff/comment. |
+| Desktop **Superagent** page (`/superagent`) | Town scene (Router + worker houses), house chat dialog, town switcher, Sessions drawer, Settings, GitHub, diff/comment. |
 | Status-bar chip + side pane | `▶ N` running chats and `◆ M` chats in `review`/`failed`; ticket attention only as a fallback. |
 | Agent tools | `superagent_ask`, `superagent_tick`, `superagent_status`, `superagent_run` inside a chat or cron turn. |
 | CLI | `hermes superagent …` for status, chat, sessions, presets, GitHub, diff and comment. |
@@ -66,20 +68,27 @@ router's real traffic.
 
 ---
 
-## 3. Run a Chat Session
+## 3. Run a Chat Town
 
 The chat path is the normal way to ask for work; it needs no ticket and no
 GitHub connection.
 
-1. Open the **Superagent** tab.
-2. Composer: pick a model (or a preset chip), optionally set a repo path.
-3. Describe the work and press Enter. The first turn creates a session
-   (`S-0001`) and launches a headless worker.
-4. Watch it in the **Live workers** grid or the transcript. Lifecycle:
-   `queued` → `running` → `review` (or `failed` / `cancelled`).
-   `review` means the work is on disk for you to inspect.
-5. Reply to continue. A follow-up resumes the same Hermes session when its id
-   is known; **Stop** cancels a queued or running turn.
+1. Open the **Superagent** page. A town starts with one root **Router** chat;
+   **New town** opens the composer for it.
+2. Pick a model and thinking level (or a preset chip), optionally set a repo
+   path, and describe the work. The first turn creates `S-0001` and launches a
+   headless worker.
+3. When the Router needs parallel work it calls `superagent_spawn` with
+   `parent_session_id=S-0001`; each child gets one house and one person. Ask for
+   the split explicitly if the Router does not do it, e.g. "spawn two workers:
+   one fixes the parser, one adds a test".
+4. Click the Router or any worker house to open its transcript/composer dialog.
+   **Stop** cancels that session; a follow-up resumes its Hermes session. The
+   dialog has **Retry** after `failed`/`cancelled`, model/thinking changes, diff,
+   export and PR comment. Closing it never stops the worker.
+5. Switch towns with the selector or left/right arrows; switching only changes
+   the view, never a session. **Sessions** has search, rename, pin, archive and
+   delete for rows that are archived or orphaned.
 6. A turn that ends in `review` or `failed` raises one desktop toast
    (`<title> finished` / `<title> failed`) while the page is open. Opening the
    page does not replay old completions, and `cancelled` is silent.
@@ -111,6 +120,11 @@ hermes superagent stop S-0001
 
 - **Default model** (`default_model` / `default_provider`) applies to new chats
   when a request or preset does not pick one. Empty means the CLI chooses.
+- **Thinking level** (`default_reasoning_effort`) applies to new chats and is
+  inherited by spawned workers. The ladder is `none`, `minimal`, `low`,
+  `medium`, `high`, `xhigh`, `max`, `ultra`; `xhigh`/`max`/`ultra` are above
+  high. Empty means the model/CLI default. The model picker edits the same
+  level, and the Runner passes it as `--reasoning`.
 - **Presets** are named `(model, provider)` pairs. Accepted spellings are
   `name=provider:model`, `strong=model`, plain `model`, or
   `{name, model, provider}` objects. At most 12; names unique; every preset
@@ -252,6 +266,7 @@ error, `2` usage.
 | `mode` | `observe` | `off` / `observe` / `auto` for ticket work. |
 | `repo_path` | `""` | Repository every worker runs inside. |
 | `default_model` / `default_provider` | `""` | New-chat default; empty = CLI choice. |
+| `default_reasoning_effort` | `""` | New-chat thinking level (`none…ultra`); empty = model/CLI default. |
 | `model_presets` | `[]` | Composer chips; empty = no chips. |
 | `max_workers` | `2` | Parallel chat/ticket workers. |
 | `chat_max_turns` | `120` | Agent turns per headless chat worker. |

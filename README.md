@@ -19,9 +19,9 @@ It separates **routing** from **execution**, and keeps every result behind one r
 
 ## What you get
 
-- **A real chat workspace** — a session rail, a live transcript that interleaves messages with tool events, and a composer with model picker, optional repo path and stop button. Follow-ups resume the same Hermes session.
-- **Live workers** — every queued, running, review or failed chat as a card with status, model, elapsed timer, tokens and a three-event mini-feed, so parallel work fits on one screen.
-- **Model presets and defaults** — named `(model, provider)` pairs saved from the ⚙ Settings panel, CLI or `config.yaml`, offered as composer chips; `GET /models` reports only what you configured plus your default model.
+- **A town, not a dashboard** — the page draws one pixel-art town per root chat: a central Router house, one house and person per real worker, stable plots and text status badges. Clicking a house opens that session's transcript and composer in a dialog.
+- **Real workers, not decorations** — a Router can call `superagent_spawn` to create and launch child sessions; the town is a projection of the chat rows, so a failed or vanished session cannot leave a phantom building.
+- **Model presets, thinking levels and defaults** — named `(model, provider)` pairs saved from the Settings panel, CLI or `config.yaml`, offered as composer chips; the picker and Settings expose `none … high, xhigh, max, ultra`, and the chosen level reaches the headless turn as `--reasoning`.
 - **Completion toasts** — one desktop notification per turn that ends in `review` or `failed` (no replay on page load, silent for cancelled turns).
 - **A usage report** — the header's **Usage** drawer shows chats, turns, tokens, review/failed counts, a 14-day token bar chart and the per-model split, all from one read-only `GET /usage` (`hermes superagent usage`).
 - **GitHub connect & PR watch** — one repository, an allow-list, `observe` or `auto` mode, open-PR list with **Work on this PR**, and one isolated `git worktree` per pull request.
@@ -35,7 +35,7 @@ It separates **routing** from **execution**, and keeps every result behind one r
 - A **deterministic, zero-token router** (`sa_assessor.py`) classifies each request (`accept`, `ignore`, `needs_human`).
 - **SQLite** (`<HERMES_HOME>/plugin-data/superagent/superagent.db`) persists tickets (`T-0001`, `T-0002`, ...), event history, source deduplication, and polling cursors, plus the chat tables (sessions, messages, events) and GitHub dedupe.
 - **Ticket worker subagents** launched via `ctx.subagent_lifecycle` perform the coding work inside your repository and leave uncommitted changes in the working tree for human review (`review` state).
-- **Headless chat workers** — the desktop Superagent tab starts one `hermes chat` process per turn, streams its JSON output into the session transcript, and lets you resume, watch or stop it. Chat workers follow the same rule as ticket workers: changes stay uncommitted for review.
+- **Headless chat workers** — the desktop Superagent tab starts one `hermes chat` process per turn, streams its JSON output into the session transcript, and lets you resume, watch or stop it. A root/Router session gets the plugin toolset, so it can call `superagent_spawn` to create real child sessions; workers cannot spawn further workers. Chat workers follow the same rule as ticket workers: changes stay uncommitted for review.
 - **GitHub PR watch** — connect a repository, and pull-request comments that mention the agent become sessions. `auto` mode checks each PR out as an isolated `git worktree` and launches a worker on it; `observe` (the default) only records the request.
 - **Session handoff** — a finished session can show exactly what the worker changed (`git status`/`--stat`/patch, capped) and post one human-reviewed summary comment back to its pull request. Nothing is committed, pushed or merged.
 
@@ -301,23 +301,61 @@ Each session row contains `id`, `status`, `source`, `requester`, `request` (160-
 
 ---
 
-### 7. Desktop chat workspace
+### 7. Desktop town workspace
 
-The Superagent page (`/superagent`) is chat-first. Everything in the tab is backed by `/chats` and `/models`; ticket state is shown alongside but a chat turn never creates a ticket.
+The Superagent page (`/superagent`) is town-first. One **root** chat is one town;
+the workers it spawns are houses in that town. Everything is backed by `/towns`
+and `/chats`, so the scene cannot invent activity that has no session row.
 
-- **Chat rail (left)** — the newest chats, each with status, model, age (or elapsed time while a turn runs). Selecting a row opens its transcript; **New chat** clears the composer. The search box asks the server, matching titles, opening prompts and every stored message (250 ms debounce, stale responses discarded) and shows the matching line under the title; clearing it restores the normal board immediately.
-- **Chat housekeeping** — each row grows a `⋯` on hover/focus: **Pin to top** / **Unpin** keeps a chat above the timeline (display-only, the row keeps its real timestamps), **Rename** edits the title inline (Enter saves, Esc cancels, blur saves a change), **Archive** / **Unarchive** files a chat away, and **Delete** asks once (the app's confirm dialog) before removing the row and its transcript. Archived rows are dimmed and tagged, a compact **Show archived** toggle in the rail footer switches to `?archived=all` and is remembered, and an archived chat's header carries an **Archived** pill while its composer is read-only until it is unarchived. Nothing here touches files, worktrees or pull requests.
-- **Transcript (centre)** — the session prompt followed by `chat_messages` and `chat_events` merged in order, so assistant text interleaves with tool calls, errors and result lines. A failed turn shows the stored error.
-- **Composer** — a model picker fed by `/models` (presets plus **Default model**), an optional repo path (defaults to the configured repo) and Enter-to-send / Shift+Enter newline. While a turn is queued or running the composer is disabled and **Stop** cancels the turn; an archived chat is read-only (`Archived — unarchive to continue`).
-- **Chat header** — status, model/provider, tokens, duration, and **Open in Hermes** when `hermes_session_id` is known. A `failed` session puts its stored `error` in the header (prefixed `error:`) instead of leaving the status pill to imply it. A `failed` or `cancelled` chat also shows **Retry**, which re-runs its last prompt in place (`POST /chats/{id}/retry`) rather than making you retype it. The `⋯` menu offers **Export as Markdown**, which saves the transcript (`GET /chats/{id}/export`) as `superagent-<id>.md`.
-- **Live workers (right)** — every queued or running chat as a card, so parallel workers stay visible without opening each chat. A failed card with no recent event feed shows the first line of the stored error.
-- **Completion toasts** — when a chat moves from `queued`/`running` to `review` or `failed` while the page is mounted, one `host.notify` toast says `<title> finished` (`info`) or `<title> failed` (`error`). The first poll only seeds the status map, so opening the page never replays old completions; `cancelled` is silent.
-- **Keyboard** — `/` focuses the rail's search, `j`/`k` move to the next/previous chat **in the list you can see** (search results and the Live/Review chips decide the order), `n` starts a new chat, `?` opens the shortcut sheet, and `Esc` closes a drawer or the sheet. Every key is ignored while a field has focus, so typing a prompt never navigates.
-- **Usage drawer** — the ▤ header button opens a read-only report: five figures (chats, turns, tokens, review, failed), a 14-day token bar chart with per-day tooltips, and the per-model split. It loads once per open (`staleTime` 30 s) and never polls.
-- **Status-bar chip** — speaks for chats: `▶ N` while N run and `◆ M` when M sessions sit in `review`/`failed`. Ticket attention is used only while the chats query has no data at all (backend disabled or first paint).
-- **Polling** — the rail refreshes from `/chats` on a timer (faster while anything is running); the open chat refreshes from `/chats/{id}` at the same time. No WebSocket is required.
+- **Town scene** — the centre is the Router house and its person. Every worker
+  gets exactly one house and one person, placed by the `town_slot` allocated
+  when the child row was created. The plot list is fixed, so polling, a town
+  switch or a reload never moves a house. Houses carry text status badges
+  (`queued`, `running`, `review`, `failed`, `cancelled`), not just animation.
+- **One-shot construction** — a house animates only when its id appears after
+  the initial snapshot; the known-worker ids are persisted per town, so a
+  refresh does not replay every build. `prefers-reduced-motion` skips the
+  animation and its timer.
+- **Town switcher** — a compact select, previous/next buttons, **New town** and
+  **Sessions**. Switching changes only what is displayed: no session is
+  stopped, archived or modified. Arrow-left/right do the same from the page
+  when focus is not in a field; the selected town id is persisted.
+- **House dialog** — clicking any house opens that session's transcript and
+  composer in an accessible modal. It reuses the existing `ChatHeader`,
+  `Transcript`, live-worker strip and `Composer`, so follow-ups, stop, retry,
+  model/thinking changes, review/export actions and PR comments behave exactly
+  as they do in the chat workspace. Escape/backdrop close it, Tab is trapped,
+  focus returns to the house, and a session-id guard prevents a previous
+  session's transcript from flashing while the next one loads. Closing never
+  stops the worker.
+- **House actions** — the dialog's `⋯` menu renames, pins, archives and opens
+  the Sessions drawer. The drawer is the complete inventory: search, rename,
+  pin, archive/unarchive and delete still work for rows that have no town or
+  house (orphaned workers, archived chats, failed launches).
+- **Settings** — an opaque drawer with default model, default thinking,
+  presets, `max_workers`, `worker_yolo` and `chat_max_turns`. It sits on the
+  `--card` surface over a dimmed backdrop, traps Tab and is 420 px wide.
+- **Header and status** — the header keeps GitHub, Usage and the labelled
+  Settings action; completion toasts and the status-bar chip still speak for
+  chats. An orphan count opens the Sessions drawer instead of drawing a
+  phantom town.
+- **Transcript and composer** — the prompt is the first bubble, assistant text
+  interleaves with tool events, a failed turn shows its stored error, and the
+  composer is disabled while a turn is queued/running. Archived chats are
+  read-only until unarchived.
+- **Assets** — the vendored PNGs are served by the plugin's own
+  `GET /town/assets` allowlist (data-URL manifest + binary route), so the
+  installed plugin never hotlinks GitHub. Attribution and licences are in
+  `assets/town/ATTRIBUTION.md`.
+- **Polling** — the town uses the existing chat cadence (2 s while anything
+  runs, 8 s when quiet); opening a town does not start a second poll loop.
+  Sprite animation is CSS only.
 
-A chat turn's lifecycle is `queued` → `running` → `review` (or `failed` / `cancelled`). `review` means the worker finished and its changes are waiting in the working tree; sending another message resumes the same Hermes session when `hermes_session_id` is known.
+A chat turn's lifecycle is `queued` → `running` → `review` (or `failed` /
+`cancelled`). `review` means the worker finished and its changes are waiting in
+the working tree; sending another message resumes the same Hermes session when
+`hermes_session_id` is known. Root sessions get the `superagent` toolset so
+they can call `superagent_spawn`; worker sessions do not.
 
 ---
 
@@ -325,19 +363,22 @@ A chat turn's lifecycle is `queued` → `running` → `review` (or `failed` / `c
 
 | Method | Path | Behaviour |
 | :--- | :--- | :--- |
-| `GET` | `/models` | `{default_model, default_provider, models, presets}` from settings/env. `presets` is `[{name, model, provider}]` and is `[]` when none are configured; `models` is the flat list of preset models in order plus the configured `default_model`, never a hardcoded catalogue. |
+| `GET` | `/models` | `{default_model, default_provider, default_reasoning_effort, models, presets}` from settings/env. `presets` is `[{name, model, provider}]` and is `[]` when none are configured; `models` is the flat list of preset models in order plus the configured `default_model`, never a hardcoded catalogue. |
+| `GET` | `/towns?limit=200&archived=hide` | `{ok, towns, towns_count, worker_count, running, counts, orphaned, orphaned_count, archived_count}`. A town is a root (`parent_session_id` NULL) with its workers; a worker is never returned as a town. Ordering is pinned roots first, then newest activity. Workers carry their allocated `town_slot`. |
+| `GET` | `/town/assets` | `{ok, assets}` — a data-URL manifest of the allowlisted town PNGs. No filesystem path is accepted. |
+| `GET` | `/town/assets/{name}` | The PNG bytes with `image/png` and a one-day cache; an unknown name is `404`. Only the explicit allowlist can be served. |
 | `GET` | `/usage?days=14` | `{ok, db_exists, days, since, totals, series, models}` — chats and turns created in the window, summed `tokens`/`duration_ms`, status `counts`, one `{date, sessions, tokens}` bucket per **local** day (filled to `days`), and `{model, provider, sessions, tokens}` rows busiest first. `days` is clamped to `1–90`. |
-| `GET` | `/settings` | Merged, public settings (`mode`, `repo_path`, defaults, normalised `model_presets`, worker limits, GitHub watch fields) plus `github_token_set`; never the token. |
-| `POST` | `/settings` | Validate and save `mode`, `repo_path`, `default_model`, `default_provider`, `model_presets`, `max_workers` (1–8), `worker_yolo`, `chat_max_turns` (1–500); unknown keys and out-of-range values are `400`. Drops the Runner singleton so the next turn uses the new values. Returns `{ok, settings}`. |
+| `GET` | `/settings` | Merged, public settings (`mode`, `repo_path`, defaults including `default_reasoning_effort`, normalised `model_presets`, worker limits, GitHub watch fields) plus `github_token_set`; never the token. |
+| `POST` | `/settings` | Validate and save `mode`, `repo_path`, `default_model`, `default_provider`, `default_reasoning_effort`, `model_presets`, `max_workers` (1–8), `worker_yolo`, `chat_max_turns` (1–500); unknown keys and out-of-range values are `400`. Drops the Runner singleton so the next turn uses the new values. Returns `{ok, settings}`. |
 | `GET` | `/chats?limit=50&q=` | `{db_exists, sessions, counts, running, archived_count}`; also runs the runaway watchdog before answering. An optional `archived` query takes `hide` (default: no archived rows), `only` or `all`; an unknown value is `400`. An optional `q` searches titles, prompts and every stored message instead of listing, adding `match_field` (`title`/`prompt`/`message`) and `match_snippet` (≤160 chars) per row; a term over 200 chars is `400`. `counts` describe the visible board, not the hit list. |
-| `POST` | `/chats` | Validate, create and launch a chat. Optional `preset` selects a named model (explicit `model`/`provider` still win; unknown preset is `400` listing the available names) and records a `preset` event. `400` on an empty/oversized prompt or an invalid repo; `200 {ok:false}` when the worker cannot start (the session is stored as `failed`). |
+| `POST` | `/chats` | Validate, create and launch a chat. Optional `preset` selects a named model (explicit `model`/`provider` still win; unknown preset is `400` listing the available names) and records a `preset` event. `parent_session_id` creates a real worker under a root (one level, known/root parent only); a worker inherits the router's model, provider, repository and `reasoning_effort`. `reasoning_effort` accepts `none…ultra`. `400` on an empty/oversized prompt or an invalid repo; `200 {ok:false}` when the worker cannot start (the session is stored as `failed`). |
 | `PATCH` | `/chats/{id}` | Rename: `{title}` is trimmed, whitespace-collapsed and capped at 200 chars. `400` empty/oversized/non-string, `404` unknown id. Returns `{ok, session}`; allowed while a turn runs. |
 | `POST` | `/chats/{id}/pin` | `{pinned?: true}` pins a chat above the timeline; `{pinned: false}` releases it. Display-only: allowed while a turn runs, never touches `updated_at`, so unpinning returns the row to its real place. `404` unknown. Returns `{ok, session}`. |
 | `POST` | `/chats/{id}/archive` | `{archived?: true}` archives (stamps `archived_at` once, leaves `updated_at` alone) and `{archived: false}` restores. `409` while queued/running, `404` unknown. Returns `{ok, session}`. |
 | `DELETE` | `/chats/{id}` | Delete the row, its `chat_messages` and its `chat_events` in one transaction (`gh_seen` is kept so a GitHub comment is not replayed). `409` while queued/running, `404` unknown. Never deletes files. Returns `{ok, id}`. |
 | `GET` | `/chats/{id}` | Session with `messages` and `events`; `404` for an unknown id. |
 | `POST` | `/chats/{id}/messages` | Append the user message and resume the Hermes session. `409` while a turn is queued/running; `400` when the stored repo is no longer valid; with no `hermes_session_id` a fresh chat is created and `previous_session_id` is returned. |
-| `POST` | `/chats/{id}/model` | Set `{model, provider}` for future turns. `400` when both are empty, `409` while queued/running, `404` for an unknown id. |
+| `POST` | `/chats/{id}/model` | Set `{model, provider, reasoning_effort}` for future turns. Any one may be supplied; model/provider still write as a pair (a provider-only change clears the pinned model), while an effort-only change leaves the model alone. `400` when all three are absent or the level is unknown, `409` while queued/running, `404` for an unknown id. |
 | `POST` | `/chats/{id}/stop` | Cancel a queued/running turn; `409` when nothing is running. |
 | `POST` | `/chats/{id}/retry` | Re-run the last stored user prompt of a `failed`/`cancelled` chat, resuming its Hermes session when one exists. `409` while a turn is live or for any other status (a `review` chat is a result to read, not to repeat), `400` with no stored user message, `404` unknown. Clears the failed attempt's `error`/`tokens`/`duration_ms` and records one `retry` event; it never appends a second copy of the prompt. |
 
@@ -476,6 +517,7 @@ hermes superagent comment S-0001 --body-file review.md
 - **`max_workers` is an in-process semaphore.** One gateway process is assumed; two gateways against the same database would each allow their own workers.
 - **Ticket workers still need an agent turn.** CLI, REST and slash commands only queue; `superagent_tick` / `superagent_run` in a chat or the **Superagent watch** cron launch them.
 - **The chat UI is poll-based**, not token-streaming, and a transcript is read back capped at 200 messages and 50 events per request.
+- **The town art is third-party.** Buildings/trees/props are MIT-licensed derivatives of Hermes Town; the grass is CC-BY-SA 3.0 and the person is CC0. See `assets/town/ATTRIBUTION.md`; the repository's root `LICENSE` covers only the plugin source.
 - **PR worktrees accumulate** under `<data_dir>/workspaces/pr-<n>`; nothing prunes them automatically.
 - **Windows UTF-8.** Persisted text is UTF-8 and subprocess/git output is decoded with replacement, so a tool emitting a legacy OEM code page can leave `�` in captured output.
 
@@ -489,11 +531,11 @@ Run the test suite from the repository root:
 pytest -q
 ```
 
-The suite is hermetic: `tests/test_runner.py` and `tests/test_hardening.py` replace `Popen` with a fake, so no real `hermes` process is spawned. `tests/test_hardening.py` covers repo containment (missing/file/dot-dot/symlink escape), secret redaction, the 20k/2k caps, every `POST /ask` triage branch, and the runaway watchdog. The GitHub tests are also offline: `tests/test_github.py` replaces the HTTP call at the `_urlopen` seam and git at the `git_runner` parameter, `tests/test_watcher.py` uses a canned client and a fake runner, and `tests/test_github_api.py` writes settings to a throwaway `HERMES_HOME` and patches the watcher/client singletons. The handoff tests use a real temporary git repository (`tests/test_diff.py` for status/stat/patch, staged changes and truncation; `tests/test_handoff_api.py` for the endpoints; `tests/test_cli_handoff.py` for `diff`/`comment`) and fake the GitHub client, so nothing reaches the network.
+The suite is hermetic: `tests/test_runner.py` and `tests/test_hardening.py` replace `Popen` with a fake, so no real `hermes` process is spawned. `tests/test_hardening.py` covers repo containment (missing/file/dot-dot/symlink escape), secret redaction, the 20k/2k caps, every `POST /ask` triage branch, and the runaway watchdog. `tests/test_towns.py` covers the parent/worker migration, stable slots, parent rejection, orphan/archive behaviour, real spawning and the asset allowlist; `tests/test_reasoning.py` covers the thinking ladder from storage to `--reasoning`; `tests/test_towns_render.py` runs the Node render probe for the town scene, switcher, house dialog, settings drawer and one-shot construction. The GitHub tests are also offline: `tests/test_github.py` replaces the HTTP call at the `_urlopen` seam and git at the `git_runner` parameter, `tests/test_watcher.py` uses a canned client and a fake runner, and `tests/test_github_api.py` writes settings to a throwaway `HERMES_HOME` and patches the watcher/client singletons. The handoff tests use a real temporary git repository (`tests/test_diff.py` for status/stat/patch, staged changes and truncation; `tests/test_handoff_api.py` for the endpoints; `tests/test_cli_handoff.py` for `diff`/`comment`) and fake the GitHub client, so nothing reaches the network.
 
 Validate the plugin manifest and its registrations before shipping:
 
 ```bash
-hermes plugins doctor .
+hermes plugins doctor --ci .
 hermes plugins validate .
 ```
