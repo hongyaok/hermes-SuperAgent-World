@@ -349,7 +349,9 @@ def test_town_assets_are_an_explicit_allowlist_with_correct_mime():
     assert manifest["ok"] is True
     assert set(manifest["assets"]) == {
         "grass.png", "house-router.png", "house-a.png", "house-b.png",
-        "house-c.png", "person.png", "tree-a.png", "tree-b.png",
+        "house-c.png", "house-d.png", "person.png", "tree-a.png",
+        "tree-b.png", "tree-c.png", "bush.png", "fountain.png",
+        "rock.png", "lamp.png",
     }
     for name, item in manifest["assets"].items():
         assert item["mime"] == "image/png"

@@ -104,7 +104,7 @@ const TOWN_PLOTS = [
   { left: 8, top: 44, scale: 0.86 },
   { left: 92, top: 44, scale: 0.86 },
 ]
-const TOWN_HOUSE_SPRITES = ['house-a.png', 'house-b.png', 'house-c.png']
+const TOWN_HOUSE_SPRITES = ['house-a.png', 'house-b.png', 'house-c.png', 'house-d.png']
 const TOWN_BUILD_MS = 900
 const TOWN_STATUS_LABEL = {
   queued: 'queued', running: 'running', review: 'review', idle: 'idle',
@@ -3799,9 +3799,10 @@ function TownHouse({ session, isRouter, slot, onOpen, houseRef, building, reduce
   const sprite = isRouter ? 'house-router.png' : townHouseSprite(session.id)
   const art = assets && assets[sprite] && assets[sprite].data_url
   const person = assets && assets['person.png'] && assets['person.png'].data_url
-  const position = isRouter ? { left: 50, top: 52, scale: 1.08 } : townHousePosition(slot)
-  const width = isRouter ? 140 : 96
-  const height = isRouter ? 133 : 98
+  const position = isRouter ? { left: 50, top: 50, scale: 1.06 } : townHousePosition(slot)
+  const width = isRouter ? 178 : 136
+  const fallbackHeight = isRouter ? 194 : 140
+  const personSize = isRouter ? 44 : 38
   const label = townStatusLabel(session.status)
   return jsxs('div', {
     'data-town-house': session.id,
@@ -3833,20 +3834,19 @@ function TownHouse({ session, isRouter, slot, onOpen, houseRef, building, reduce
                 alt: '',
                 draggable: false,
                 width,
-                height,
-                style: { imageRendering: 'pixelated' },
+                style: { imageRendering: 'pixelated', height: 'auto' },
               })
             : jsx('div', {
                 key: 'missing',
                 className: 'flex items-center justify-center rounded border border-(--ui-stroke-secondary) bg-background',
-                style: { width, height },
+                style: { width, height: fallbackHeight },
                 children: jsx('span', { className: 'px-1 text-center text-[0.625rem] text-(--ui-text-quaternary)', children: '…' }),
               }),
           jsxs('span', {
             key: 'badge',
             className: cn('absolute left-0 top-0 inline-flex items-center gap-1 rounded border',
-              'border-(--ui-stroke-secondary) bg-background px-1 py-0.5',
-              'text-[0.625rem] leading-none text-(--ui-text-secondary)'),
+              'border-(--ui-stroke-secondary) bg-(--card) px-1 py-0.5',
+              'text-[0.625rem] leading-none text-(--ui-text-secondary) shadow-sm'),
             children: [
               jsx(ChatDot, { key: 'dot', status: session.status }),
               jsx('span', { key: 's', className: 'whitespace-nowrap', children: label }),
@@ -3863,12 +3863,12 @@ function TownHouse({ session, isRouter, slot, onOpen, houseRef, building, reduce
             ? jsx('span', {
                 key: 'person',
                 'aria-hidden': 'true',
-                className: cn('relative -mt-2 block', !reducedMotion && 'superagent-town-person'),
+                className: cn('relative -mt-1 block', !reducedMotion && 'superagent-town-person'),
                 style: {
-                  width: '36px',
-                  height: '36px',
+                  width: `${personSize}px`,
+                  height: `${personSize}px`,
                   backgroundImage: `url("${person}")`,
-                  backgroundSize: '108px 144px',
+                  backgroundSize: `${personSize * 3}px ${personSize * 4}px`,
                   backgroundPosition: '0 0',
                   imageRendering: 'pixelated',
                   filter: townPersonFilter(session.id, isRouter),
@@ -3879,8 +3879,9 @@ function TownHouse({ session, isRouter, slot, onOpen, houseRef, building, reduce
       }),
       jsx('span', {
         key: 'name',
-        className: cn('mt-0.5 block max-w-[11rem] truncate rounded bg-background px-1',
-          'text-center text-[0.625rem] leading-tight text-(--ui-text-tertiary)'),
+        className: cn('mt-0.5 block max-w-[11rem] truncate rounded border px-1.5 py-0.5',
+          'border-(--ui-stroke-secondary) bg-(--card) text-center text-[0.625rem]',
+          'leading-tight text-(--ui-text-secondary) shadow-sm'),
         title: sessionTitle(session),
         children: isRouter ? 'Router' : sessionTitle(session),
       }),
@@ -3892,6 +3893,11 @@ function TownScene({ town, assets, buildingIds, onOpen, registerHouse, reducedMo
   const grass = assets && assets['grass.png'] && assets['grass.png'].data_url
   const treeA = assets && assets['tree-a.png'] && assets['tree-a.png'].data_url
   const treeB = assets && assets['tree-b.png'] && assets['tree-b.png'].data_url
+  const treeC = assets && assets['tree-c.png'] && assets['tree-c.png'].data_url
+  const bush = assets && assets['bush.png'] && assets['bush.png'].data_url
+  const fountain = assets && assets['fountain.png'] && assets['fountain.png'].data_url
+  const lamp = assets && assets['lamp.png'] && assets['lamp.png'].data_url
+  const rock = assets && assets['rock.png'] && assets['rock.png'].data_url
   const workers = Array.isArray(town.workers) ? town.workers : []
   const counts = workers.reduce((acc, worker) => {
     const key = townStatusLabel(worker.status)
@@ -3903,19 +3909,30 @@ function TownScene({ town, assets, buildingIds, onOpen, registerHouse, reducedMo
     ...Object.keys(counts).sort().map((key) => `${counts[key]} ${key}`),
   ].join(' · ')
   const trees = [
-    { left: 5, top: 73, src: treeA, size: 62 },
-    { left: 94, top: 70, src: treeB, size: 58 },
-    { left: 46, top: 5, src: treeB, size: 52 },
-    { left: 3, top: 18, src: treeB, size: 48 },
-    { left: 96, top: 16, src: treeA, size: 46 },
+    { left: 5, top: 74, src: treeA, width: 84 },
+    { left: 94, top: 70, src: treeB, width: 76 },
+    { left: 3, top: 31, src: treeC, width: 56 },
+    { left: 95, top: 28, src: treeA, width: 70 },
+    { left: 24, top: 24, src: treeC, width: 48 },
+    { left: 76, top: 23, src: treeB, width: 56 },
+    { left: 46, top: 24, src: treeB, width: 62 },
   ].filter((tree) => tree.src)
+  const decorations = [
+    { key: 'fountain', left: 50, top: 83, src: fountain, width: 82 },
+    { key: 'lamp-l', left: 36, top: 64, src: lamp, width: 22 },
+    { key: 'lamp-r', left: 64, top: 64, src: lamp, width: 22 },
+    { key: 'bush-l', left: 15, top: 26, src: bush, width: 48 },
+    { key: 'bush-r', left: 85, top: 27, src: bush, width: 48 },
+    { key: 'rock-l', left: 8, top: 87, src: rock, width: 25 },
+    { key: 'rock-r', left: 91, top: 86, src: rock, width: 25 },
+  ].filter((item) => item.src)
   return jsxs('div', {
     className: 'flex min-h-0 flex-1 flex-col gap-2',
     children: [
       jsxs('div', {
         key: 'scene',
         role: 'group',
-        'aria-label': `${sessionTitle(town)} town`,
+        'aria-label': `${sessionTitle(town)} — town`,
         className: cn('relative min-h-[360px] flex-1 overflow-hidden rounded-lg border',
           'border-(--ui-stroke-secondary)'),
         style: grass
@@ -3927,6 +3944,27 @@ function TownScene({ town, assets, buildingIds, onOpen, registerHouse, reducedMo
             }
           : undefined,
         children: [
+          jsx('div', {
+            key: 'plaza', 'aria-hidden': 'true',
+            className: 'pointer-events-none absolute z-0',
+            style: {
+              left: '50%', top: '58%', width: '74%', height: '66%',
+              transform: 'translate(-50%, -50%)', borderRadius: '50%',
+              background: 'radial-gradient(ellipse at center, rgba(151,112,63,0.40) 0%, rgba(151,112,63,0.16) 56%, transparent 74%)',
+            },
+          }),
+          ...decorations.map((item) => jsx('img', {
+            key: `deco:${item.key}`,
+            src: item.src,
+            alt: '',
+            'aria-hidden': 'true',
+            draggable: false,
+            className: 'pointer-events-none absolute z-0 -translate-x-1/2 -translate-y-full opacity-95',
+            style: {
+              left: `${item.left}%`, top: `${item.top}%`,
+              width: item.width, height: 'auto', imageRendering: 'pixelated',
+            },
+          })),
           trees.map((tree, index) => jsx('img', {
             key: `tree:${index}`,
             src: tree.src,
@@ -3934,7 +3972,10 @@ function TownScene({ town, assets, buildingIds, onOpen, registerHouse, reducedMo
             'aria-hidden': 'true',
             draggable: false,
             className: 'pointer-events-none absolute z-0 -translate-x-1/2 -translate-y-full opacity-90',
-            style: { left: `${tree.left}%`, top: `${tree.top}%`, width: tree.size, height: tree.size, imageRendering: 'pixelated' },
+            style: {
+              left: `${tree.left}%`, top: `${tree.top}%`,
+              width: tree.width, height: 'auto', imageRendering: 'pixelated',
+            },
           })),
           jsx(TownHouse, {
             key: town.id,
