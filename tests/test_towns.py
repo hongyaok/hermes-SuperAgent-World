@@ -336,3 +336,30 @@ def test_spawn_tool_reports_a_failed_launch_without_a_phantom(tmp_path, monkeypa
     assert child["parent_session_id"] == root["id"]
     # The row exists as a failed house (visible), but it was never launched.
     assert runner.launches == []
+
+
+# -- vendored art ----------------------------------------------------------
+
+
+def test_town_assets_are_an_explicit_allowlist_with_correct_mime():
+    from fastapi import HTTPException
+
+    module = load_api()
+    manifest = module.town_asset_manifest()
+    assert manifest["ok"] is True
+    assert set(manifest["assets"]) == {
+        "grass.png", "house-router.png", "house-a.png", "house-b.png",
+        "house-c.png", "person.png", "tree-a.png", "tree-b.png",
+    }
+    for name, item in manifest["assets"].items():
+        assert item["mime"] == "image/png"
+        assert item["data_url"].startswith("data:image/png;base64,")
+
+    png = module.town_asset("grass.png")
+    assert png.media_type == "image/png"
+    assert bytes(png.body).startswith(bytes.fromhex("89504e470d0a1a0a"))
+
+    for name in ("../plugin_api.py", "nope.png", "assets/town/grass.png"):
+        with pytest.raises(HTTPException) as excinfo:
+            module.town_asset(name)
+        assert excinfo.value.status_code == 404

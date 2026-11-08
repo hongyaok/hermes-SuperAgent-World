@@ -12,6 +12,7 @@ provides_tools:
   - superagent_tick
   - superagent_status
   - superagent_run
+  - superagent_spawn
 config_schema:
   mode:
     type: str

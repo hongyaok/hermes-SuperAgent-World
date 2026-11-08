@@ -87,6 +87,32 @@ const DIFF_POLL = 4000
 const LIVE_STATUSES = ['running', 'queued', 'review', 'failed']
 const MAX_WORKERS = 8
 
+// -- towns -----------------------------------------------------------------
+// One plot per worker slot. The list is deliberately static: a slot is
+// allocated once by the backend and never recomputed from the current array,
+// so a poll or a town switch cannot move a house. Slots past the list fall
+// into a deterministic outer ring.
+const TOWN_PLOTS = [
+  { left: 22, top: 34, scale: 1 },
+  { left: 78, top: 34, scale: 1 },
+  { left: 12, top: 62, scale: 1 },
+  { left: 88, top: 62, scale: 1 },
+  { left: 31, top: 80, scale: 0.95 },
+  { left: 69, top: 80, scale: 0.95 },
+  { left: 38, top: 17, scale: 0.9 },
+  { left: 62, top: 17, scale: 0.9 },
+  { left: 8, top: 44, scale: 0.86 },
+  { left: 92, top: 44, scale: 0.86 },
+]
+const TOWN_HOUSE_SPRITES = ['house-a.png', 'house-b.png', 'house-c.png']
+const TOWN_BUILD_MS = 900
+const TOWN_STATUS_LABEL = {
+  queued: 'queued', running: 'running', review: 'review', idle: 'idle',
+  failed: 'failed', cancelled: 'cancelled', observed: 'observed',
+}
+const TOWN_PERSON_TONES = [0, 32, 68, 104, 148, 196, 244, 292]
+
+
 // Chat statuses plus the ticket statuses the pane still renders.
 const ICONS = {
   observed: '·', queued: '…', running: '▶', review: '◆', blocked: '!',
@@ -351,6 +377,17 @@ function fetchChats(archived, query) {
   return rest ? rest(`/chats?limit=50${suffix}${term}`) : Promise.reject(new Error('backend not ready'))
 }
 
+/** Roots with their workers. `archived=all` keeps a town on the board. */
+function fetchTowns(archived) {
+  const suffix = archived === 'all' ? '&archived=all' : ''
+  return rest ? rest(`/towns?limit=200${suffix}`) : Promise.reject(new Error('backend not ready'))
+}
+
+/** The vendored sprites as data URLs; one fetch per page mount. */
+function fetchTownAssets() {
+  return rest ? rest('/town/assets') : Promise.reject(new Error('backend not ready'))
+}
+
 function fetchChat(id) {
   return rest ? rest(`/chats/${encodeURIComponent(id)}`) : Promise.reject(new Error('backend not ready'))
 }
@@ -425,6 +462,25 @@ function useChatSearch(term, archived = 'hide') {
   })
 }
 
+/** Town read model. Same polling budget as the chat board, never faster. */
+function useTowns(archived = 'hide') {
+  return useQuery({
+    queryKey: [ID, 'towns', archived], queryFn: () => fetchTowns(archived), retry: false,
+    refetchInterval: (query) => {
+      const data = query.state.data
+      return data && (data.running || 0) > 0 ? LIST_POLL_RUNNING : LIST_POLL_QUIET
+    },
+  })
+}
+
+/** Static art: stale forever once it has arrived. */
+function useTownAssets() {
+  return useQuery({
+    queryKey: [ID, 'town', 'assets'], queryFn: fetchTownAssets,
+    staleTime: Infinity, retry: false,
+  })
+}
+
 function useChat(id) {
   return useQuery({
     queryKey: [ID, 'chat', id], queryFn: () => fetchChat(id), enabled: !!id, retry: false,
@@ -488,6 +544,7 @@ function invalidateGithub(client) {
 
 function invalidateChats(client, id) {
   client.invalidateQueries({ queryKey: [ID, 'chats'] })
+  client.invalidateQueries({ queryKey: [ID, 'towns'] })
   client.invalidateQueries({ queryKey: [ID, 'chat'] })
   if (id) client.invalidateQueries({ queryKey: [ID, 'chat', id] })
 }
@@ -571,6 +628,26 @@ function HeaderIconButton({ label, tip, active, onClick, buttonRef, children }) 
       'aria-label': label,
       'aria-expanded': !!active,
       className: cn(HEADER_ICON, active && 'bg-(--chrome-action-hover) text-(--ui-text-secondary)'),
+      children,
+    }),
+  })
+}
+
+/** A labelled header action for the one panel a new user must be able to find. */
+function HeaderLabelButton({ label, tip, active, onClick, buttonRef, children }) {
+  return jsx(Tip, {
+    label: tip || label,
+    children: jsx('button', {
+      type: 'button',
+      ref: buttonRef,
+      onClick,
+      title: tip || label,
+      'aria-label': label,
+      'aria-expanded': !!active,
+      className: cn('inline-flex h-7 shrink-0 items-center gap-1 rounded border',
+        'border-(--ui-stroke-secondary) px-2 text-[0.6875rem] text-(--ui-text-secondary)',
+        'hover:bg-(--chrome-action-hover) hover:text-(--ui-text-primary)',
+        active && 'bg-(--chrome-action-hover) text-(--ui-text-primary)'),
       children,
     }),
   })
@@ -963,6 +1040,7 @@ function RailFilter({ value, onChange }) {
 function SessionsRail({
   sessions, selectedId, onSelect, onRename, onArchive, onDelete,
   showArchived, onToggleArchived, archivedCount, searchRef, onPin,
+  embedded = false,
 }) {
   const [filter, setFilter] = useState('all')
   const [query, setQuery] = useState('')
@@ -981,7 +1059,7 @@ function SessionsRail({
   const [pendingDelete, setPendingDelete] = useState(null)
   // Under `md` the rail folds into a 'Chats' section above the chat; picking a
   // chat closes it so the transcript gets the screen. md+ ignores this state.
-  const [open, setOpen] = useState(() => !selectedId)
+  const [open, setOpen] = useState(() => (embedded ? true : !selectedId))
   const shown = useMemo(
     () => source.filter((session) => railFilterMatch(session, filter)),
     [source, filter],
@@ -1041,7 +1119,7 @@ function SessionsRail({
   const showToggle = !!showArchived || (Number(archivedCount) || 0) > 0
 
   return jsxs('div', {
-    className: 'flex min-h-0 w-full flex-col gap-2 md:w-[16rem] md:shrink-0',
+    className: cn('flex min-h-0 w-full flex-col gap-2', !embedded && 'md:w-[16rem] md:shrink-0'),
     children: [
       jsxs('button', {
         key: 'fold',
@@ -1050,6 +1128,7 @@ function SessionsRail({
         'aria-label': 'Chats',
         onClick: () => setOpen((value) => !value),
         className: cn('flex h-7 w-full items-center gap-1.5 rounded px-2 text-xs md:hidden',
+          embedded && 'hidden',
           'text-(--ui-text-secondary) hover:bg-(--chrome-action-hover)'),
         children: [
           jsx(Caret, { key: 'c', open }),
@@ -1864,7 +1943,7 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
                 key: 'defaults', className: 'flex min-w-0 flex-col gap-2',
                 children: [
                   jsx('div', {
-                    key: 'label', className: 'text-[0.6875rem] font-medium uppercase tracking-wide text-(--ui-text-quaternary)',
+                    key: 'label', className: 'text-[0.6875rem] font-medium uppercase tracking-wide text-(--ui-text-tertiary)',
                     children: 'Default model',
                   }),
                   jsxs('div', {
@@ -1930,7 +2009,7 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
                     ],
                   }),
                   jsx('div', {
-                    key: 'yolo-help', className: 'text-[0.6875rem] leading-snug text-(--ui-text-quaternary)',
+                    key: 'yolo-help', className: 'text-[0.6875rem] leading-snug text-(--ui-text-tertiary)',
                     children: 'Skips approval prompts inside a turn; workers still never commit, push or merge. 1–8 workers, 1–500 turns.',
                   }),
                 ],
@@ -1942,17 +2021,17 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
                     key: 'label', className: 'flex items-baseline justify-between gap-2',
                     children: [
                       jsx('span', {
-                        key: 'l', className: 'text-[0.6875rem] font-medium uppercase tracking-wide text-(--ui-text-quaternary)',
+                        key: 'l', className: 'text-[0.6875rem] font-medium uppercase tracking-wide text-(--ui-text-secondary)',
                         children: 'Model presets',
                       }),
                       jsx('span', {
-                        key: 'n', className: 'text-[0.6875rem] tabular-nums text-(--ui-text-quaternary)',
+                        key: 'n', className: 'text-[0.6875rem] tabular-nums text-(--ui-text-tertiary)',
                         children: `${rows.length}/${MAX_PRESET_ROWS}`,
                       }),
                     ],
                   }),
                   jsx('div', {
-                    key: 'hint', className: 'text-[0.6875rem] leading-snug text-(--ui-text-quaternary)',
+                    key: 'hint', className: 'text-[0.6875rem] leading-snug text-(--ui-text-tertiary)',
                     children: SETTINGS_HINT,
                   }),
                   rows.length
@@ -3536,7 +3615,572 @@ function OverlayDrawer({ panel, title, subtitle, onClose, children }) {
 
   useEffect(() => {
     const el = panelRef.current
-    if (el && typeof el.focus === 'function') el.focus()
+    if (!el) return undefined
+    const focusables = () => Array.from(el.querySelectorAll(
+      'button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+    )).filter((element) => element.getClientRects().length > 0)
+    const first = focusables()[0]
+    if (first && typeof first.focus === 'function') first.focus()
+    else if (typeof el.focus === 'function') el.focus()
+    const onKeyDown = (event) => {
+      if (!event) return
+      if (event.key === 'Escape') {
+        if (typeof event.preventDefault === 'function') event.preventDefault()
+        closeRef.current()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const items = focusables()
+      if (!items.length) return
+      const head = items[0]
+      const tail = items[items.length - 1]
+      if (event.shiftKey && (document.activeElement === head || !el.contains(document.activeElement))) {
+        if (typeof event.preventDefault === 'function') event.preventDefault()
+        tail.focus()
+      } else if (!event.shiftKey && document.activeElement === tail) {
+        if (typeof event.preventDefault === 'function') event.preventDefault()
+        head.focus()
+      }
+    }
+    if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return undefined
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
+  return jsxs('div', {
+    className: 'absolute inset-0 z-30 flex',
+    children: [
+      jsx('button', {
+        key: 'backdrop',
+        type: 'button',
+        tabIndex: -1,
+        'aria-label': `Close ${title}`,
+        onClick: onClose,
+        className: 'absolute inset-0 cursor-default bg-black/45 backdrop-blur-[2px]',
+      }),
+      jsxs('section', {
+        key: 'panel',
+        'aria-label': title,
+        'aria-modal': 'true',
+        role: 'dialog',
+        'data-drawer': panel,
+        ref: panelRef,
+        tabIndex: -1,
+        style: { backgroundColor: 'var(--card)', color: 'var(--foreground)' },
+        className: cn('absolute inset-y-0 right-0 z-10 flex w-full max-w-full flex-col border-l',
+          'border-(--ui-stroke-secondary) shadow-2xl focus:outline-none',
+          'md:w-[420px] md:max-w-[94vw]'),
+        children: [
+          jsxs('div', {
+            key: 'head',
+            className: cn('flex h-10 shrink-0 items-center justify-between gap-2 border-b',
+              'border-(--ui-stroke-secondary) px-3'),
+            children: [
+              jsxs('div', {
+                key: 't', className: 'flex min-w-0 items-baseline gap-2',
+                children: [
+                  jsx('span', {
+                    key: 'l', className: 'shrink-0 text-sm font-medium text-(--ui-text-primary)',
+                    children: title,
+                  }),
+                  subtitle
+                    ? jsx('span', {
+                        key: 's', title: subtitle,
+                        className: 'min-w-0 truncate text-[0.6875rem] text-(--ui-text-quaternary)',
+                        children: subtitle,
+                      })
+                    : null,
+                ],
+              }),
+              jsx('button', {
+                key: 'x', type: 'button', 'aria-label': `Close ${title}`, title: 'Close (Esc)',
+                onClick: onClose,
+                className: cn('inline-flex h-7 w-7 shrink-0 items-center justify-center rounded',
+                  'text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover) hover:text-(--ui-text-secondary)'),
+                children: '✕',
+              }),
+            ],
+          }),
+          jsx('div', { key: 'body', className: 'flex min-h-0 flex-1 flex-col overflow-hidden', children }),
+        ],
+      }),
+    ],
+  })
+}
+
+// -- towns -----------------------------------------------------------------
+//
+// The page is a town, not a rail. A root session owns the central Router
+// house; each worker session owns one house and one person on a slot assigned
+// by the backend. Every position is a pure function of that slot, so polling
+// cannot make a house jump.
+
+function townKnownKey(rootId) {
+  return `town:known:${rootId}`
+}
+
+function readKnownWorkers(rootId) {
+  try {
+    const raw = readStored(townKnownKey(rootId), '')
+    const parsed = raw ? JSON.parse(raw) : []
+    return Array.isArray(parsed) ? parsed.map(String) : []
+  } catch (error) {
+    return []
+  }
+}
+
+function writeKnownWorkers(rootId, ids) {
+  const unique = Array.from(new Set((ids || []).map(String))).slice(-200)
+  writeStored(townKnownKey(rootId), JSON.stringify(unique))
+}
+
+function townHash(value) {
+  const text = String(value || '')
+  let hash = 0
+  for (let index = 0; index < text.length; index += 1) {
+    hash = ((hash * 31) + text.charCodeAt(index)) >>> 0
+  }
+  return hash
+}
+
+function townHouseSprite(sessionId) {
+  return TOWN_HOUSE_SPRITES[townHash(sessionId) % TOWN_HOUSE_SPRITES.length]
+}
+
+function townPersonFilter(sessionId, isRouter) {
+  if (isRouter) return 'sepia(0.28) saturate(1.25)'
+  const degrees = TOWN_PERSON_TONES[townHash(sessionId) % TOWN_PERSON_TONES.length]
+  return `hue-rotate(${degrees}deg) saturate(1.08)`
+}
+
+/** Plot for a worker slot: static for the first ten, a stable ring after. */
+function townHousePosition(slot) {
+  const index = Math.max(0, Number(slot) || 0)
+  if (index < TOWN_PLOTS.length) return TOWN_PLOTS[index]
+  const extra = index - TOWN_PLOTS.length
+  const ring = Math.floor(extra / 8) + 1
+  const angle = (extra % 8) * (Math.PI * 2 / 8)
+  const radius = Math.max(28, 38 - ring * 4)
+  return {
+    left: 50 + Math.cos(angle) * radius,
+    top: 54 + Math.sin(angle) * radius * 0.62,
+    scale: Math.max(0.62, 0.86 - ring * 0.08),
+  }
+}
+
+function townStatusLabel(status) {
+  return TOWN_STATUS_LABEL[status] || String(status || 'unknown')
+}
+
+const TOWN_CSS = `
+@keyframes superagent-town-build {
+  0% { opacity: 0; transform: translateY(14px) scale(0.55); }
+  55% { opacity: 1; transform: translateY(-5px) scale(1.06); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes superagent-town-walk {
+  0% { background-position-x: 0; }
+  33.33% { background-position-x: -36px; }
+  66.66% { background-position-x: -72px; }
+  100% { background-position-x: 0; }
+}
+.superagent-town-build { animation: superagent-town-build 900ms cubic-bezier(.2,.8,.2,1) both; }
+.superagent-town-person { animation: superagent-town-walk 900ms steps(1,end) infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .superagent-town-build, .superagent-town-person { animation: none !important; }
+}
+`
+
+function TownStyles() {
+  return jsx('style', { children: TOWN_CSS })
+}
+
+function TownHouse({ session, isRouter, slot, onOpen, houseRef, building, reducedMotion, assets }) {
+  const sprite = isRouter ? 'house-router.png' : townHouseSprite(session.id)
+  const art = assets && assets[sprite] && assets[sprite].data_url
+  const person = assets && assets['person.png'] && assets['person.png'].data_url
+  const position = isRouter ? { left: 50, top: 52, scale: 1.08 } : townHousePosition(slot)
+  const width = isRouter ? 140 : 96
+  const height = isRouter ? 133 : 98
+  const label = townStatusLabel(session.status)
+  return jsxs('div', {
+    'data-town-house': session.id,
+    className: 'absolute z-10 flex flex-col items-center',
+    style: {
+      left: `${position.left}%`,
+      top: `${position.top}%`,
+      transform: `translate(-50%, -50%) scale(${position.scale})`,
+      transformOrigin: '50% 100%',
+      width: `${width + 22}px`,
+    },
+    children: [
+      jsxs('button', {
+        key: 'house',
+        ref: houseRef,
+        type: 'button',
+        onClick: () => onOpen(session.id),
+        'aria-label': `${isRouter ? 'Router' : 'Worker'} house ${session.id}: ${sessionTitle(session)} — ${label}`,
+        title: `${sessionTitle(session)} (${session.id}) · ${label}`,
+        className: cn('relative flex w-full flex-col items-center rounded',
+          'focus-visible:outline focus-visible:outline-2 focus-visible:outline-(--ui-accent)',
+          'hover:brightness-110',
+          building && !reducedMotion && 'superagent-town-build'),
+        children: [
+          art
+            ? jsx('img', {
+                key: 'art',
+                src: art,
+                alt: '',
+                draggable: false,
+                width,
+                height,
+                style: { imageRendering: 'pixelated' },
+              })
+            : jsx('div', {
+                key: 'missing',
+                className: 'flex items-center justify-center rounded border border-(--ui-stroke-secondary) bg-background',
+                style: { width, height },
+                children: jsx('span', { className: 'px-1 text-center text-[0.625rem] text-(--ui-text-quaternary)', children: '…' }),
+              }),
+          jsxs('span', {
+            key: 'badge',
+            className: cn('absolute left-0 top-0 inline-flex items-center gap-1 rounded border',
+              'border-(--ui-stroke-secondary) bg-background px-1 py-0.5',
+              'text-[0.625rem] leading-none text-(--ui-text-secondary)'),
+            children: [
+              jsx(ChatDot, { key: 'dot', status: session.status }),
+              jsx('span', { key: 's', className: 'whitespace-nowrap', children: label }),
+            ],
+          }),
+          building
+            ? jsx('span', {
+                key: 'new',
+                className: 'absolute right-0 top-0 rounded bg-background px-1 text-[0.625rem] text-(--ui-text-tertiary)',
+                children: 'new',
+              })
+            : null,
+          person
+            ? jsx('span', {
+                key: 'person',
+                'aria-hidden': 'true',
+                className: cn('relative -mt-2 block', !reducedMotion && 'superagent-town-person'),
+                style: {
+                  width: '36px',
+                  height: '36px',
+                  backgroundImage: `url("${person}")`,
+                  backgroundSize: '108px 144px',
+                  backgroundPosition: '0 0',
+                  imageRendering: 'pixelated',
+                  filter: townPersonFilter(session.id, isRouter),
+                },
+              })
+            : null,
+        ],
+      }),
+      jsx('span', {
+        key: 'name',
+        className: cn('mt-0.5 block max-w-[11rem] truncate rounded bg-background px-1',
+          'text-center text-[0.625rem] leading-tight text-(--ui-text-tertiary)'),
+        title: sessionTitle(session),
+        children: isRouter ? 'Router' : sessionTitle(session),
+      }),
+    ],
+  })
+}
+
+function TownScene({ town, assets, buildingIds, onOpen, registerHouse, reducedMotion }) {
+  const grass = assets && assets['grass.png'] && assets['grass.png'].data_url
+  const treeA = assets && assets['tree-a.png'] && assets['tree-a.png'].data_url
+  const treeB = assets && assets['tree-b.png'] && assets['tree-b.png'].data_url
+  const workers = Array.isArray(town.workers) ? town.workers : []
+  const counts = workers.reduce((acc, worker) => {
+    const key = townStatusLabel(worker.status)
+    acc[key] = (acc[key] || 0) + 1
+    return acc
+  }, {})
+  const summary = [
+    workers.length === 1 ? '1 worker' : `${workers.length} workers`,
+    ...Object.keys(counts).sort().map((key) => `${counts[key]} ${key}`),
+  ].join(' · ')
+  const trees = [
+    { left: 5, top: 73, src: treeA, size: 62 },
+    { left: 94, top: 70, src: treeB, size: 58 },
+    { left: 46, top: 5, src: treeB, size: 52 },
+    { left: 3, top: 18, src: treeB, size: 48 },
+    { left: 96, top: 16, src: treeA, size: 46 },
+  ].filter((tree) => tree.src)
+  return jsxs('div', {
+    className: 'flex min-h-0 flex-1 flex-col gap-2',
+    children: [
+      jsxs('div', {
+        key: 'scene',
+        role: 'group',
+        'aria-label': `${sessionTitle(town)} town`,
+        className: cn('relative min-h-[360px] flex-1 overflow-hidden rounded-lg border',
+          'border-(--ui-stroke-secondary)'),
+        style: grass
+          ? {
+              backgroundImage: `url("${grass}")`,
+              backgroundSize: '128px 64px',
+              backgroundRepeat: 'repeat',
+              imageRendering: 'pixelated',
+            }
+          : undefined,
+        children: [
+          trees.map((tree, index) => jsx('img', {
+            key: `tree:${index}`,
+            src: tree.src,
+            alt: '',
+            'aria-hidden': 'true',
+            draggable: false,
+            className: 'pointer-events-none absolute z-0 -translate-x-1/2 -translate-y-full opacity-90',
+            style: { left: `${tree.left}%`, top: `${tree.top}%`, width: tree.size, height: tree.size, imageRendering: 'pixelated' },
+          })),
+          jsx(TownHouse, {
+            key: town.id,
+            session: town,
+            isRouter: true,
+            slot: 0,
+            onOpen,
+            houseRef: registerHouse(town.id),
+            building: false,
+            reducedMotion,
+            assets,
+          }),
+          ...workers.map((worker) => jsx(TownHouse, {
+            key: worker.id,
+            session: worker,
+            isRouter: false,
+            slot: worker.town_slot,
+            onOpen,
+            houseRef: registerHouse(worker.id),
+            building: !!(buildingIds && buildingIds[worker.id]),
+            reducedMotion,
+            assets,
+          })),
+          jsxs('div', {
+            key: 'label',
+            className: cn('pointer-events-none absolute bottom-2 left-2 z-20 rounded border',
+              'border-(--ui-stroke-secondary) bg-background px-2 py-1 text-[0.6875rem]',
+              'text-(--ui-text-secondary)'),
+            children: [
+              jsx('span', { key: 't', className: 'font-medium', children: sessionTitle(town) }),
+              jsx('span', { key: 's', className: 'ml-2 text-(--ui-text-quaternary)', children: summary }),
+            ],
+          }),
+        ],
+      }),
+      jsx('p', {
+        key: 'status',
+        role: 'status',
+        className: 'shrink-0 px-1 text-[0.6875rem] text-(--ui-text-quaternary)',
+        children: `${sessionTitle(town)} · ${townStatusLabel(town.status)} · ${summary}`,
+      }),
+    ],
+  })
+}
+
+function TownSwitcher({ towns, value, onChange, onPrev, onNext, onNew, onSessions, canPrev, canNext, sessionsRef }) {
+  const current = towns.find((town) => town.id === value)
+  return jsxs('div', {
+    className: 'flex min-w-0 flex-wrap items-center gap-1.5',
+    children: [
+      jsxs('div', {
+        key: 'picker',
+        className: cn('flex shrink-0 items-center rounded border border-(--ui-stroke-secondary)',
+          'bg-transparent'),
+        children: [
+          jsx('button', {
+            key: 'prev', type: 'button', onClick: onPrev, disabled: !canPrev,
+            'aria-label': 'Previous town', title: 'Previous town',
+            className: cn('inline-flex h-7 w-7 items-center justify-center rounded-l',
+              'text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover)',
+              'disabled:opacity-30 disabled:hover:bg-transparent'),
+            children: '‹',
+          }),
+          jsx('select', {
+            key: 'select',
+            value: value || '',
+            'aria-label': 'Select town',
+            onChange: (event) => onChange(event.target.value),
+            className: cn('h-7 max-w-[15rem] min-w-[8rem] truncate bg-transparent px-1',
+              'text-xs text-(--ui-text-secondary) focus:outline-none'),
+            children: towns.length
+              ? towns.map((town) => jsx('option', {
+                  key: town.id, value: town.id,
+                  children: `${sessionTitle(town)} · ${townStatusLabel(town.status)}`,
+                }))
+              : jsx('option', { key: 'none', value: '', children: 'No towns' }),
+          }),
+          jsx('button', {
+            key: 'next', type: 'button', onClick: onNext, disabled: !canNext,
+            'aria-label': 'Next town', title: 'Next town',
+            className: cn('inline-flex h-7 w-7 items-center justify-center rounded-r',
+              'text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover)',
+              'disabled:opacity-30 disabled:hover:bg-transparent'),
+            children: '›',
+          }),
+        ],
+      }),
+      current
+        ? jsx('span', {
+            key: 'workers',
+            className: 'hidden shrink-0 text-[0.6875rem] text-(--ui-text-quaternary) sm:inline',
+            children: `${(current.workers || []).length} worker${(current.workers || []).length === 1 ? '' : 's'}`,
+          })
+        : null,
+      jsx('button', {
+        key: 'new', type: 'button', onClick: onNew,
+        className: cn('shrink-0 rounded bg-primary px-2.5 py-1 text-xs font-medium',
+          'text-primary-foreground hover:bg-primary/90'),
+        children: 'New town',
+      }),
+      jsx('button', {
+        key: 'sessions', type: 'button', onClick: onSessions, ref: sessionsRef,
+        className: cn('shrink-0 rounded border border-(--ui-stroke-secondary) px-2 py-1',
+          'text-xs text-(--ui-text-secondary) hover:bg-(--chrome-action-hover)'),
+        title: 'Search, rename, pin, archive or delete any chat',
+        children: 'Sessions',
+      }),
+    ],
+  })
+}
+
+function TownChatDialog({
+  sessionId, town, detail, canComment, onSelect, optimistic,
+  draft, onDraft, onSend, onStop, pending, stopPending, error,
+  model, onModelChange, repo, onRepoChange, models, inputRef, recentRepos,
+  onSessionModel, modelPending, presets, presetName, onPreset, onPresetClear,
+  retry, exportMd, onUnarchive, manage, onClose,
+}) {
+  const panelRef = useRef(null)
+  const closeRef = useRef(onClose)
+  closeRef.current = onClose
+  const session = detail && detail.data && detail.data.session
+  const ready = !!(session && session.id === sessionId)
+  const router = sessionId === town.id
+
+  useEffect(() => {
+    const panel = panelRef.current
+    if (!panel) return undefined
+    const focusables = () => Array.from(panel.querySelectorAll(
+      'button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+    )).filter((element) => element.getClientRects().length > 0)
+    const first = focusables()[0]
+    if (first && typeof first.focus === 'function') first.focus()
+    else if (typeof panel.focus === 'function') panel.focus()
+    const onKeyDown = (event) => {
+      if (!event) return
+      if (event.key === 'Escape') {
+        if (typeof event.preventDefault === 'function') event.preventDefault()
+        closeRef.current()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const items = focusables()
+      if (!items.length) return
+      const head = items[0]
+      const tail = items[items.length - 1]
+      if (event.shiftKey && document.activeElement === head) {
+        if (typeof event.preventDefault === 'function') event.preventDefault()
+        tail.focus()
+      } else if (!event.shiftKey && document.activeElement === tail) {
+        if (typeof event.preventDefault === 'function') event.preventDefault()
+        head.focus()
+      }
+    }
+    if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') {
+      return undefined
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [sessionId])
+
+  return jsx('div', {
+    'data-town-dialog': sessionId,
+    className: 'absolute inset-0 z-30 flex items-center justify-center bg-background/80 p-3',
+    onClick: (event) => { if (event && event.target === event.currentTarget) onClose() },
+    children: jsxs('section', {
+      role: 'dialog',
+      'aria-modal': 'true',
+      'aria-labelledby': 'superagent-town-dialog-title',
+      ref: panelRef,
+      tabIndex: -1,
+      className: cn('flex h-[min(86vh,760px)] w-full max-w-3xl flex-col overflow-hidden rounded-lg',
+        'border border-(--ui-stroke-secondary) bg-background shadow-xl focus:outline-none'),
+      children: [
+        jsxs('header', {
+          key: 'head',
+          className: 'flex shrink-0 items-center justify-between gap-2 border-b border-(--ui-stroke-secondary) px-3 py-2',
+          children: [
+            jsxs('div', {
+              key: 'title', className: 'flex min-w-0 items-baseline gap-2',
+              children: [
+                jsx('span', {
+                  key: 'kind', className: 'shrink-0 rounded border border-(--ui-stroke-secondary) px-1 text-[0.625rem] text-(--ui-text-tertiary)',
+                  children: router ? 'Router house' : 'Worker house',
+                }),
+                jsx('span', {
+                  key: 'id', id: 'superagent-town-dialog-title',
+                  className: 'min-w-0 truncate text-sm font-medium text-(--ui-text-secondary)',
+                  children: sessionId,
+                }),
+                jsx('span', {
+                  key: 'label', className: 'min-w-0 truncate text-xs text-(--ui-text-quaternary)',
+                  children: session ? sessionTitle(session) : '',
+                }),
+              ],
+            }),
+            jsxs('div', {
+              key: 'actions', className: 'flex shrink-0 items-center gap-1',
+              children: [
+                manage ? jsx(OverflowMenu, { key: 'manage', items: manage, label: 'House actions' }) : null,
+                jsx('button', {
+                  key: 'close', type: 'button', onClick: onClose,
+                  'aria-label': 'Close chat', title: 'Close (Esc)',
+                  className: cn('inline-flex h-7 w-7 items-center justify-center rounded',
+                    'text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover) hover:text-(--ui-text-secondary)'),
+                  children: '✕',
+                }),
+              ],
+            }),
+          ],
+        }),
+        jsx('div', {
+          key: 'body', className: 'flex min-h-0 flex-1 flex-col gap-2 p-3',
+          children: ready
+            ? jsx(ChatCenter, {
+                key: sessionId,
+                summary: session, detail,
+                sessions: [town, ...(town.workers || [])],
+                onSelect,
+                banner: null, optimistic,
+                draft, onDraft, onSend, onStop, pending, stopPending, error,
+                canComment,
+                model, onModelChange, repo, onRepoChange, models, inputRef, recentRepos,
+                onSessionModel, modelPending, presets, presetName, onPreset, onPresetClear,
+                retry, exportMd, onUnarchive,
+              })
+            : jsx('div', {
+                role: 'status',
+                className: 'flex flex-1 items-center justify-center text-xs text-(--ui-text-tertiary)',
+                children: `Loading ${sessionId}…`,
+              }),
+        }),
+      ],
+    }),
+  })
+}
+
+function TownModal({ title, subtitle, onClose, children }) {
+  const closeRef = useRef(onClose)
+  closeRef.current = onClose
+  const panelRef = useRef(null)
+  useEffect(() => {
+    const panel = panelRef.current
+    if (!panel) return undefined
+    const first = panel.querySelector('textarea, input') || panel.querySelector('button')
+    if (first && typeof first.focus === 'function') first.focus()
     const onKeyDown = (event) => {
       if (!event || event.key !== 'Escape') return
       if (typeof event.preventDefault === 'function') event.preventDefault()
@@ -3546,47 +4190,57 @@ function OverlayDrawer({ panel, title, subtitle, onClose, children }) {
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
+  return jsx('div', {
+    'data-town-modal': '1',
+    className: 'absolute inset-0 z-30 flex items-center justify-center bg-background/80 p-3',
+    onClick: (event) => { if (event && event.target === event.currentTarget) onClose() },
+    children: jsxs('section', {
+      role: 'dialog', 'aria-modal': 'true', 'aria-label': title,
+      ref: panelRef, tabIndex: -1,
+      className: cn('flex w-full max-w-xl flex-col gap-2 rounded-lg border',
+        'border-(--ui-stroke-secondary) bg-background p-3 shadow-xl focus:outline-none'),
+      children: [
+        jsxs('div', {
+          key: 'head', className: 'flex items-start justify-between gap-2',
+          children: [
+            jsxs('div', {
+              key: 'text', className: 'flex min-w-0 flex-col',
+              children: [
+                jsx('span', { key: 't', className: 'text-sm font-medium text-(--ui-text-secondary)', children: title }),
+                subtitle ? jsx('span', { key: 's', className: 'text-[0.6875rem] text-(--ui-text-quaternary)', children: subtitle }) : null,
+              ],
+            }),
+            jsx('button', {
+              key: 'x', type: 'button', onClick: onClose, 'aria-label': `Close ${title}`,
+              title: 'Close (Esc)',
+              className: cn('inline-flex h-7 w-7 shrink-0 items-center justify-center rounded',
+                'text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover) hover:text-(--ui-text-secondary)'),
+              children: '✕',
+            }),
+          ],
+        }),
+        jsx('div', { key: 'body', className: 'flex min-h-0 flex-col', children }),
+      ],
+    }),
+  })
+}
 
-  return jsxs('section', {
-    'aria-label': title,
-    'data-drawer': panel,
-    ref: panelRef,
-    tabIndex: -1,
-    className: cn('absolute inset-y-0 right-0 z-20 flex w-full max-w-full flex-col border-l',
-      'border-(--ui-stroke-secondary) bg-(--ui-bg-primary) shadow-lg focus:outline-none',
-      'md:w-[380px] md:max-w-[92vw]'),
+function TownEmpty({ onNew, banner }) {
+  return jsxs('div', {
+    className: 'flex min-h-0 flex-1 flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-(--ui-stroke-secondary) p-6 text-center',
     children: [
-      jsxs('div', {
-        key: 'head',
-        className: cn('flex h-9 shrink-0 items-center justify-between gap-2 border-b',
-          'border-(--ui-stroke-secondary) px-3'),
-        children: [
-          jsxs('div', {
-            key: 't', className: 'flex min-w-0 items-baseline gap-2',
-            children: [
-              jsx('span', {
-                key: 'l', className: 'shrink-0 text-xs font-medium text-(--ui-text-secondary)',
-                children: title,
-              }),
-              subtitle
-                ? jsx('span', {
-                    key: 's', title: subtitle,
-                    className: 'min-w-0 truncate text-[0.6875rem] text-(--ui-text-quaternary)',
-                    children: subtitle,
-                  })
-                : null,
-            ],
-          }),
-          jsx('button', {
-            key: 'x', type: 'button', 'aria-label': `Close ${title}`, title: 'Close (Esc)',
-            onClick: onClose,
-            className: cn('inline-flex h-6 w-6 shrink-0 items-center justify-center rounded',
-              'text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover) hover:text-(--ui-text-secondary)'),
-            children: '✕',
-          }),
-        ],
+      jsx('div', { key: 'title', className: 'text-sm font-medium text-(--ui-text-secondary)', children: 'No towns yet' }),
+      jsx('p', {
+        key: 'copy', className: 'max-w-sm text-xs text-(--ui-text-quaternary)',
+        children: 'A town starts with one Router session in the centre. Ask it for work, and every worker it spawns becomes a house.',
       }),
-      jsx('div', { key: 'body', className: 'flex min-h-0 flex-1 flex-col overflow-hidden', children }),
+      jsx('button', {
+        key: 'new', type: 'button', onClick: onNew,
+        className: cn('rounded bg-primary px-3 py-1.5 text-xs font-medium',
+          'text-primary-foreground hover:bg-primary/90'),
+        children: 'New town',
+      }),
+      banner ? jsx('div', { key: 'banner', className: 'w-full max-w-md text-left', children: banner }) : null,
     ],
   })
 }
@@ -3601,8 +4255,17 @@ function SuperagentPage() {
   const [showArchived, setShowArchived] = useState(() => readStored('showArchived', '') === '1')
   const archivedMode = showArchived ? 'all' : 'hide'
   const chatsQuery = useChats(archivedMode)
+  const townsQuery = useTowns(archivedMode)
+  const assetsQuery = useTownAssets()
   const modelsQuery = useModels()
+  // `selectedId` is the chat in the dialog; `townId` is what the scene shows.
+  // They are deliberately separate: switching towns closes the dialog without
+  // touching any session.
   const [selectedId, setSelectedId] = useState(null)
+  const [townId, setTownId] = useState(() => readStored('town:selected', ''))
+  const [newTownOpen, setNewTownOpen] = useState(false)
+  const [newWorkerIds, setNewWorkerIds] = useState({})
+  const [reducedMotion, setReducedMotion] = useState(false)
   // The draft is per target; `draft:new` starts the page, a chat restores its
   // own bucket as soon as it is selected. Nothing here ever reads the server's
   // `prompt` field — that would overwrite what the person is typing.
@@ -3622,6 +4285,7 @@ function SuperagentPage() {
   const githubOpen = drawer === 'github'
   const settingsOpen = drawer === 'settings'
   const usageOpen = drawer === 'usage'
+  const sessionsOpen = drawer === 'sessions'
   const [presetName, setPresetName] = useState('')
   const [onboarded, setOnboarded] = useState(() => readStored('onboarded', '') === '1')
   const detail = useChat(selectedId)
@@ -3631,8 +4295,26 @@ function SuperagentPage() {
   // Focus returns here when a drawer closes (Escape, ✕, or a pick inside it).
   const githubRef = useRef(null)
   const settingsRef = useRef(null)
+  const sessionsRef = useRef(null)
   const railSearchRef = useRef(null)
+  const houseRefs = useRef({})
+  const knownWorkersRef = useRef({})
+  const buildTimers = useRef({})
   const [shortcuts, setShortcuts] = useState(false)
+
+  // Respect the OS setting for construction and walk cycles; CSS also guards
+  // this, but the timer for a one-shot build must never be scheduled at all.
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const apply = () => setReducedMotion(!!media.matches)
+    apply()
+    if (typeof media.addEventListener === 'function') {
+      media.addEventListener('change', apply)
+      return () => media.removeEventListener('change', apply)
+    }
+    return undefined
+  }, [])
 
   // One bucket per target. Switching flushes the outgoing text *before* the
   // key moves, so a click 50ms after a keystroke cannot drop the draft.
@@ -3672,7 +4354,123 @@ function SuperagentPage() {
     () => sessions.find((session) => session.id === selectedId) || null,
     [sessions, selectedId],
   )
-  const selectedSession = (detail.data && detail.data.session) || selectedSummary
+  const selectedSession = selectedId
+    ? ((detail.data && detail.data.session && detail.data.session.id === selectedId)
+        ? detail.data.session
+        : (selectedSummary && selectedSummary.id === selectedId ? selectedSummary : null))
+    : null
+
+  const townData = townsQuery.data
+  const towns = useMemo(
+    () => ((townData && townData.towns) || []).slice(),
+    [townData],
+  )
+  const town = useMemo(
+    () => towns.find((item) => item.id === townId) || null,
+    [towns, townId],
+  )
+  const townIndex = towns.findIndex((item) => item.id === townId)
+
+  // Keep the remembered town valid without ever inventing one: an empty board
+  // stays empty, a deleted/archived town falls back to the first visible town.
+  useEffect(() => {
+    if (!towns.length) {
+      if (townId) {
+        setTownId('')
+        writeStored('town:selected', '')
+      }
+      return
+    }
+    if (!towns.some((item) => item.id === townId)) {
+      const next = towns[0].id
+      setTownId(next)
+      writeStored('town:selected', next)
+    }
+  }, [towns, townId])
+
+  // Construction is a one-shot event, not a render effect. A town's first
+  // observation is a baseline; only an id that appears *after* a stored
+  // baseline is built. The known list is persisted so a plugin reload does
+  // not replay every house, and the timer is owned here so it can be cleared
+  // on unmount.
+  useEffect(() => {
+    const born = {}
+    for (const item of towns) {
+      const ids = (item.workers || []).map((worker) => worker.id)
+      const stored = readKnownWorkers(item.id)
+      let seen = knownWorkersRef.current[item.id]
+      if (!seen) {
+        seen = new Set(stored)
+        knownWorkersRef.current[item.id] = seen
+      }
+      const before = Array.from(seen).join('|')
+      for (const id of ids) {
+        if (seen.has(id)) continue
+        seen.add(id)
+        // No baseline means this is the first time the page has seen this
+        // town (including an upgrade): seed it, do not animate history.
+        if (stored.length && !reducedMotion) born[id] = true
+      }
+      const after = Array.from(seen).join('|')
+      if (after !== before) writeKnownWorkers(item.id, Array.from(seen))
+    }
+    const fresh = Object.keys(born)
+    if (!fresh.length) return
+    setNewWorkerIds((current) => {
+      const next = { ...current }
+      for (const id of fresh) next[id] = true
+      return next
+    })
+    for (const id of fresh) {
+      if (buildTimers.current[id]) clearTimeout(buildTimers.current[id])
+      buildTimers.current[id] = setTimeout(() => {
+        delete buildTimers.current[id]
+        setNewWorkerIds((current) => {
+          if (!current[id]) return current
+          const next = { ...current }
+          delete next[id]
+          return next
+        })
+      }, TOWN_BUILD_MS)
+    }
+  }, [towns, reducedMotion])
+
+  // Every timer this page owns is cleared when the page unmounts; a hot
+  // reload must not leave a stray construction callback behind.
+  useEffect(() => () => {
+    for (const timer of Object.values(buildTimers.current)) clearTimeout(timer)
+    buildTimers.current = {}
+  }, [])
+
+  const registerHouse = (id) => (element) => {
+    if (element) houseRefs.current[id] = element
+    else delete houseRefs.current[id]
+  }
+
+  const openHouse = (id) => {
+    setNewTownOpen(false)
+    setSelectedId(id)
+  }
+
+  const closeHouse = () => {
+    const id = selectedId
+    setSelectedId(null)
+    if (typeof window !== 'undefined') {
+      window.setTimeout(() => {
+        const element = houseRefs.current[id]
+        if (element && typeof element.focus === 'function') element.focus()
+      }, 0)
+    }
+  }
+
+  const selectTown = (id) => {
+    const next = String(id || '')
+    if (!next || next === townId) return
+    setTownId(next)
+    writeStored('town:selected', next)
+    setSelectedId(null)
+    setNewTownOpen(false)
+  }
 
   // A PR badge anywhere on the board keeps the status fresh; the panel keeps
   // it fresh while open. Otherwise the status is fetched once (header dot).
@@ -3687,7 +4485,18 @@ function SuperagentPage() {
     mutationFn: (body) => rest('/chats', { method: 'POST', body }),
     onSuccess: (result) => {
       invalidateChats(queryClient)
-      if (result && result.session && result.session.id) setSelectedId(result.session.id)
+      const created = result && result.session
+      if (created && created.id) {
+        // A root creates a town; a child (only possible through the API or
+        // tool) belongs to the town already on screen. Either way the new
+        // session opens in the dialog, so the first turn is visible.
+        if (!created.parent_session_id) {
+          setTownId(created.id)
+          writeStored('town:selected', created.id)
+          setNewTownOpen(false)
+        }
+        setSelectedId(created.id)
+      }
     },
   })
 
@@ -3806,6 +4615,9 @@ function SuperagentPage() {
     if (!isBusy(target)) {
       if (archived && archivedMode !== 'all') dropSession(id)
       else patchSession(id, { archived_at: archived ? Date.now() / 1000 : null })
+      // Hiding the town the dialog belongs to must not leave a transcript
+      // floating above the next town.
+      if (archived && archivedMode !== 'all' && selectedId === id) setSelectedId(null)
     }
     archiveChat.mutate({ id, archived })
   }
@@ -3816,6 +4628,10 @@ function SuperagentPage() {
     if (!isBusy(target)) {
       dropSession(id)
       if (selectedId === id) setSelectedId(null)
+      if (townId === id) {
+        setTownId('')
+        writeStored('town:selected', '')
+      }
     }
     deleteChat.mutate(id)
   }
@@ -3897,7 +4713,6 @@ function SuperagentPage() {
   }
 
   // Selection restores that chat's own bucket; the effect above does the work.
-  const select = (id) => setSelectedId(id)
 
   const pickPreset = (preset) => {
     if (!preset) return
@@ -3926,9 +4741,11 @@ function SuperagentPage() {
   }
 
   const newChat = () => {
-    // The draft is not cleared here: the new-chat bucket (or an in-progress
-    // empty box) is what the page should show.
+    // The draft is not cleared here: the new-town bucket is what the modal
+    // should show, and a click 50ms after a keystroke must not drop it.
     setSelectedId(null)
+    setNewTownOpen(true)
+    setDrawer(null)
     setPresetName('')
     setModel({ model: readStored('lastModel', ''), provider: readStored('lastProvider', '') })
     setRepo(readStored('lastRepo', ''))
@@ -3949,9 +4766,10 @@ function SuperagentPage() {
       const tag = target && target.tagName ? String(target.tagName).toLowerCase() : ''
       if (tag === 'input' || tag === 'textarea' || tag === 'select'
         || (target && target.isContentEditable)) return
-      // A drawer or the sheet owns the keyboard while it is open.
+      // A drawer, the dialog, the new-town modal or the sheet owns the
+      // keyboard while it is open.
       if (typeof document !== 'undefined'
-        && document.querySelector('[data-drawer], [data-shortcuts]')) return
+        && document.querySelector('[data-drawer], [data-shortcuts], [data-town-dialog], [data-town-modal]')) return
       if (event.key === '?') {
         if (typeof event.preventDefault === 'function') event.preventDefault()
         setShortcuts(true)
@@ -3959,8 +4777,25 @@ function SuperagentPage() {
       }
       if (event.key === '/') {
         if (typeof event.preventDefault === 'function') event.preventDefault()
-        const element = railSearchRef.current
-        if (element && typeof element.focus === 'function') element.focus()
+        setSelectedId(null)
+        setNewTownOpen(false)
+        setDrawer('sessions')
+        if (typeof window !== 'undefined') {
+          window.setTimeout(() => {
+            const element = railSearchRef.current
+            if (element && typeof element.focus === 'function') element.focus()
+          }, 0)
+        }
+        return
+      }
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        if (!towns.length) return
+        const step = event.key === 'ArrowLeft' ? -1 : 1
+        const index = towns.findIndex((item) => item.id === townId)
+        const next = index < 0 ? 0 : index + step
+        if (next < 0 || next >= towns.length) return
+        if (typeof event.preventDefault === 'function') event.preventDefault()
+        selectTown(towns[next].id)
         return
       }
       if (event.key === 'n' || event.key === 'N') {
@@ -3984,7 +4819,9 @@ function SuperagentPage() {
     setDrawer(null)
     const target = which === 'settings'
       ? settingsRef.current
-      : (which === 'github' ? githubRef.current : null)
+      : (which === 'github'
+          ? githubRef.current
+          : (which === 'sessions' ? sessionsRef.current : null))
     if (target && typeof target.focus === 'function') target.focus()
   }
 
@@ -4009,38 +4846,119 @@ function SuperagentPage() {
     ? jsx(OnboardingBanner, {
         onSettings: () => setDrawer('settings'),
         onGithub: () => setDrawer('github'),
-        onStart: startChat,
+        onStart: newChat,
         onDismiss: dismissOnboarding,
       })
     : null
 
+  // The dialog may have been opened from the town scene, the Sessions drawer
+  // or the GitHub panel. Resolve its owning town from the data, not from the
+  // town that happened to be on screen when the click happened.
+  const dialogSession = selectedSession
+  const dialogTown = useMemo(() => {
+    if (!dialogSession || !towns.length) return town
+    return towns.find((item) => item.id === dialogSession.id
+      || (item.workers || []).some((worker) => worker.id === dialogSession.id)) || town
+  }, [towns, dialogSession, town])
+
+  const selectSession = (id) => {
+    const owner = towns.find((item) => item.id === id
+      || (item.workers || []).some((worker) => worker.id === id))
+    if (owner && owner.id !== townId) selectTown(owner.id)
+    setSelectedId(id)
+  }
+
+  const openSessions = () => {
+    setSelectedId(null)
+    setNewTownOpen(false)
+    setDrawer('sessions')
+    if (typeof window !== 'undefined') {
+      window.setTimeout(() => {
+        const element = railSearchRef.current
+        if (element && typeof element.focus === 'function') element.focus()
+      }, 0)
+    }
+  }
+
+  const renameHouse = (session) => {
+    if (!session || typeof window === 'undefined' || typeof window.prompt !== 'function') return
+    const next = window.prompt('Rename this chat', sessionTitle(session))
+    if (next == null) return
+    const title = String(next).trim()
+    if (title) renameSession(session.id, title)
+  }
+
+  const houseMenu = dialogSession ? [
+    { id: 'rename', label: 'Rename…', onSelect: () => renameHouse(dialogSession) },
+    {
+      id: 'pin',
+      label: dialogSession.pinned_at ? 'Unpin from the top' : 'Pin to the top',
+      onSelect: () => pinChat.mutate({ id: dialogSession.id, pinned: !dialogSession.pinned_at }),
+    },
+    {
+      id: 'archive',
+      label: dialogSession.archived_at ? 'Unarchive this chat' : 'Archive this chat',
+      onSelect: () => archiveSession(dialogSession.id, !dialogSession.archived_at),
+    },
+    { id: 'sessions', label: 'Search all sessions…', onSelect: openSessions },
+  ] : null
+
+  const composerProps = {
+    draft, onDraft: setDraft, onSend: submit, onStop: stop, pending, stopPending, error: failure,
+    model, onModelChange: changeModel, repo, onRepoChange: setRepo,
+    models: modelsQuery.data, inputRef, recentRepos,
+    onSessionModel: changeSessionModel, modelPending: setChatModel.isPending,
+    presets: presetList, presetName, onPreset: pickPreset,
+    onPresetClear: () => setPresetName(''),
+  }
+  const assetMap = (assetsQuery.data && assetsQuery.data.assets) || null
+  const townCount = (townData && townData.town_count) || towns.length
+  const orphaned = (townData && townData.orphaned_count) || 0
+
   return jsxs('div', {
     className: 'relative flex h-full min-h-0 flex-col gap-3 overflow-hidden p-4 text-sm',
     children: [
+      jsx(TownStyles, { key: 'styles' }),
       jsxs('div', {
-        key: 'header', className: 'flex h-11 shrink-0 items-center justify-between gap-3',
+        key: 'header', className: 'flex shrink-0 flex-wrap items-center justify-between gap-2',
         children: [
           jsxs('div', {
             key: 'title', className: 'flex min-w-0 items-baseline gap-2',
             children: [
-              jsx('span', { key: 'name', className: 'shrink-0 text-sm font-medium', children: 'Superagent' }),
+              jsx('span', { key: 'name', className: 'shrink-0 text-sm font-medium', children: 'Superagent Towns' }),
+              jsx('span', {
+                key: 'towns', className: 'shrink-0 text-xs text-(--ui-text-quaternary)',
+                children: townCount ? `${townCount} town${townCount === 1 ? '' : 's'}` : '',
+              }),
               summaryLabel
                 ? jsx('span', {
                     key: 'counts', className: 'min-w-0 truncate text-xs text-(--ui-text-quaternary)',
-                    children: summaryLabel,
+                    children: `· ${summaryLabel}`,
+                  })
+                : null,
+              orphaned
+                ? jsx('button', {
+                    key: 'orphans', type: 'button', onClick: openSessions,
+                    title: 'Worker sessions whose root was deleted are kept in Sessions, never drawn as towns.',
+                    className: cn('shrink-0 rounded px-1 text-xs text-(--ui-text-quaternary)',
+                      'hover:bg-(--chrome-action-hover) hover:text-(--ui-text-secondary)'),
+                    children: `· ${orphaned} orphaned`,
                   })
                 : null,
             ],
           }),
+          jsx(TownSwitcher, {
+            key: 'switcher', towns, value: townId, onChange: selectTown,
+            onPrev: () => { if (townIndex > 0) selectTown(towns[townIndex - 1].id) },
+            onNext: () => { if (townIndex >= 0 && townIndex < towns.length - 1) selectTown(towns[townIndex + 1].id) },
+            onNew: newChat, onSessions: openSessions,
+            canPrev: townIndex > 0,
+            canNext: townIndex >= 0 && townIndex < towns.length - 1,
+            sessionsRef,
+          }),
           jsxs('div', {
             key: 'actions', className: 'flex shrink-0 items-center gap-1.5',
             children: [
-              jsx('button', {
-                key: 'new', type: 'button', onClick: newChat,
-                className: cn('shrink-0 rounded bg-primary px-2.5 py-1 text-xs font-medium',
-                  'text-primary-foreground hover:bg-primary/90'),
-                children: 'New chat',
-              }),
               jsx(GithubHeaderButton, {
                 key: 'github', open: githubOpen, status: githubQuery.data,
                 onClick: () => toggleDrawer('github'), buttonRef: githubRef,
@@ -4052,66 +4970,99 @@ function SuperagentPage() {
                 onClick: () => toggleDrawer('usage'),
                 children: '▤',
               }),
-              jsx(HeaderIconButton, {
+              jsx(HeaderLabelButton, {
                 key: 'settings', label: 'Settings',
-                tip: 'Settings: default model, presets and worker limits',
+                tip: 'Settings: default model, thinking level, presets and worker limits',
                 active: settingsOpen,
                 onClick: () => toggleDrawer('settings'),
                 buttonRef: settingsRef,
-                children: '⚙',
+                children: [
+                  jsx('span', { key: 'g', 'aria-hidden': 'true', children: '⚙' }),
+                  jsx('span', { key: 't', children: 'Settings' }),
+                ],
               }),
             ],
           }),
         ],
       }),
-      chatsQuery.isError
+      chatsQuery.isError || townsQuery.isError
         ? jsx('div', {
             key: 'error', className: 'shrink-0',
             children: jsx(ErrorCard, {
               title: 'Superagent backend unavailable. Enable the plugin first.',
-              error: chatsQuery.error, onRetry: () => chatsQuery.refetch(),
+              error: chatsQuery.error || townsQuery.error,
+              onRetry: () => { chatsQuery.refetch(); townsQuery.refetch() },
             }),
           })
         : null,
-      jsxs('div', {
-        key: 'body', className: 'flex min-h-0 flex-1 flex-col gap-3 md:flex-row',
-        children: [
-          jsx(SessionsRail, {
-            key: 'rail', sessions, selectedId, onSelect: select,
-            onRename: renameSession, onArchive: archiveSession, onDelete: deleteSession,
-            showArchived, onToggleArchived: toggleArchived,
-            archivedCount: archivedTotal, searchRef: railSearchRef,
-            onPin: (id, pinned) => pinChat.mutate({ id, pinned }),
-          }),
-          jsx(ChatCenter, {
-            key: 'center', summary: selectedSummary, detail,
-            sessions, onSelect: select, banner: onboarding, optimistic,
-            draft, onDraft: setDraft, onSend: submit, onStop: stop,
-            pending, stopPending, error: failure,
-            // The PR comment needs a saved token; the status query already
-            // polls while a PR badge is on the board, so this is free.
-            canComment: !!(githubQuery.data && githubQuery.data.token_set),
-            model, onModelChange: changeModel, repo, onRepoChange: setRepo,
-            models: modelsQuery.data, inputRef, recentRepos,
-            onSessionModel: changeSessionModel, modelPending: setChatModel.isPending,
-            presets: presetList, presetName, onPreset: pickPreset,
-            onPresetClear: () => setPresetName(''),
-            retry: selectedSession
-              && (selectedSession.status === 'failed' || selectedSession.status === 'cancelled')
-              ? { pending: retryChat.isPending, onRetry: () => retryChat.mutate(selectedSession.id) }
-              : null,
-            exportMd: selectedSession
-              ? { pending: exportChat.isPending, onExport: () => exportChat.mutate(selectedSession.id) }
-              : null,
-            onUnarchive: selectedSession
-              ? () => archiveSession(selectedSession.id, false)
-              : null,
-          }),
-        ],
+      jsx('div', {
+        key: 'body', className: 'flex min-h-0 flex-1 flex-col',
+        children: townsQuery.isLoading && !townData
+          ? jsx('div', {
+              className: 'flex flex-1 items-center justify-center text-xs text-(--ui-text-tertiary)',
+              children: 'Loading towns…',
+            })
+          : !town
+            ? jsx(TownEmpty, { onNew: newChat, banner: onboarding })
+            : jsx(TownScene, {
+                town, assets: assetMap, buildingIds: newWorkerIds,
+                onOpen: openHouse, registerHouse, reducedMotion,
+              }),
       }),
+      newTownOpen
+        ? jsx(TownModal, {
+            key: 'new-town',
+            title: 'New town',
+            subtitle: 'One root Router session starts the town. Ask for one job or several; the Router can spawn real workers with superagent_spawn.',
+            onClose: () => setNewTownOpen(false),
+            children: jsx(Composer, { mode: 'new', ...composerProps }),
+          })
+        : null,
+      selectedId && dialogTown
+        ? jsx(TownChatDialog, {
+            key: `dialog:${selectedId}`,
+            sessionId: selectedId,
+            town: dialogTown,
+            detail,
+            canComment: !!(githubQuery.data && githubQuery.data.token_set),
+            onSelect: selectSession,
+            optimistic,
+            ...composerProps,
+            retry: dialogSession
+              && (dialogSession.status === 'failed' || dialogSession.status === 'cancelled')
+              ? { pending: retryChat.isPending, onRetry: () => retryChat.mutate(dialogSession.id) }
+              : null,
+            exportMd: dialogSession
+              ? { pending: exportChat.isPending, onExport: () => exportChat.mutate(dialogSession.id) }
+              : null,
+            onUnarchive: dialogSession
+              ? () => archiveSession(dialogSession.id, false)
+              : null,
+            manage: houseMenu,
+            onClose: closeHouse,
+          })
+        : null,
       jsx(ShortcutSheet, {
         key: 'shortcuts', open: shortcuts, onClose: () => setShortcuts(false),
       }),
+      sessionsOpen
+        ? jsx(OverlayDrawer, {
+            key: 'sessions-drawer',
+            panel: 'sessions',
+            title: 'Sessions',
+            subtitle: `${sessions.length} chat${sessions.length === 1 ? '' : 's'} · search, rename, pin, archive, delete`,
+            onClose: closeDrawer,
+            children: jsx(SessionsRail, {
+              sessions, selectedId,
+              onSelect: (id) => { selectSession(id); setDrawer(null) },
+              onRename: renameSession, onArchive: archiveSession, onDelete: deleteSession,
+              showArchived, onToggleArchived: toggleArchived,
+              archivedCount: archivedTotal, searchRef: railSearchRef,
+              onPin: (id, pinned) => pinChat.mutate({ id, pinned }),
+              embedded: true,
+            }),
+          })
+        : null,
       githubOpen
         ? jsx(OverlayDrawer, {
             key: 'github-drawer',
@@ -4122,7 +5073,7 @@ function SuperagentPage() {
             children: jsx(GithubPanel, {
               status: githubQuery.data,
               prs: githubPrsQuery.data, prsLoading: githubPrsQuery.isLoading,
-              onSelectSession: (id) => { select(id); closeDrawer() },
+              onSelectSession: (id) => { selectSession(id); closeDrawer() },
             }),
           })
         : null,
@@ -4306,6 +5257,14 @@ function SuperagentChip() {
       children: label,
     }),
   })
+}
+
+// Named exports for the render probe. The app only consumes the default
+// export; these let a Node test render the town tree without Electron.
+export {
+  SuperagentPage, SettingsPanel, OverlayDrawer,
+  TownScene, TownHouse, TownSwitcher, TownChatDialog, TownEmpty,
+  townHousePosition, townHouseSprite, townStatusLabel, TOWN_PLOTS,
 }
 
 export default {

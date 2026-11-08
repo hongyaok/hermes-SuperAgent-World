@@ -43,13 +43,18 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 
 # The gateway loads this file standalone (no package), so the plugin root has
-# to be importable before `import sa_chats` / `import sa_runner` below.
+# to be importable before `import sa_chats` / `import sa_runner` below. The
+# dashboard directory is added separately for `town_assets`.
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
+_DASHBOARD = Path(__file__).resolve().parent
+if str(_DASHBOARD) not in sys.path:
+    sys.path.insert(0, str(_DASHBOARD))
+import town_assets  # noqa: E402  (local, after the path bootstrap)
 
 try:  # loaded as part of the plugin package
     from .. import (
@@ -939,6 +944,30 @@ def list_towns(limit: int = 200, archived: str = "hide") -> dict[str, Any]:
         )
     _reap_turns()
     return {"db_exists": True, **_chat_store().list_towns(limit=limit, archived=mode)}
+
+
+@router.get("/town/assets")
+def town_asset_manifest() -> dict[str, Any]:
+    """Every vendored sprite as a data URL (see ``town_assets``).
+
+    One request, an explicit allowlist, and no filesystem path in the request:
+    the renderer can cache these strings and draw every house from them.
+    """
+    return {"ok": True, "assets": town_assets.manifest()}
+
+
+@router.get("/town/assets/{name}")
+def town_asset(name: str) -> Response:
+    """One allowlisted sprite as bytes, with its real MIME type."""
+    try:
+        data, mime = town_assets.read(name)
+    except town_assets.UnknownAsset:
+        raise HTTPException(status_code=404, detail="unknown town asset") from None
+    return Response(
+        content=data,
+        media_type=mime,
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @router.get("/chats/{session_id}")
