@@ -4386,19 +4386,22 @@ function PetdexSprite({ session, isRouter, pet, personArt, animState, facingLeft
 
 function TownSpeechBubble({ text, status }) {
   if (!text) return null
+  // Opaque by design: the sky tint (z-3) and grass tiles sit below the
+  // bubble (z-20), so any translucent bg reads as see-through text.
   const toneClass = status === 'failed'
-    ? 'border-red-500/50 bg-background/95 text-(--ui-text-secondary)'
+    ? 'border-red-500 text-(--ui-text-secondary)'
     : (status === 'review'
-        ? 'border-amber-500/50 bg-background/95 text-(--ui-text-secondary)'
-        : 'border-(--ui-stroke-secondary) bg-background/95 text-(--ui-text-secondary)')
+        ? 'border-amber-500 text-(--ui-text-secondary)'
+        : 'border-(--ui-stroke-secondary) text-(--ui-text-secondary)')
   return jsx('span', {
     'data-town-speech': '1',
     className: cn(
       'superagent-speech-bubble pointer-events-none absolute -top-6 left-1/2 z-20',
-      'max-w-[11.5rem] -translate-x-1/2 truncate whitespace-nowrap rounded-full border px-2 py-0.5',
-      'text-[0.625rem] font-medium leading-tight shadow-md',
+      'max-w-[11.5rem] -translate-x-1/2 truncate whitespace-nowrap rounded-full border-2 px-2 py-0.5',
+      'text-[0.625rem] font-medium leading-tight opacity-100 shadow-md',
       toneClass,
     ),
+    style: { backgroundColor: 'var(--card, #fffbe8)', opacity: 1 },
     title: text,
     children: text,
   })
