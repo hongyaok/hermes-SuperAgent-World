@@ -46,6 +46,7 @@ ASSETS: dict[str, str] = {
     "water.png": PNG,
     "bridge.png": PNG,
     "well.png": PNG,
+    "bulletin-board.png": PNG,
     "signpost.png": PNG,
     "bench.png": PNG,
     "flowers.png": PNG,

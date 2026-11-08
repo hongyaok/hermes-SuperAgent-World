@@ -422,7 +422,7 @@ def test_town_assets_are_an_explicit_allowlist_with_correct_mime():
         "tree-c.png", "bush.png", "fountain.png", "rock.png",
         "lamp.png", "road-h.png", "road-v.png", "plaza-stone.png",
         "water.png", "bridge.png", "bench.png", "well.png",
-        "flowers.png", "signpost.png",
+        "bulletin-board.png", "flowers.png", "signpost.png",
     }
     for name, item in manifest["assets"].items():
         assert item["mime"] == "image/png"

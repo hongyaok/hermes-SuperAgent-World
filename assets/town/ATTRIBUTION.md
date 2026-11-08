@@ -1,6 +1,6 @@
 # Superagent Towns — Asset Attribution
 
-`assets/town/` vendors twenty-six environment PNGs and eight downsampled
+`assets/town/` vendors twenty-seven environment PNGs and eight downsampled
 character/creature spritesheets under `assets/town/pets/`. They come from
 upstream sources under the licences listed below, together with their exact
 provenance.
@@ -69,10 +69,11 @@ directions.
 `house-d.png`, `house-e.png`, `house-f.png`, `house-g.png`, `tree-a.png`,
 `tree-b.png`, `tree-c.png`, `bush.png`, `fountain.png`, `rock.png`, `lamp.png`,
 `bridge.png`, `bench.png`, `flowers.png`, `signpost.png`, `well.png`,
-`road-h.png`, `road-v.png`, `plaza-stone.png` and `water.png` are derived from
-the original sprite atlases and procedural terrain generator in **Hermes Town**,
-<https://github.com/sxuff/hermes-town>, by the Hermes Town contributors, or
-authored for this project under the same MIT licence.
+`bulletin-board.png`, `road-h.png`, `road-v.png`, `plaza-stone.png` and
+`water.png` are derived from the original sprite atlases and procedural terrain
+generator in **Hermes Town**, <https://github.com/sxuff/hermes-town>, by the
+Hermes Town contributors, or authored for this project under the same MIT
+licence.
 
 Hermes Town's code and shipped original assets are licensed under the **MIT
 License**:
@@ -105,11 +106,10 @@ Each extracted file below is a crop of one authored rectangle from the named
 atlas. The extraction scripts (`scripts/extract_hermes_town_assets.py` and
 `scripts/generate_town_and_pet_assets.py`) remove the reserved magenta chroma
 key, trim fully transparent margins, downsample with Lanczos to the scene's
-display size, and snap partial alpha to a hard pixel edge. The tileable terrain
-and well sprites (`road-h.png`, `road-v.png`, `plaza-stone.png`, `water.png`,
-`well.png`) are generated deterministically by
-`scripts/generate_town_and_pet_assets.py` under the MIT License. The source
-atlases are not vendored.
+display size, and snap partial alpha to a hard pixel edge. The tileable terrain, well, and bulletin board sprites (`road-h.png`, `road-v.png`,
+`plaza-stone.png`, `water.png`, `well.png`, `bulletin-board.png`) are generated
+deterministically by `scripts/generate_town_and_pet_assets.py` under the MIT
+License. The source atlases are not vendored.
 
 | File | Source atlas / generator | Source rectangle | Output |
 | --- | --- | --- | --- |
@@ -133,12 +133,13 @@ atlases are not vendored.
 | `flowers.png` | `furniture.png` (cell 1) | `(444, 0, 443, 256)` | 36×24 |
 | `signpost.png` | `furniture.png` (cell 5) | `(444, 256, 443, 256)` | 28×38 |
 | `well.png` | `generate_town_and_pet_assets.py` | procedural MIT pixel art | 44×48 |
+| `bulletin-board.png` | `generate_town_and_pet_assets.py` | procedural MIT pixel art | 48×44 |
 | `road-h.png` | `generate_town_and_pet_assets.py` | procedural MIT tile | 64×32 |
 | `road-v.png` | `generate_town_and_pet_assets.py` | procedural MIT tile | 32×64 |
 | `plaza-stone.png` | `generate_town_and_pet_assets.py` | procedural MIT tile | 64×64 |
 | `water.png` | `generate_town_and_pet_assets.py` | procedural MIT tile | 64×64 |
 
-The Hermes Town MIT notice above covers these twenty-four files.
+The Hermes Town MIT notice above covers these twenty-five files.
 
 ---
 
@@ -167,7 +168,7 @@ public [Petdex](https://petdex.dev) community manifest
 - `grass.png` is **CC-BY-SA 3.0** and carries the attribution and share-alike
   obligations in section 1.
 - `person.png` is **CC0 1.0**.
-- The twenty-four files listed in section 3 are **MIT**, under the notice in
+- The twenty-five files listed in section 3 are **MIT**, under the notice in
   that section.
 - The community pet spritesheets in `assets/town/pets/` are credited to their
   respective creators in section 4 and `assets/town/pets/catalog.json`.

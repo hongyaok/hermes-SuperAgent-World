@@ -131,6 +131,8 @@ function render(node) {
     'data-petdex-slug', 'data-petdex-state', 'data-town-road-network',
     'data-town-landmark', 'data-town-hud', 'data-town-connections',
     'data-town-time', 'data-town-clock',
+    'data-town-bulletin', 'data-town-bulletin-modal', 'data-town-bulletin-task',
+    'data-transcript-scroll',
     'data-create-pr-box', 'data-town-dialog',
     'data-drawer', 'id', 'role',
   ]) {
@@ -138,6 +140,9 @@ function render(node) {
   }
   if (props.className) bits.push(`class="${props.className}"`)
   if (props.style && props.style.backgroundColor) bits.push(`bg="${props.style.backgroundColor}"`)
+  if (props.style && props.style.width) bits.push(`width:${props.style.width}`)
+  if (props.style && props.style.height) bits.push(`height:${props.style.height}`)
+  if (props.style && props.style.overflowY) bits.push(`overflow-y:${props.style.overflowY}`)
   if (props.style && props.style.isolation) bits.push(`isolation:${props.style.isolation}`)
   if (props.style && props.style.zIndex != null) bits.push(`z-index:${props.style.zIndex}`)
   const children = props.children
@@ -402,5 +407,39 @@ assert.equal(plugin.backendNeedsRestart({ features: ['towns', 'thinking'] }), fa
 assert.equal(plugin.backendNeedsRestart({ features: ['towns'] }), true)
 assert.equal(plugin.backendNeedsRestart({ features: [] }), true)
 assert.doesNotMatch(page, /data-backend-stale/)
+
+// Bulletin board in TownScene and modal showing in-progress tasks
+assert.match(scene, /data-town-bulletin="1"/)
+assert.match(scene, /Bulletin Board/)
+assert.match(scene, /1 active/)
+const bulletinModal = render(h(plugin.TownBulletinModal, {
+  town: root,
+  pets,
+  assets,
+  onClose: () => undefined,
+  onOpenSession: () => undefined,
+}))
+assert.match(bulletinModal, /data-town-bulletin-modal="1"/)
+assert.match(bulletinModal, /Town Bulletin Board/)
+assert.match(bulletinModal, /In Progress Tasks \(1\)/)
+assert.match(bulletinModal, /data-town-bulletin-task="S-0002"/)
+assert.match(bulletinModal, /Fix the parser/)
+
+// Speech bubble visibility & high-contrast dark background
+assert.equal(render(h(plugin.TownSpeechBubble, { text: 'Hidden text', status: 'idle', visible: false })), '')
+const visibleBubble = render(h(plugin.TownSpeechBubble, { text: 'Visible text', status: 'running', visible: true }))
+assert.match(visibleBubble, /data-town-speech="1"/)
+assert.match(visibleBubble, /bg="#161326"/)
+assert.match(visibleBubble, /Visible text/)
+
+// Uniform chat window dimensions and visible scrollbar for both Router and Worker
+assert.match(dialog, /width:54vw/)
+assert.match(dialog, /height:78vh/)
+assert.match(dialog, /data-transcript-scroll="1"/)
+assert.match(dialog, /overflow-y:scroll/)
+assert.match(workerDialog, /width:54vw/)
+assert.match(workerDialog, /height:78vh/)
+assert.match(workerDialog, /data-transcript-scroll="1"/)
+assert.match(workerDialog, /overflow-y:scroll/)
 
 console.log('town render probe: ok')

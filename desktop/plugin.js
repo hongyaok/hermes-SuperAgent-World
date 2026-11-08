@@ -1428,23 +1428,13 @@ function EventRow({ item }) {
   })
 }
 
-/** A run of audit events, collapsible. Live turns open by default (the work
- *  is what you are watching); a finished turn collapses to its last line so
- *  the answer is not buried under tool noise. */
+/** A run of audit events, collapsible. Collapsed to a 1-line summary by default
+ *  so the latest message is not buried under tool noise. */
 function Activity({ events, running, sessionId }) {
-  const [open, setOpen] = useState(!!running)
-  const wasRunning = useRef(!!running)
+  const [open, setOpen] = useState(false)
   const latest = events[events.length - 1]
   const clock = fmtClock(latest && latest.created_at)
   const count = events.length
-
-  // A poll can flip the status while the block stays mounted; follow it, but
-  // never override a click made while the status is unchanged.
-  useEffect(() => {
-    if (wasRunning.current === !!running) return
-    wasRunning.current = !!running
-    setOpen(!!running)
-  }, [running])
 
   return jsxs('div', {
     className: 'flex w-full min-w-0 flex-col gap-0.5',
@@ -1539,11 +1529,27 @@ function Transcript({ session, optimistic }) {
 
   // Switching chats starts at the newest line; polling never moves the box
   // unless the reader was already at the bottom.
-  useEffect(() => { stickRef.current = true; setAway(false) }, [sessionId])
   useEffect(() => {
+    stickRef.current = true
+    setAway(false)
     const el = boxRef.current
-    if (el && stickRef.current) el.scrollTop = el.scrollHeight
-  }, [sessionId, items.length, tail, showPending])
+    if (el) el.scrollTop = el.scrollHeight
+  }, [sessionId])
+  useEffect(() => {
+    const pinToBottom = () => {
+      const el = boxRef.current
+      if (el && stickRef.current) el.scrollTop = el.scrollHeight
+    }
+    pinToBottom()
+    const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame(pinToBottom) : null
+    const timer1 = typeof setTimeout === 'function' ? setTimeout(pinToBottom, 40) : null
+    const timer2 = typeof setTimeout === 'function' ? setTimeout(pinToBottom, 160) : null
+    return () => {
+      if (raf != null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(raf)
+      if (timer1 != null && typeof clearTimeout === 'function') clearTimeout(timer1)
+      if (timer2 != null && typeof clearTimeout === 'function') clearTimeout(timer2)
+    }
+  }, [sessionId, items.length, tail, showPending, session && session.updated_at])
 
   const scrollToLatest = () => {
     stickRef.current = true
@@ -1589,10 +1595,19 @@ function Transcript({ session, optimistic }) {
   }
 
   return jsxs('div', {
-    className: 'relative flex min-h-0 flex-1 flex-col',
+    className: 'relative flex min-h-0 flex-1 flex-col overflow-hidden',
+    style: {
+      flex: '1 1 0%',
+      minHeight: 0,
+      width: '100%',
+      display: 'flex',
+      flexDirection: 'column',
+      overflow: 'hidden',
+    },
     children: [
       jsx('div', {
         key: 'scroll',
+        'data-transcript-scroll': '1',
         ref: boxRef,
         onScroll: () => {
           const el = boxRef.current
@@ -1605,7 +1620,15 @@ function Transcript({ session, optimistic }) {
         // height flex-1 alone would let the column grow with the chat. A
         // max-height can only limit, never force growth, so the fixed dialog
         // is unaffected while unbounded hosts scroll instead.
-        className: cn('flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto superagent-pixel-scroll max-h-[56vh] px-1 py-1'),
+        className: cn('flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overflow-y-scroll superagent-pixel-scroll max-h-[56vh] px-2 py-1.5'),
+        style: {
+          flex: '1 1 0%',
+          minHeight: 0,
+          width: '100%',
+          overflowY: 'scroll',
+          overflowX: 'hidden',
+          scrollbarGutter: 'stable',
+        },
         children: body,
       }),
       away
@@ -3379,7 +3402,18 @@ function ChatCenter(props) {
 
   if (!session) {
     return jsxs('div', {
-      className: 'mx-auto flex min-h-0 min-w-0 w-[52vw] flex-1 flex-col gap-3',
+      className: 'mx-auto flex min-h-0 min-w-0 w-full w-[52vw] flex-1 flex-col gap-3 overflow-hidden',
+      style: {
+        width: '100%',
+        minWidth: '100%',
+        maxWidth: '100%',
+        flex: '1 1 0%',
+        minHeight: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+        boxSizing: 'border-box',
+      },
       children: [
         banner ? jsx('div', { key: 'banner', className: 'shrink-0', children: banner }) : null,
         jsx('div', {
@@ -3414,7 +3448,18 @@ function ChatCenter(props) {
     : null
 
   return jsxs('div', {
-    className: 'mx-auto flex min-h-0 min-w-0 w-[52vw] flex-1 flex-col gap-3',
+    className: 'mx-auto flex min-h-0 min-w-0 w-full w-[52vw] flex-1 flex-col gap-3 overflow-hidden',
+    style: {
+      width: '100%',
+      minWidth: '100%',
+      maxWidth: '100%',
+      flex: '1 1 0%',
+      minHeight: 0,
+      display: 'flex',
+      flexDirection: 'column',
+      overflow: 'hidden',
+      boxSizing: 'border-box',
+    },
     children: [
       jsx(ChatHeader, {
         key: 'head', session,
@@ -4293,13 +4338,18 @@ const TOWN_CSS = `
 .superagent-speech-bubble { animation: superagent-speech-float 2200ms ease-in-out infinite; }
 .superagent-town-sky { transition: background-color 800ms linear; }
 .superagent-town-clock { font-variant-numeric: tabular-nums; }
-/* Fixed-size bubbles scroll instead of growing the town layout. Thin here;
- * the pixel-chrome pass upgrades this to a stepped retro scrollbar. */
-.superagent-pixel-scroll { scrollbar-width: thin; scrollbar-color: #e8b64c #2a2135; }
-.superagent-pixel-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+/* Fixed-size bubbles scroll instead of growing the town layout.
+ * Clear, high-visibility retro scrollbar for chat windows & speech bubbles. */
+.superagent-pixel-scroll { scrollbar-width: auto; scrollbar-color: #f5d97a #2a2135; }
+.superagent-pixel-scroll::-webkit-scrollbar { width: 12px; height: 12px; }
 .superagent-pixel-scroll::-webkit-scrollbar-track { background: #2a2135; border: 2px solid #1a1a2e; }
-.superagent-pixel-scroll::-webkit-scrollbar-thumb { background: #f5d97a; border: 2px solid #1a1a2e; }
+.superagent-pixel-scroll::-webkit-scrollbar-thumb { background: #f5d97a; border: 2px solid #1a1a2e; min-height: 24px; }
+.superagent-pixel-scroll::-webkit-scrollbar-thumb:hover { background: #ffe58f; }
 .superagent-pixel-scroll::-webkit-scrollbar-thumb:active { background: #ffd94d; }
+.superagent-actor-btn:hover [data-town-speech="1"], .superagent-actor-btn:focus-visible [data-town-speech="1"] {
+  opacity: 1 !important;
+  visibility: visible !important;
+}
 /* Pixel chrome: system pixel-font stack (no remote fetch, hermetic) plus
  * stepped 2px panels. Applied to the town canvas, HUD, bubbles and dialog
  * windows; the rest of the plugin keeps the host chrome. */
@@ -4407,24 +4457,44 @@ function PetdexSprite({ session, isRouter, pet, personArt, animState, facingLeft
   })
 }
 
-function TownSpeechBubble({ text, status }) {
-  if (!text) return null
-  // Opaque by design: the sky tint (z-3) and grass tiles sit below the
-  // bubble (z-20), so any translucent bg reads as see-through text.
-  const toneClass = status === 'failed'
-    ? 'border-red-500 text-(--ui-text-secondary)'
+function TownSpeechBubble({ text, status, visible = true }) {
+  if (!text || !visible) return null
+  // Opaque high-contrast dark slate bubble with bright ivory text so it is
+  // crisp on grass, stone, or night sky without ever matching the text color.
+  const borderColor = status === 'failed'
+    ? '#f87171'
     : (status === 'review'
-        ? 'border-amber-500 text-(--ui-text-secondary)'
-        : 'border-(--ui-stroke-secondary) text-(--ui-text-secondary)')
+        ? '#fbbf24'
+        : (status === 'running' ? '#60a5fa' : '#a78bfa'))
   return jsx('span', {
     'data-town-speech': '1',
     className: cn(
-      'superagent-speech-bubble superagent-pixel-scroll pointer-events-none absolute -top-6 left-1/2 z-20',
-      'h-14 w-36 -translate-x-1/2 overflow-x-hidden overflow-y-auto break-words rounded-lg border-2 px-2 py-1',
-      'text-left text-[0.625rem] font-medium leading-tight opacity-100 shadow-md',
-      toneClass,
+      'superagent-speech-bubble superagent-pixel-scroll pointer-events-none absolute left-1/2 z-20',
+      '-translate-x-1/2 overflow-x-hidden overflow-y-auto break-words rounded-md',
+      'text-left font-semibold leading-snug opacity-100',
     ),
-    style: { backgroundColor: 'var(--card, #fffbe8)', opacity: 1, maxHeight: '56px' },
+    style: {
+      bottom: '100%',
+      left: '50%',
+      marginBottom: '6px',
+      transform: 'translateX(-50%)',
+      width: 'max-content',
+      minWidth: '52px',
+      maxWidth: '176px',
+      maxHeight: '54px',
+      padding: '4px 8px',
+      backgroundColor: '#161326',
+      color: '#fffbeb',
+      borderColor,
+      borderWidth: '2px',
+      borderStyle: 'solid',
+      boxShadow: '0 4px 10px rgba(0, 0, 0, 0.7), 0 0 0 1px #090812',
+      textShadow: '0 1px 2px rgba(0, 0, 0, 0.95)',
+      fontSize: '0.6875rem',
+      fontWeight: 600,
+      lineHeight: 1.25,
+      opacity: 1,
+    },
     title: text,
     children: text,
   })
@@ -4481,11 +4551,15 @@ function useTownSimulation(town, buildingIds, reducedMotion) {
     seenIds.add(session.id)
     const home = actorHomePosition(session, isRouter)
     const isBuilding = !!(buildingIds && buildingIds[session.id])
+    const events = Array.isArray(session.recent_events) ? session.recent_events.filter(Boolean) : []
+    const latest = events.length ? events[0] : null
+    const currentEventKey = latest ? `${String(latest.kind || '').trim()}:${String(latest.detail || '').trim()}` : ''
     const existing = stateMap[session.id]
     if (!existing) {
       const h = townHash(session.id)
       const startLeft = isBuilding && !reducedMotion ? 50 : home.left
       const startTop = isBuilding && !reducedMotion ? 57 : home.top
+      const startSpeaking = session.status === 'running' || session.status === 'queued' || isBuilding
       stateMap[session.id] = {
         left: startLeft,
         top: startTop,
@@ -4494,12 +4568,25 @@ function useTownSimulation(town, buildingIds, reducedMotion) {
         animState: isBuilding && !reducedMotion ? 'jumping' : defaultAnimForStatus(session.status),
         facingLeft: home.left < 50,
         socialText: '',
+        speechTicks: startSpeaking ? 20 : 0,
+        speechCooldown: startSpeaking ? (55 + (h % 35)) : (50 + (h % 60)),
+        socialCooldown: 30 + (h % 50),
+        lastStatus: session.status,
+        lastEventKey: currentEventKey,
         pauseTicks: (h % 14) + 4,
         stepCount: h % 7,
       }
     } else {
       existing.homeLeft = home.left
       existing.homeTop = home.top
+      if (session.status !== existing.lastStatus || currentEventKey !== existing.lastEventKey) {
+        existing.lastStatus = session.status
+        existing.lastEventKey = currentEventKey
+        if (currentEventKey || session.status === 'running' || session.status === 'review' || session.status === 'failed') {
+          existing.speechTicks = 24
+          existing.speechCooldown = 60
+        }
+      }
       if (reducedMotion) {
         existing.left = home.left
         existing.top = home.top
@@ -4522,6 +4609,33 @@ function useTownSimulation(town, buildingIds, reducedMotion) {
         if (!actor) continue
         const home = actorHomePosition(session, isRouter)
         const status = session.status
+        const hActor = townHash(`${session.id}:${actor.stepCount || 0}`)
+
+        if (actor.socialCooldown > 0) actor.socialCooldown -= 1
+        if (actor.speechTicks > 0) {
+          actor.speechTicks -= 1
+          if (actor.speechTicks === 0) {
+            actor.socialText = ''
+            actor.speechCooldown = (status === 'running' || status === 'queued')
+              ? 55 + (hActor % 35)
+              : 95 + (hActor % 65)
+          }
+        } else {
+          if (actor.speechCooldown > 0) actor.speechCooldown -= 1
+          if (actor.speechCooldown <= 0) {
+            if (status === 'running' || status === 'queued') {
+              actor.speechTicks = 18
+              actor.speechCooldown = 60 + (hActor % 40)
+            } else if (status === 'review') {
+              actor.speechTicks = 14
+              actor.speechCooldown = 120 + (hActor % 80)
+            } else {
+              actor.speechTicks = 0
+              actor.speechCooldown = 100
+            }
+          }
+        }
+
         const dx = actor.targetLeft - actor.left
         const dy = actor.targetTop - actor.top
         const dist = Math.hypot(dx, dy)
@@ -4590,17 +4704,26 @@ function useTownSimulation(town, buildingIds, reducedMotion) {
         }
       }
 
-      // Check proximity between actors for friendly town banter & waving
+      // Check proximity between actors for occasional friendly town banter & waving
       for (let i = 0; i < ids.length; i += 1) {
         for (let j = i + 1; j < ids.length; j += 1) {
           const a = map[ids[i]]
           const b = map[ids[j]]
           if (!a || !b) continue
+          if ((a.speechTicks || 0) > 0 || (b.speechTicks || 0) > 0) continue
+          if ((a.socialCooldown || 0) > 0 || (b.socialCooldown || 0) > 0) continue
           const d = Math.hypot(a.left - b.left, a.top - b.top)
-          if (d > 1.5 && d < 10.5 && !a.socialText && !b.socialText) {
+          if (d > 1.5 && d < 8.5 && !a.socialText && !b.socialText) {
             const pick = TOWN_BANTER[(townHash(ids[i]) + (a.stepCount || 0)) % TOWN_BANTER.length]
             a.socialText = pick
+            a.speechTicks = 15
+            a.speechCooldown = 90
+            a.socialCooldown = 140
             b.socialText = '👋'
+            b.speechTicks = 12
+            b.speechCooldown = 90
+            b.socialCooldown = 140
+            break
           }
         }
       }
@@ -4624,10 +4747,12 @@ function matchesTownFilter(session, filter, isRouter) {
 }
 
 function TownActor({ session, isRouter, actorState, pet, personArt, reducedMotion, dimmed, onOpen }) {
+  const [hovered, setHovered] = useState(false)
   const pos = actorState || actorHomePosition(session, isRouter)
   const animState = (actorState && actorState.animState) || defaultAnimForStatus(session.status)
   const facingLeft = !!(actorState && actorState.facingLeft)
   const speech = deriveSpeechBubble(session, isRouter, actorState && actorState.socialText)
+  const speechVisible = hovered || (actorState ? (actorState.speechTicks > 0 || !!actorState.socialText) : true)
   const petName = (pet && pet.display_name) || session.avatar_slug || (isRouter ? 'Router' : 'Worker')
   const zIndex = Math.max(5, Math.min(25, Math.round((Number(pos.top) || 50) / 5) + 2))
 
@@ -4635,10 +4760,14 @@ function TownActor({ session, isRouter, actorState, pet, personArt, reducedMotio
     type: 'button',
     'data-town-actor': session.id,
     onClick: () => onOpen(session.id),
+    onMouseEnter: () => setHovered(true),
+    onMouseLeave: () => setHovered(false),
+    onFocus: () => setHovered(true),
+    onBlur: () => setHovered(false),
     'aria-label': `${isRouter ? 'Router' : 'Worker'} character ${session.id} (${petName})`,
     title: `${sessionTitle(session)} · ${petName} (${townStatusLabel(session.status)})`,
     className: cn(
-      'group absolute flex flex-col items-center focus:outline-none',
+      'superagent-actor-btn group absolute flex flex-col items-center focus:outline-none',
       'transition-[left,top,opacity] duration-150 ease-linear',
       dimmed && 'opacity-35',
     ),
@@ -4649,7 +4778,7 @@ function TownActor({ session, isRouter, actorState, pet, personArt, reducedMotio
       zIndex,
     },
     children: [
-      jsx(TownSpeechBubble, { key: 'speech', text: speech, status: session.status }),
+      jsx(TownSpeechBubble, { key: 'speech', text: speech, status: session.status, visible: speechVisible }),
       jsx(PetdexSprite, {
         key: 'sprite',
         session,
@@ -4761,6 +4890,315 @@ function TownHouse({ session, isRouter, slot, onOpen, houseRef, building, reduce
   })
 }
 
+function bulletinTaskSnippet(task) {
+  if (!task) return ''
+  const events = Array.isArray(task.recent_events) ? task.recent_events.filter(Boolean) : []
+  if (events.length && events[0].detail) {
+    return clip(String(events[0].detail).replace(/\s+/g, ' ').trim(), 90)
+  }
+  const raw = String(task.last_event || '').replace(/\s+/g, ' ').trim()
+  if (raw) return clip(raw, 90)
+  return clip(firstLine(task.prompt), 90)
+}
+
+function TownBulletinBoard({ assets, inProgressCount, totalTasksCount, onOpenBulletin }) {
+  const art = assets && assets['bulletin-board.png'] && assets['bulletin-board.png'].data_url
+  const activeBadge = inProgressCount > 0 ? `${inProgressCount} active` : `${totalTasksCount} tasks`
+  return jsxs('button', {
+    type: 'button',
+    'data-town-bulletin': '1',
+    onClick: onOpenBulletin,
+    'aria-label': `Town bulletin board (${inProgressCount} in progress)`,
+    title: 'Click to view tasks currently in progress in this town',
+    className: cn(
+      'group absolute flex flex-col items-center rounded p-0.5 transition-transform duration-150',
+      'hover:scale-105 hover:brightness-110',
+      'focus-visible:outline focus-visible:outline-2 focus-visible:outline-(--ui-accent)',
+    ),
+    style: {
+      left: '35%',
+      top: '58%',
+      transform: 'translate(-50%, -85%)',
+      zIndex: 12,
+    },
+    children: [
+      jsxs('span', {
+        key: 'board-wrap',
+        className: 'relative flex items-center justify-center',
+        children: [
+          art
+            ? jsx('img', {
+                key: 'art',
+                src: art,
+                alt: '',
+                draggable: false,
+                width: 44,
+                style: { imageRendering: 'pixelated', height: 'auto' },
+              })
+            : jsx('span', {
+                key: 'fallback',
+                className: cn(
+                  'superagent-pixel-panel flex h-[40px] w-[44px] items-center justify-center rounded',
+                  'bg-[#845630] text-[0.75rem] text-[#fffbeb] shadow-sm',
+                ),
+                children: '📋',
+              }),
+          jsx('span', {
+            key: 'badge',
+            className: cn(
+              'absolute -right-2 -top-1.5 inline-flex items-center gap-1 rounded border px-1 py-0.5',
+              'text-[0.5625rem] font-semibold leading-none whitespace-nowrap shadow-sm',
+              inProgressCount > 0
+                ? 'border-amber-400/80 bg-[#161326] text-amber-200'
+                : 'border-(--ui-stroke-secondary) bg-background/95 text-(--ui-text-secondary)',
+            ),
+            children: activeBadge,
+          }),
+        ],
+      }),
+      jsx('span', {
+        key: 'label',
+        className: cn(
+          'mt-0.5 rounded border border-(--ui-stroke-secondary) bg-background/95 px-1.5 py-0.5',
+          'text-[0.5625rem] font-medium leading-tight whitespace-nowrap text-(--ui-text-secondary) shadow-sm',
+          'group-hover:bg-(--chrome-action-hover)',
+        ),
+        children: 'Bulletin Board',
+      }),
+    ],
+  })
+}
+
+function TownBulletinModal({ town, pets, onClose, onSelectTask }) {
+  const allTasks = useMemo(() => {
+    if (!town) return []
+    const workers = Array.isArray(town.workers) ? town.workers : []
+    return [
+      { task: town, isRouter: true },
+      ...workers.map((w) => ({ task: w, isRouter: false })),
+    ]
+  }, [town])
+
+  const inProgress = useMemo(
+    () => allTasks.filter(({ task }) => task && (task.status === 'running' || task.status === 'queued')),
+    [allTasks],
+  )
+  const otherTasks = useMemo(
+    () => allTasks.filter(({ task }) => task && task.status !== 'running' && task.status !== 'queued'),
+    [allTasks],
+  )
+  const now = useNow(inProgress.length > 0)
+  const petMap = pets || {}
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.stopPropagation()
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
+
+  const renderTaskCard = ({ task, isRouter }) => {
+    const roleLabel = isRouter
+      ? 'Router'
+      : `Worker #${(Number(task.town_slot) || 0) + 1}`
+    const statusLabel = townStatusLabel(task.status)
+    const busy = task.status === 'running' || task.status === 'queued'
+    const elapsed = busy ? fmtSeconds(liveElapsedSeconds(task, now)) : timingLabel(task)
+    const snippet = bulletinTaskSnippet(task)
+    const pet = petMap[task.avatar_slug]
+    const petName = (pet && pet.display_name) || task.avatar_slug || ''
+    return jsxs('button', {
+      key: task.id,
+      type: 'button',
+      'data-town-bulletin-task': task.id,
+      onClick: () => onSelectTask(task.id),
+      className: cn(
+        'flex w-full flex-col gap-1 rounded-md border border-(--ui-stroke-secondary)',
+        'bg-background/95 p-2.5 text-left transition-colors hover:border-(--ui-accent) hover:bg-(--chrome-action-hover)',
+        'focus-visible:outline focus-visible:outline-2 focus-visible:outline-(--ui-accent)',
+      ),
+      children: [
+        jsxs('div', {
+          key: 'top',
+          className: 'flex flex-wrap items-center justify-between gap-1.5 text-[0.6875rem]',
+          children: [
+            jsxs('div', {
+              key: 'left',
+              className: 'inline-flex items-center gap-1.5',
+              children: [
+                jsx('span', {
+                  key: 'role',
+                  className: cn(
+                    'rounded border px-1.5 py-0.5 text-[0.625rem] font-semibold leading-none',
+                    isRouter
+                      ? 'border-amber-500/40 bg-amber-500/10 text-amber-300'
+                      : 'border-(--ui-stroke-secondary) bg-(--chrome-action-hover) text-(--ui-text-secondary)',
+                  ),
+                  children: roleLabel,
+                }),
+                jsx('span', {
+                  key: 'id',
+                  className: 'font-mono text-[0.625rem] text-(--ui-text-quaternary)',
+                  children: task.id,
+                }),
+                petName
+                  ? jsx('span', {
+                      key: 'pet',
+                      className: 'text-[0.625rem] text-(--ui-text-tertiary)',
+                      children: `· ${petName}`,
+                    })
+                  : null,
+              ],
+            }),
+            jsxs('div', {
+              key: 'right',
+              className: 'inline-flex items-center gap-1.5 text-[0.625rem] text-(--ui-text-secondary)',
+              children: [
+                jsx(ChatDot, { key: 'dot', status: task.status }),
+                jsx('span', { key: 'status', className: 'font-medium', children: statusLabel }),
+                elapsed
+                  ? jsx('span', {
+                      key: 'elapsed',
+                      className: 'font-mono tabular-nums text-(--ui-text-tertiary)',
+                      children: `· ${elapsed}`,
+                    })
+                  : null,
+              ],
+            }),
+          ],
+        }),
+        jsx('div', {
+          key: 'title',
+          className: 'truncate text-xs font-semibold text-(--ui-text-primary)',
+          children: sessionTitle(task),
+        }),
+        snippet
+          ? jsx('div', {
+              key: 'snippet',
+              className: 'line-clamp-2 text-[0.6875rem] leading-snug text-(--ui-text-tertiary)',
+              children: snippet,
+            })
+          : null,
+      ],
+    })
+  }
+
+  return jsx('div', {
+    role: 'dialog',
+    'aria-modal': 'true',
+    'aria-label': 'Town Bulletin Board',
+    'data-town-bulletin-modal': '1',
+    onClick: (event) => {
+      if (event.target === event.currentTarget) onClose()
+    },
+    className: 'absolute inset-0 z-[35] flex items-center justify-center bg-black/60 p-3 backdrop-blur-xs',
+    style: { zIndex: 35 },
+    children: jsxs('div', {
+      className: cn(
+        'superagent-pixel superagent-pixel-panel flex max-h-[90%] w-full max-w-lg flex-col overflow-hidden rounded-lg',
+        'border border-(--ui-stroke-secondary) bg-background text-(--ui-text-primary) shadow-xl',
+      ),
+      style: {
+        backgroundColor: 'var(--card, var(--background, #1c1c1e))',
+        color: 'var(--foreground, #f5f5f5)',
+        width: 'min(520px, 92%)',
+        maxHeight: '86%',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+      },
+      children: [
+        jsxs('div', {
+          key: 'header',
+          className: 'flex shrink-0 items-start justify-between gap-2 border-b border-(--ui-stroke-secondary) px-3.5 py-2.5',
+          children: [
+            jsxs('div', {
+              key: 'titles',
+              className: 'min-w-0 flex-1',
+              children: [
+                jsx('h3', {
+                  key: 'h',
+                  className: 'text-sm font-bold text-(--ui-text-primary)',
+                  children: '📋 Town Bulletin Board',
+                }),
+                jsx('p', {
+                  key: 'sub',
+                  className: 'truncate text-[0.6875rem] text-(--ui-text-tertiary)',
+                  children: `${inProgress.length} task${inProgress.length === 1 ? '' : 's'} currently in progress in ${sessionTitle(town)}`,
+                }),
+              ],
+            }),
+            jsx('button', {
+              key: 'close',
+              type: 'button',
+              onClick: onClose,
+              'aria-label': 'Close bulletin board',
+              title: 'Close bulletin board (Esc)',
+              className: cn(
+                'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded',
+                'text-xs text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover) hover:text-(--ui-text-primary)',
+              ),
+              children: '✕',
+            }),
+          ],
+        }),
+        jsxs('div', {
+          key: 'body',
+          className: 'superagent-pixel-scroll flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3.5',
+          style: { flex: '1 1 0%', minHeight: 0, overflowY: 'auto' },
+          children: [
+            jsxs('div', {
+              key: 'in-progress-section',
+              className: 'flex flex-col gap-1.5',
+              children: [
+                jsx('h4', {
+                  key: 'heading',
+                  className: 'text-[0.6875rem] font-semibold uppercase tracking-wide text-(--ui-text-tertiary)',
+                  children: `In Progress Tasks (${inProgress.length})`,
+                }),
+                inProgress.length > 0
+                  ? jsx('div', {
+                      key: 'list',
+                      className: 'flex flex-col gap-1.5',
+                      children: inProgress.map(renderTaskCard),
+                    })
+                  : jsx('p', {
+                      key: 'empty',
+                      className: 'rounded-md border border-dashed border-(--ui-stroke-secondary) px-3 py-3 text-center text-xs text-(--ui-text-tertiary)',
+                      children: 'No tasks are currently running or queued in this town.',
+                    }),
+              ],
+            }),
+            otherTasks.length > 0
+              ? jsxs('div', {
+                  key: 'other-section',
+                  className: 'flex flex-col gap-1.5',
+                  children: [
+                    jsx('h4', {
+                      key: 'heading',
+                      className: 'text-[0.6875rem] font-semibold uppercase tracking-wide text-(--ui-text-quaternary)',
+                      children: `Other Town Tasks (${otherTasks.length})`,
+                    }),
+                    jsx('div', {
+                      key: 'list',
+                      className: 'flex flex-col gap-1.5',
+                      children: otherTasks.map(renderTaskCard),
+                    }),
+                  ],
+                })
+              : null,
+          ],
+        }),
+      ],
+    }),
+  })
+}
+
 function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, reducedMotion }) {
   const grass = assets && assets['grass.png'] && assets['grass.png'].data_url
   const roadH = assets && assets['road-h.png'] && assets['road-h.png'].data_url
@@ -4783,6 +5221,10 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
   const workers = Array.isArray(town.workers) ? town.workers : []
   const [filter, setFilter] = useState('all')
   const [paused, setPaused] = useState(false)
+  const [bulletinOpen, setBulletinOpen] = useState(false)
+  useEffect(() => {
+    setBulletinOpen(false)
+  }, [town.id])
   const townTime = useTownTime()
   const isDark = townTime.phase === 'night' || townTime.phase === 'dusk'
   const actorMap = useTownSimulation(town, buildingIds, reducedMotion || paused)
@@ -4793,6 +5235,9 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
   }, {})
   const prCount = workers.filter((worker) => !!worker.pr_number).length
   const anyRunning = town.status === 'running' || (counts.running || 0) > 0
+  const routerInProgress = town.status === 'running' || town.status === 'queued' ? 1 : 0
+  const inProgressCount = routerInProgress + (counts.running || 0) + (counts.queued || 0)
+  const totalTasksCount = 1 + workers.length
   const summary = [
     workers.length === 1 ? '1 worker' : `${workers.length} workers`,
     ...Object.keys(counts).sort().map((key) => `${counts[key]} ${key}`),
@@ -5044,6 +5489,13 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
               zIndex: Math.max(3, Math.min(22, Math.round(tree.top / 5))),
             },
           })),
+          jsx(TownBulletinBoard, {
+            key: 'bulletin-board',
+            assets,
+            inProgressCount,
+            totalTasksCount,
+            onOpenBulletin: () => setBulletinOpen(true),
+          }),
           jsx(TownHouse, {
             key: town.id,
             session: town,
@@ -5153,6 +5605,18 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
               }),
             ],
           }),
+          bulletinOpen
+            ? jsx(TownBulletinModal, {
+                key: 'bulletin-modal',
+                town,
+                pets: petMap,
+                onClose: () => setBulletinOpen(false),
+                onSelectTask: (id) => {
+                  setBulletinOpen(false)
+                  onOpen(id)
+                },
+              })
+            : null,
         ],
       }),
       jsx('p', {
@@ -5325,7 +5789,20 @@ function TownChatDialog({
       // push the frame past the viewport; the transcript scrolls inside.
       className: cn('superagent-pixel superagent-pixel-panel flex h-[78vh] w-[54vw] flex-col overflow-hidden rounded-lg',
         'border border-(--ui-stroke-secondary) shadow-xl focus:outline-none'),
-      style: { backgroundColor: 'var(--card, var(--background, #1c1c1e))', color: 'var(--foreground, #f5f5f5)' },
+      style: {
+        backgroundColor: 'var(--card, var(--background, #1c1c1e))',
+        color: 'var(--foreground, #f5f5f5)',
+        width: '54vw',
+        minWidth: '54vw',
+        maxWidth: '54vw',
+        height: '78vh',
+        minHeight: '78vh',
+        maxHeight: '78vh',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+        boxSizing: 'border-box',
+      },
       children: [
         jsxs('header', {
           key: 'head',
@@ -5381,7 +5858,17 @@ function TownChatDialog({
           ],
         }),
         jsx('div', {
-          key: 'body', className: 'flex min-h-0 flex-1 flex-col gap-2 p-3',
+          key: 'body',
+          className: 'flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-3',
+          style: {
+            flex: '1 1 0%',
+            minHeight: 0,
+            width: '100%',
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+            boxSizing: 'border-box',
+          },
           children: ready
             ? jsx(ChatCenter, {
                 key: sessionId,
@@ -6703,6 +7190,7 @@ export {
   SuperagentPage, SettingsPanel, OverlayDrawer, ModelPicker, PresetSelect,
   modelWithThinking, reasoningLabel, backendNeedsRestart,
   TownScene, TownHouse, TownActor, PetdexSprite, TownSpeechBubble,
+  TownBulletinBoard, TownBulletinModal,
   TownSwitcher, TownChatDialog, TownEmpty, CommentBox, CreatePrBox,
   townHousePosition, townHouseSprite, townStatusLabel, deriveSpeechBubble, TOWN_PLOTS,
 }

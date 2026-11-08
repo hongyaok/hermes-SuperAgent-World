@@ -56,12 +56,13 @@ def test_expanded_town_assets_allowlist_and_dimensions():
         "signpost.png",
         "bench.png",
         "flowers.png",
+        "bulletin-board.png",
     }
     assert expected_new <= set(town_assets.ASSETS)
-    assert len(town_assets.ASSETS) == 26
+    assert len(town_assets.ASSETS) == 27
 
     manifest = town_assets.manifest()
-    assert len(manifest) == 26
+    assert len(manifest) == 27
     for name in expected_new:
         raw, mime = town_assets.read(name)
         assert mime == "image/png"
@@ -79,6 +80,7 @@ def test_expanded_town_assets_allowlist_and_dimensions():
         "signpost.png": (28, 38),
         "bench.png": (40, 24),
         "flowers.png": (36, 24),
+        "bulletin-board.png": (48, 44),
     }
     for name, size in exact_sizes.items():
         raw, _ = town_assets.read(name)

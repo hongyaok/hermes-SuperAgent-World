@@ -291,6 +291,83 @@ def _generate_well() -> Image.Image:
     return img
 
 
+def _generate_bulletin_board() -> Image.Image:
+    """Pixel-art 48x44 wooden town bulletin board with roof and pinned task notes."""
+    w, h = 48, 44
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    outline = (36, 30, 26, 255)
+    wood_dark = (88, 54, 30, 255)
+    wood_mid = (132, 86, 48, 255)
+    wood_hi = (168, 116, 68, 255)
+    cork_dark = (146, 104, 62, 255)
+    cork_mid = (176, 130, 82, 255)
+    cork_hi = (196, 150, 98, 255)
+    roof_dark = (114, 48, 38, 255)
+    roof_mid = (152, 68, 52, 255)
+    roof_hi = (188, 94, 72, 255)
+
+    # Ground shadow rim under the two posts
+    draw.ellipse([5, 37, 17, 42], fill=(28, 36, 22, 220))
+    draw.ellipse([30, 37, 42, 42], fill=(28, 36, 22, 220))
+    draw.ellipse([10, 38, 37, 42], fill=(28, 36, 22, 160))
+
+    # Two sturdy vertical timber posts
+    for px0 in (9, 34):
+        draw.rectangle([px0, 10, px0 + 4, 40], fill=wood_mid, outline=outline)
+        draw.line([px0 + 1, 11, px0 + 1, 39], fill=wood_hi)
+        draw.line([px0 + 3, 11, px0 + 3, 39], fill=wood_dark)
+
+    # Framed wooden board + corkboard backing
+    draw.rectangle([5, 11, 42, 32], fill=wood_mid, outline=outline)
+    draw.line([6, 12, 41, 12], fill=wood_hi)
+    draw.line([6, 31, 41, 31], fill=wood_dark)
+    draw.rectangle([8, 14, 39, 29], fill=cork_mid, outline=wood_dark)
+
+    # Subtle cork texture speckles
+    for cx, cy in ((10, 16), (18, 26), (25, 16), (35, 25), (14, 23), (29, 21)):
+        draw.point((cx, cy), fill=cork_dark)
+        draw.point((cx + 1, cy), fill=cork_hi)
+
+    # Pinned paper task notices:
+    # 1. Cream notice (top-left) with red pushpin
+    draw.rectangle([10, 15, 18, 23], fill=(246, 238, 214, 255), outline=(120, 104, 84, 255))
+    draw.point((14, 16), fill=(214, 52, 48, 255))
+    draw.line([12, 18, 16, 18], fill=(78, 68, 58, 255))
+    draw.line([12, 20, 16, 20], fill=(96, 86, 74, 255))
+    draw.line([12, 22, 15, 22], fill=(96, 86, 74, 255))
+
+    # 2. Gold/yellow active task notice (center-top) with green pushpin
+    draw.rectangle([20, 15, 28, 22], fill=(252, 232, 146, 255), outline=(136, 112, 54, 255))
+    draw.point((24, 16), fill=(56, 168, 76, 255))
+    draw.line([22, 18, 26, 18], fill=(74, 62, 38, 255))
+    draw.line([22, 20, 25, 20], fill=(92, 78, 48, 255))
+
+    # 3. Sky-blue notice (right) with gold pushpin
+    draw.rectangle([30, 16, 37, 25], fill=(208, 232, 248, 255), outline=(88, 114, 136, 255))
+    draw.point((33, 17), fill=(238, 182, 42, 255))
+    draw.line([31, 19, 35, 19], fill=(56, 76, 94, 255))
+    draw.line([31, 21, 35, 21], fill=(56, 76, 94, 255))
+    draw.line([31, 23, 34, 23], fill=(76, 96, 114, 255))
+
+    # 4. Small parchment note (bottom-center) with red pushpin
+    draw.rectangle([17, 23, 27, 28], fill=(242, 226, 198, 255), outline=(120, 102, 80, 255))
+    draw.point((22, 24), fill=(214, 52, 48, 255))
+    draw.line([19, 26, 25, 26], fill=(82, 70, 58, 255))
+
+    # Pitched wooden shingle canopy roof at top
+    roof_poly = [(23, 2), (45, 11), (2, 11)]
+    draw.polygon(roof_poly, fill=roof_mid, outline=outline)
+    draw.line([23, 3, 5, 10], fill=roof_hi)
+    draw.line([23, 3, 42, 10], fill=roof_dark)
+    for ry in (5, 8):
+        half = (ry - 2) * 2.2
+        draw.line([round(23 - half), ry, round(23 + half), ry], fill=roof_dark)
+    draw.rectangle([3, 10, 44, 12], fill=wood_dark, outline=outline)
+    return img
+
+
 def generate_town_assets() -> None:
     TOWN_DIR.mkdir(parents=True, exist_ok=True)
     print("Downloading Hermes Town MIT source atlases...")
@@ -307,6 +384,7 @@ def generate_town_assets() -> None:
         "flowers.png": _frame_exact(furniture, _cell_rect(furniture, 1, 4, 4), 36, 24),
         "signpost.png": _frame_exact(furniture, _cell_rect(furniture, 5, 4, 4), 28, 38),
         "well.png": _generate_well(),
+        "bulletin-board.png": _generate_bulletin_board(),
         "road-h.png": _generate_road_h(),
         "road-v.png": _generate_road_v(),
         "plaza-stone.png": _generate_plaza_stone(),
