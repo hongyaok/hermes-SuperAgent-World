@@ -1,7 +1,7 @@
 # Superagent Towns — progress and next steps
 
 **Date:** 2026-11-08
-**Status:** the vertical slice is merged on `main` at **0.5.6**. Source, tests,
+**Status:** the vertical slice is merged on `main` at **0.5.7**. Source, tests,
 docs and the 12-plot town layout are complete. The installed desktop pass is the
 only acceptance item still blocked: the gateway hosting this chat has the old
 route table, and restarting it from this session would terminate the session.
@@ -22,6 +22,8 @@ route table, and restarting it from this session would terminate the session.
 | #33 | Worker dialog “↗ Router”, readable town header, `/towns` 404 explanation; version `0.5.4`. |
 | #34 | CLI `chat --reasoning none…ultra`, stored/printed level, `models_payload` default effort; version `0.5.5`. |
 | #35 | Solid colour fallbacks (`--card` → `--background` → neutral), parent-based Router/Worker labels, owner-only Router jump, all-12 slot test; version `0.5.6`. |
+| #36 | Handover updated to the merged 0.5.6 state. |
+| #37 | CLI `models`/`settings` print the resolved default thinking level; version `0.5.7`. |
 
 ## What is implemented
 
@@ -81,7 +83,7 @@ hermes plugins doctor --ci .                5 tools, 0 hooks
 The 992×460 DOM probe with 12 houses reports **zero overlaps and zero
 clipping**. The installed plugin is a directory link at
 `~/.hermes/plugins/superagent -> C:\Users\hongy\Desktop\hermes-superagent`, and
-`hermes plugins show superagent` reports **0.5.6**.
+`hermes plugins show superagent` reports **0.5.7**.
 
 ## Not verified / blockers
 
