@@ -3,6 +3,43 @@
 All notable changes to the `superagent` Hermes plugin. Plain bullets, newest
 first.
 
+## 0.5.2 — 2026-11-08
+
+### Added
+
+- **A stale gateway explains itself.** `/health` now advertises the `thinking`
+  feature alongside `towns`, and the page checks both on mount. Instead of a
+  generic error, it says the gateway loaded an older API and needs a restart
+  before the new routes exist.
+- **All 12 worker slots fit.** The scene uses a fixed four-column × three-row
+  plot grid at the backend's `MAX_TOWN_WORKERS = 12`; a 992×460 DOM probe
+  reports no house overlaps and no clipping, including the Router in the centre.
+
+### Changed
+
+- **Labels no longer shrink with the house.** House sprites are sized directly
+  instead of scaling the whole wrapper, so status badges and names stay at
+  their readable 10 px size. The person sprite is scaled to match.
+- **Empty towns look like towns.** The first-run state paints grass and shows
+  the Router and its person instead of a bare dashed box.
+- **Settings is easier to read.** Head hints, save/error notices and the
+  provider note use the tertiary/secondary text colours; a failed save is no
+  longer the faintest text in the drawer.
+- **House names are clickable**, the house dialog focuses the composer rather
+  than the close button, Tab is trapped even if focus escapes, and the new-town
+  modal is capped to the viewport with its own scroll.
+- `GET /models` exposes `default_reasoning_effort` so every client can show the
+  same default.
+
+### Fixed
+
+- A town whose first observation had zero workers never animated its first
+  worker; an empty baseline is now persisted, so the next id counts as new.
+- House labels, status badges and people scaled down with the plot and became
+  unreadable at 10 px; only the sprite is scaled now.
+- Tab could escape the house dialog or new-town modal if focus started outside
+  the panel; both now wrap in either direction.
+
 ## 0.5.1 — 2026-11-08
 
 ### Added

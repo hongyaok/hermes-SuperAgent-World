@@ -44,7 +44,10 @@ const sdk = {
     onEvent: () => () => undefined,
   },
   useQuery: () => ({
-    data: { files: [], sessions: [], presets: [], models: [] },
+    data: {
+      files: [], sessions: [], presets: [], models: [],
+      features: ['towns', 'thinking'], api_version: 3,
+    },
     isLoading: false,
     isError: false,
     isFetching: false,
@@ -261,5 +264,10 @@ assert.match(settingsPanel, /Max parallel workers/)
 assert.equal(plugin.reasoningLabel('xhigh'), 'Extra high')
 assert.equal(plugin.modelWithThinking({ model: 'm', provider: 'p', effort: 'max' }), 'p: m · Max')
 assert.equal(plugin.modelWithThinking({ model: 'm', provider: 'p', effort: '' }), 'p: m')
+assert.equal(plugin.backendNeedsRestart(null), false)
+assert.equal(plugin.backendNeedsRestart({ features: ['towns', 'thinking'] }), false)
+assert.equal(plugin.backendNeedsRestart({ features: ['towns'] }), true)
+assert.equal(plugin.backendNeedsRestart({ features: [] }), true)
+assert.doesNotMatch(page, /data-backend-stale/)
 
 console.log('town render probe: ok')

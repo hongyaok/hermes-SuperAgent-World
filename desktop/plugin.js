@@ -374,6 +374,11 @@ function fetchTickets() {
   return rest ? rest('/tickets') : Promise.reject(new Error('backend not ready'))
 }
 
+/** Liveness + contract generation, so a stale gateway can explain itself. */
+function fetchHealth() {
+  return rest ? rest('/health') : Promise.reject(new Error('backend not ready'))
+}
+
 function fetchChats(archived, query) {
   const suffix = archived === 'all' ? '&archived=all' : ''
   const needle = String(query || '').trim()
@@ -482,6 +487,20 @@ function useTownAssets() {
   return useQuery({
     queryKey: [ID, 'town', 'assets'], queryFn: fetchTownAssets,
     staleTime: Infinity, retry: false,
+  })
+}
+
+function backendNeedsRestart(health) {
+  if (!health) return false
+  const features = Array.isArray(health.features) ? health.features : []
+  return !features.includes('towns') || !features.includes('thinking')
+}
+
+/** The gateway's contract is the one route that can explain a stale process. */
+function useHealth() {
+  return useQuery({
+    queryKey: [ID, 'health'], queryFn: fetchHealth,
+    staleTime: 15000, retry: false, refetchInterval: 30000,
   })
 }
 
@@ -1952,7 +1971,7 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
         key: 'head', className: 'flex flex-wrap items-center justify-between gap-2 text-[0.6875rem]',
         children: [
           jsx('span', {
-            key: 'h', className: 'min-w-0 flex-1 truncate text-(--ui-text-quaternary)',
+            key: 'h', className: 'min-w-0 flex-1 truncate text-(--ui-text-tertiary)',
             children: 'Defaults apply to new chats and worker launches.',
           }),
           jsxs('div', {
@@ -1974,7 +1993,7 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
       saved || failure
         ? jsx('div', {
             key: 'notice',
-            className: cn('truncate text-[0.6875rem]', saved ? 'text-(--ui-text-tertiary)' : 'text-(--ui-text-quaternary)'),
+            className: cn('truncate text-[0.6875rem]', saved ? 'text-(--ui-text-tertiary)' : 'text-(--ui-text-secondary)'),
             title: failure || 'Saved.',
             children: saved ? 'Saved.' : failure,
           })
@@ -2041,7 +2060,7 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
                     ],
                   }),
                   jsxs('div', {
-                    key: 'provider', className: 'flex flex-wrap items-center gap-2 text-[0.6875rem] text-(--ui-text-quaternary)',
+                    key: 'provider', className: 'flex flex-wrap items-center gap-2 text-[0.6875rem] text-(--ui-text-tertiary)',
                     children: [
                       jsx('span', { key: 'p', children: model.provider ? `provider: ${model.provider}` : 'provider: auto (chosen by Hermes)' }),
                       jsx('span', { key: 'n', children: 'No default means the CLI picks.' }),
@@ -3875,9 +3894,10 @@ function TownHouse({ session, isRouter, slot, onOpen, houseRef, building, reduce
   const art = assets && assets[sprite] && assets[sprite].data_url
   const person = assets && assets['person.png'] && assets['person.png'].data_url
   const position = isRouter ? { left: 50, top: 50, scale: 1.06 } : townHousePosition(slot)
-  const width = isRouter ? 178 : 136
-  const fallbackHeight = isRouter ? 194 : 140
-  const personSize = isRouter ? 44 : 38
+  const scale = Math.max(0.5, Number(position.scale) || 1)
+  const width = Math.round((isRouter ? 178 : 136) * scale)
+  const fallbackHeight = Math.round((isRouter ? 194 : 140) * scale)
+  const personSize = Math.round((isRouter ? 44 : 38) * scale)
   const label = townStatusLabel(session.status)
   return jsxs('div', {
     'data-town-house': session.id,
@@ -3885,7 +3905,7 @@ function TownHouse({ session, isRouter, slot, onOpen, houseRef, building, reduce
     style: {
       left: `${position.left}%`,
       top: `${position.top}%`,
-      transform: `translate(-50%, -50%) scale(${position.scale})`,
+      transform: 'translate(-50%, -50%)',
       transformOrigin: '50% 100%',
       width: `${width + 22}px`,
     },
@@ -3953,11 +3973,14 @@ function TownHouse({ session, isRouter, slot, onOpen, houseRef, building, reduce
             : null,
         ],
       }),
-      jsx('span', {
+      jsx('button', {
         key: 'name',
+        type: 'button',
+        onClick: () => onOpen(session.id),
+        'aria-label': `Open ${isRouter ? 'Router' : 'worker'} ${session.id}: ${sessionTitle(session)}`,
         className: cn('mt-0.5 block max-w-[11rem] truncate rounded border px-1.5 py-0.5',
           'border-(--ui-stroke-secondary) bg-background text-center text-[0.625rem]',
-          'leading-tight text-(--ui-text-secondary) shadow-sm'),
+          'leading-tight text-(--ui-text-secondary) shadow-sm hover:bg-(--chrome-action-hover)'),
         title: sessionTitle(session),
         children: isRouter ? 'Router' : sessionTitle(session),
       }),
@@ -4174,7 +4197,8 @@ function TownChatDialog({
     const focusables = () => Array.from(panel.querySelectorAll(
       'button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
     )).filter((element) => element.getClientRects().length > 0)
-    const first = focusables()[0]
+    const first = panel.querySelector('textarea:not([disabled]), input:not([disabled])')
+      || focusables()[0]
     if (first && typeof first.focus === 'function') first.focus()
     else if (typeof panel.focus === 'function') panel.focus()
     const onKeyDown = (event) => {
@@ -4189,10 +4213,12 @@ function TownChatDialog({
       if (!items.length) return
       const head = items[0]
       const tail = items[items.length - 1]
-      if (event.shiftKey && document.activeElement === head) {
+      const active = typeof document !== 'undefined' ? document.activeElement : null
+      const outside = !panel.contains(active)
+      if (event.shiftKey && (active === head || outside)) {
         if (typeof event.preventDefault === 'function') event.preventDefault()
         tail.focus()
-      } else if (!event.shiftKey && document.activeElement === tail) {
+      } else if (!event.shiftKey && (active === tail || outside)) {
         if (typeof event.preventDefault === 'function') event.preventDefault()
         head.focus()
       }
@@ -4314,7 +4340,7 @@ function TownModal({ title, subtitle, onClose, children }) {
       if (event.shiftKey && (document.activeElement === head || !panel.contains(document.activeElement))) {
         if (typeof event.preventDefault === 'function') event.preventDefault()
         tail.focus()
-      } else if (!event.shiftKey && document.activeElement === tail) {
+      } else if (!event.shiftKey && (document.activeElement === tail || !panel.contains(document.activeElement))) {
         if (typeof event.preventDefault === 'function') event.preventDefault()
         head.focus()
       }
@@ -4330,7 +4356,7 @@ function TownModal({ title, subtitle, onClose, children }) {
     children: jsxs('section', {
       role: 'dialog', 'aria-modal': 'true', 'aria-label': title,
       ref: panelRef, tabIndex: -1,
-      className: cn('flex w-full max-w-xl flex-col gap-2 rounded-lg border',
+      className: cn('flex max-h-[min(86vh,760px)] w-full max-w-xl flex-col gap-2 overflow-y-auto rounded-lg border',
         'border-(--ui-stroke-secondary) p-3 shadow-xl focus:outline-none'),
       style: { backgroundColor: 'var(--card)', color: 'var(--foreground)' },
       children: [
@@ -4341,7 +4367,7 @@ function TownModal({ title, subtitle, onClose, children }) {
               key: 'text', className: 'flex min-w-0 flex-col',
               children: [
                 jsx('span', { key: 't', className: 'text-sm font-medium text-(--ui-text-secondary)', children: title }),
-                subtitle ? jsx('span', { key: 's', className: 'text-[0.6875rem] text-(--ui-text-quaternary)', children: subtitle }) : null,
+                subtitle ? jsx('span', { key: 's', className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: subtitle }) : null,
               ],
             }),
             jsx('button', {
@@ -4424,6 +4450,7 @@ function SuperagentPage() {
   const archivedMode = showArchived ? 'all' : 'hide'
   const chatsQuery = useChats(archivedMode)
   const townsQuery = useTowns(archivedMode)
+  const healthQuery = useHealth()
   const assetsQuery = useTownAssets()
   const modelsQuery = useModels()
   // `selectedId` is the chat in the dialog; `townId` is what the scene shows.
@@ -4568,6 +4595,7 @@ function SuperagentPage() {
     for (const item of towns) {
       const ids = (item.workers || []).map((worker) => worker.id)
       const stored = readKnownWorkers(item.id)
+      const hasBaseline = readStored(townKnownKey(item.id), null) !== null
       let seen = knownWorkersRef.current[item.id]
       if (!seen) {
         seen = new Set(stored)
@@ -4577,12 +4605,13 @@ function SuperagentPage() {
       for (const id of ids) {
         if (seen.has(id)) continue
         seen.add(id)
-        // No baseline means this is the first time the page has seen this
-        // town (including an upgrade): seed it, do not animate history.
-        if (stored.length && !reducedMotion) born[id] = true
+        // A missing baseline is the first observation of this town (including
+        // an upgrade): seed it, do not animate history. An existing baseline —
+        // even an empty one — means this id is genuinely new.
+        if (hasBaseline && !reducedMotion) born[id] = true
       }
       const after = Array.from(seen).join('|')
-      if (after !== before) writeKnownWorkers(item.id, Array.from(seen))
+      if (!hasBaseline || after !== before) writeKnownWorkers(item.id, Array.from(seen))
     }
     const fresh = Object.keys(born)
     if (!fresh.length) return
@@ -5097,6 +5126,8 @@ function SuperagentPage() {
     onPresetClear: () => setPresetName(''),
   }
   const assetMap = (assetsQuery.data && assetsQuery.data.assets) || null
+  const health = healthQuery.data || null
+  const staleBackend = backendNeedsRestart(health)
   const townCount = (townData && townData.town_count) || towns.length
   const orphaned = (townData && townData.orphaned_count) || 0
 
@@ -5178,6 +5209,20 @@ function SuperagentPage() {
               error: chatsQuery.error || townsQuery.error,
               onRetry: () => { chatsQuery.refetch(); townsQuery.refetch() },
             }),
+          })
+        : null,
+      staleBackend
+        ? jsx('div', {
+            key: 'stale-backend', 'data-backend-stale': true,
+            className: cn('shrink-0 rounded border border-(--ui-stroke-secondary)',
+              'bg-background px-3 py-2 text-xs text-(--ui-text-secondary)'),
+            children: [
+              jsx('span', { key: 'lead', className: 'font-medium', children: 'Gateway needs a restart. ' }),
+              jsx('span', {
+                key: 'detail',
+                children: `This desktop expects towns and thinking levels, but the gateway loaded API v${health.api_version == null ? '?' : health.api_version}. Stop and start the gateway from an outside shell, then reload desktop plugins.`,
+              }),
+            ],
           })
         : null,
       jsx('div', {
@@ -5448,7 +5493,7 @@ function SuperagentChip() {
 // export; these let a Node test render the town tree without Electron.
 export {
   SuperagentPage, SettingsPanel, OverlayDrawer, ModelPicker,
-  modelWithThinking, reasoningLabel,
+  modelWithThinking, reasoningLabel, backendNeedsRestart,
   TownScene, TownHouse, TownSwitcher, TownChatDialog, TownEmpty,
   townHousePosition, townHouseSprite, townStatusLabel, TOWN_PLOTS,
 }

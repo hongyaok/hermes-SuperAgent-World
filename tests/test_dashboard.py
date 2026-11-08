@@ -907,6 +907,7 @@ def test_health_reports_the_api_shape(api):
     assert body["api_version"] == 3
     assert body["features"] == [
         "chats", "settings", "github", "diff", "session_management", "towns",
+        "thinking",
     ]
     assert isinstance(body["pid"], int) and body["pid"] > 0
     assert isinstance(body["started_at"], float)
