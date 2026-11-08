@@ -3,6 +3,46 @@
 All notable changes to the `superagent` Hermes plugin. Plain bullets, newest
 first.
 
+## 0.7.0 — 2026-11-08
+
+Town time follows the device, bubbles turn opaque and scrollable, houses move
+closer, and the town gets pixel font, scrollbar and window chrome.
+
+### Added
+
+- **Device-clock day/night sky (`desktop/plugin.js`).** Pure `townTimePhase(hours)`
+  plus `useTownTime` (30 s tick, no extra poll) paints a `data-town-time`
+  sky tint — warm dawn, clear day, violet dusk, deep-blue night — with a
+  `data-town-clock` HUD chip (`☀️/🌤️/🌙 HH:MM`). Streetlamps glow whenever
+  workers run and always after dusk.
+- **Pixel chrome (`desktop/plugin.js`).** System pixel-font stack (`VT323`,
+  `Px437 IBM VGA`, `IBM Plex Mono`, monospace fallback, no remote fetch) on
+  the town canvas, HUD clock, bubbles and house dialogs; stepped 2px
+  `superagent-pixel-panel` borders on the clock and dialog windows; retro
+  `superagent-pixel-scroll` scrollbars (gold thumb, dark track).
+
+### Changed
+
+- **Closer community (`desktop/plugin.js`, `tests/towns_render_probe.mjs`).**
+  `TOWN_PLOTS` move from the 10/90% edges to a 22–78% band around the plaza;
+  the probe asserts the new plots plus a 20–80 community-band check.
+- **Fixed-size scrollable speech bubbles (`desktop/plugin.js`).** `TownSpeechBubble`
+  is now a fixed `w-36 h-14` box with `overflow-y-auto` and word-wrap, so long
+  telemetry scrolls instead of stretching the town.
+- **Opaque bubble fill (`desktop/plugin.js`).** Solid `var(--card)` fill with
+  2px tone borders replaces the translucent pill so the sky tint cannot show
+  through.
+
+### Fixed
+
+- **See-through sprite chat boxes.** Translucent bubble backgrounds over the
+  sky tint read as invisible text; bubbles are now opaque.
+- **Over-wide town spread.** Edge plots at 10/90% felt like far-flung
+  outposts; all twelve plots now sit inside the community band.
+- **Render probe plot expectations.** Updated `townHousePosition(3)` and
+  `(11)` plus `render()` keys (`data-town-time`, `data-town-clock`) so the
+  hermetic probe covers the sky, clock, scroll and pixel classes.
+
 ## 0.6.0 — 2026-11-08
 
 Superagent Living Towns & Router↔Worker PR Workflows: randomised Petdex
