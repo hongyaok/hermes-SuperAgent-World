@@ -1952,6 +1952,19 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
   const [allowPrApprove, setAllowPrApprove] = useState(() => !!(settings && settings.allow_router_pr_approve))
   const [petdexEnabled, setPetdexEnabled] = useState(() => !(settings && settings.petdex_enabled === false))
   const [notice, setNotice] = useState('')
+  const [cleanupNotice, setCleanupNotice] = useState('')
+
+  const cleanupWorktrees = useMutation({
+    mutationFn: () => rest('/workspaces/cleanup', { method: 'POST', body: {} }),
+    onSuccess: (res) => {
+      if (res && res.ok) {
+        setCleanupNotice(`Cleaned ${res.removed_count || 0} stale worktrees (${res.kept_count || 0} active kept).`)
+      } else {
+        setCleanupNotice('Could not clean worktrees.')
+      }
+    },
+    onError: (err) => setCleanupNotice(errorText(err) || 'Cleanup failed.'),
+  })
 
   const signature = useMemo(() => JSON.stringify({
     model: (settings && settings.default_model) || '',
@@ -2232,6 +2245,25 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
                   jsx('div', {
                     key: 'yolo-help', className: 'text-[0.6875rem] leading-snug text-(--ui-text-tertiary)',
                     children: 'Skips approval prompts inside a turn; PR creation and PR approval stay off unless explicitly enabled above.',
+                  }),
+                  jsxs('div', {
+                    key: 'cleanup-row', className: 'flex flex-wrap items-center gap-2 pt-1',
+                    children: [
+                      jsx(GhostButton, {
+                        key: 'btn',
+                        disabled: cleanupWorktrees.isPending,
+                        onClick: () => cleanupWorktrees.mutate(),
+                        title: 'Remove unused PR and worker git worktrees from disk',
+                        children: cleanupWorktrees.isPending ? 'Cleaning…' : 'Clean up stale worktrees',
+                      }),
+                      cleanupNotice
+                        ? jsx('span', {
+                            key: 'msg',
+                            className: 'text-[0.6875rem] text-(--ui-text-tertiary)',
+                            children: cleanupNotice,
+                          })
+                        : null,
+                    ],
                   }),
                 ],
               }),
@@ -3953,7 +3985,8 @@ function ShortcutSheet({ open, onClose }) {
   if (!open) return null
   return jsx('div', {
     'data-shortcuts': 'open',
-    className: 'absolute inset-0 z-30 flex items-start justify-center bg-black/30 p-6',
+    className: 'absolute inset-0 z-50 flex items-start justify-center bg-black/45 p-6',
+    style: { zIndex: 50 },
     onClick: onClose,
     children: jsxs('div', {
       ref: cardRef,
@@ -3963,8 +3996,9 @@ function ShortcutSheet({ open, onClose }) {
       tabIndex: -1,
       onClick: (event) => event.stopPropagation(),
       className: cn('flex w-full max-w-xs flex-col gap-1.5 rounded border',
-        'border-(--ui-stroke-secondary) bg-(--ui-bg-primary) p-3 text-xs shadow-lg',
+        'border-(--ui-stroke-secondary) p-3 text-xs shadow-lg',
         'focus:outline-none'),
+      style: { backgroundColor: 'var(--card, var(--background, #1c1c1e))', color: 'var(--foreground, #f5f5f5)' },
       children: [
         jsx('div', {
           key: 't',
@@ -4036,7 +4070,8 @@ function OverlayDrawer({ panel, title, subtitle, onClose, children }) {
   }, [])
 
   return jsxs('div', {
-    className: 'absolute inset-0 z-30 flex',
+    className: 'absolute inset-0 z-40 flex',
+    style: { zIndex: 40 },
     children: [
       jsx('button', {
         key: 'backdrop',
@@ -4311,7 +4346,7 @@ function TownSpeechBubble({ text, status }) {
   return jsx('span', {
     'data-town-speech': '1',
     className: cn(
-      'superagent-speech-bubble pointer-events-none absolute -top-6 left-1/2 z-30',
+      'superagent-speech-bubble pointer-events-none absolute -top-6 left-1/2 z-20',
       'max-w-[11.5rem] -translate-x-1/2 truncate whitespace-nowrap rounded-full border px-2 py-0.5',
       'text-[0.625rem] font-medium leading-tight shadow-md',
       toneClass,
@@ -4503,13 +4538,24 @@ function useTownSimulation(town, buildingIds, reducedMotion) {
   return simRef.current
 }
 
-function TownActor({ session, isRouter, actorState, pet, personArt, reducedMotion, onOpen }) {
+function matchesTownFilter(session, filter, isRouter) {
+  if (!filter || filter === 'all') return true
+  if (isRouter) return true
+  const status = townStatusLabel(session && session.status)
+  if (filter === 'running') return status === 'running' || status === 'queued'
+  if (filter === 'review') return status === 'review'
+  if (filter === 'failed') return status === 'failed' || status === 'cancelled'
+  if (filter === 'pr') return !!(session && session.pr_number)
+  return true
+}
+
+function TownActor({ session, isRouter, actorState, pet, personArt, reducedMotion, dimmed, onOpen }) {
   const pos = actorState || actorHomePosition(session, isRouter)
   const animState = (actorState && actorState.animState) || defaultAnimForStatus(session.status)
   const facingLeft = !!(actorState && actorState.facingLeft)
   const speech = deriveSpeechBubble(session, isRouter, actorState && actorState.socialText)
   const petName = (pet && pet.display_name) || session.avatar_slug || (isRouter ? 'Router' : 'Worker')
-  const zIndex = Math.max(6, Math.round((Number(pos.top) || 50) * 10) + 3)
+  const zIndex = Math.max(5, Math.min(25, Math.round((Number(pos.top) || 50) / 5) + 2))
 
   return jsxs('button', {
     type: 'button',
@@ -4519,7 +4565,8 @@ function TownActor({ session, isRouter, actorState, pet, personArt, reducedMotio
     title: `${sessionTitle(session)} · ${petName} (${townStatusLabel(session.status)})`,
     className: cn(
       'group absolute flex flex-col items-center focus:outline-none',
-      'transition-[left,top] duration-150 ease-linear',
+      'transition-[left,top,opacity] duration-150 ease-linear',
+      dimmed && 'opacity-35',
     ),
     style: {
       left: `${pos.left}%`,
@@ -4549,7 +4596,7 @@ function TownActor({ session, isRouter, actorState, pet, personArt, reducedMotio
   })
 }
 
-function TownHouse({ session, isRouter, slot, onOpen, houseRef, building, reducedMotion, assets, pet }) {
+function TownHouse({ session, isRouter, slot, onOpen, houseRef, building, reducedMotion, assets, pet, dimmed }) {
   const sprite = isRouter ? 'house-router.png' : townHouseSprite(session.id)
   const art = assets && assets[sprite] && assets[sprite].data_url
   const position = isRouter ? { left: 50, top: 47, scale: 1.06 } : townHousePosition(slot, session.id)
@@ -4558,10 +4605,10 @@ function TownHouse({ session, isRouter, slot, onOpen, houseRef, building, reduce
   const fallbackHeight = Math.round((isRouter ? 194 : 140) * scale)
   const label = townStatusLabel(session.status)
   const petLabel = (pet && pet.display_name) || session.avatar_slug || ''
-  const zIndex = Math.max(4, Math.round((Number(position.top) || 50) * 10))
+  const zIndex = Math.max(4, Math.min(23, Math.round((Number(position.top) || 50) / 5)))
   return jsxs('div', {
     'data-town-house': session.id,
-    className: 'absolute flex flex-col items-center',
+    className: cn('absolute flex flex-col items-center transition-opacity duration-150', dimmed && 'opacity-35'),
     style: {
       left: `${position.left}%`,
       top: `${position.top}%`,
@@ -4660,17 +4707,27 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
   const rock = assets && assets['rock.png'] && assets['rock.png'].data_url
   const personArt = assets && assets['person.png'] && assets['person.png'].data_url
   const workers = Array.isArray(town.workers) ? town.workers : []
-  const actorMap = useTownSimulation(town, buildingIds, reducedMotion)
+  const [filter, setFilter] = useState('all')
+  const [paused, setPaused] = useState(false)
+  const actorMap = useTownSimulation(town, buildingIds, reducedMotion || paused)
   const counts = workers.reduce((acc, worker) => {
     const key = townStatusLabel(worker.status)
     acc[key] = (acc[key] || 0) + 1
     return acc
   }, {})
+  const prCount = workers.filter((worker) => !!worker.pr_number).length
   const anyRunning = town.status === 'running' || (counts.running || 0) > 0
   const summary = [
     workers.length === 1 ? '1 worker' : `${workers.length} workers`,
     ...Object.keys(counts).sort().map((key) => `${counts[key]} ${key}`),
   ].join(' · ')
+  const filterOptions = [
+    { id: 'all', label: `All (${workers.length})` },
+    { id: 'running', label: `Running (${(counts.running || 0) + (counts.queued || 0)})` },
+    { id: 'review', label: `Review (${counts.review || 0})` },
+    { id: 'failed', label: `Failed (${(counts.failed || 0) + (counts.cancelled || 0)})` },
+    { id: 'pr', label: `PRs (${prCount})` },
+  ]
 
   const trees = [
     { left: 4, top: 72, src: treeA, width: 82 },
@@ -4713,7 +4770,8 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
   const routerPet = petMap[town.avatar_slug] || null
 
   return jsxs('div', {
-    className: 'flex min-h-0 flex-1 flex-col gap-2',
+    className: 'relative isolate z-0 flex min-h-0 flex-1 flex-col gap-2',
+    style: { isolation: 'isolate', zIndex: 0 },
     children: [
       jsxs('div', {
         key: 'scene',
@@ -4721,16 +4779,18 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
         'aria-label': `${sessionTitle(town)} — town`,
         'data-town-workers': workers.length,
         'data-town-road-network': 'cobblestone',
-        className: cn('relative min-h-[390px] flex-1 overflow-hidden rounded-lg border',
+        className: cn('relative isolate z-0 min-h-[390px] flex-1 overflow-hidden rounded-lg border',
           'border-(--ui-stroke-secondary)'),
         style: grass
           ? {
+              isolation: 'isolate',
+              zIndex: 0,
               backgroundImage: `url("${grass}")`,
               backgroundSize: '128px 64px',
               backgroundRepeat: 'repeat',
               imageRendering: 'pixelated',
             }
-          : undefined,
+          : { isolation: 'isolate', zIndex: 0 },
         children: [
           // Stream & meadow pond in the southwest quarter
           water
@@ -4844,6 +4904,33 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
               imageRendering: 'pixelated',
             },
           }),
+          // Router ↔ Worker visual connection paths
+          workers.length > 0
+            ? jsx('svg', {
+                key: 'connections',
+                'aria-hidden': 'true',
+                'data-town-connections': '1',
+                viewBox: '0 0 100 100',
+                preserveAspectRatio: 'none',
+                className: 'pointer-events-none absolute inset-0 z-[2] h-full w-full',
+                children: workers.map((worker) => {
+                  const pos = townHousePosition(worker.town_slot, worker.id)
+                  const active = worker.status === 'running' || worker.status === 'queued'
+                  const matches = matchesTownFilter(worker, filter, false)
+                  return jsx('line', {
+                    key: `link:${worker.id}`,
+                    x1: '50',
+                    y1: '47',
+                    x2: String(pos.left),
+                    y2: String(pos.top),
+                    stroke: active ? 'rgba(255, 208, 92, 0.85)' : 'rgba(255, 255, 255, 0.25)',
+                    strokeWidth: active ? '0.45' : '0.28',
+                    strokeDasharray: active ? '1.2 0.8' : '0.9 1.1',
+                    opacity: matches ? '1' : '0.25',
+                  })
+                }),
+              })
+            : null,
           ...decorations.map((item) => jsx('img', {
             key: `deco:${item.key}`,
             src: item.src,
@@ -4854,7 +4941,7 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
             style: {
               left: `${item.left}%`, top: `${item.top}%`,
               width: item.width, height: 'auto', imageRendering: 'pixelated',
-              zIndex: Math.max(3, Math.round(item.top * 10)),
+              zIndex: Math.max(3, Math.min(22, Math.round(item.top / 5))),
               filter: item.glow ? 'drop-shadow(0 0 6px rgba(255,214,102,0.85))' : undefined,
             },
           })),
@@ -4868,7 +4955,7 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
             style: {
               left: `${tree.left}%`, top: `${tree.top}%`,
               width: tree.width, height: 'auto', imageRendering: 'pixelated',
-              zIndex: Math.max(3, Math.round(tree.top * 10)),
+              zIndex: Math.max(3, Math.min(22, Math.round(tree.top / 5))),
             },
           })),
           jsx(TownHouse, {
@@ -4882,6 +4969,7 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
             reducedMotion,
             assets,
             pet: routerPet,
+            dimmed: false,
           }),
           ...workers.map((worker) => jsx(TownHouse, {
             key: worker.id,
@@ -4894,6 +4982,7 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
             reducedMotion,
             assets,
             pet: petMap[worker.avatar_slug] || null,
+            dimmed: !matchesTownFilter(worker, filter, false),
           })),
           jsx(TownActor, {
             key: `actor:${town.id}`,
@@ -4902,7 +4991,8 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
             actorState: actorMap[town.id],
             pet: routerPet,
             personArt,
-            reducedMotion,
+            reducedMotion: reducedMotion || paused,
+            dimmed: false,
             onOpen,
           }),
           ...workers.map((worker) => jsx(TownActor, {
@@ -4912,9 +5002,56 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
             actorState: actorMap[worker.id],
             pet: petMap[worker.avatar_slug] || null,
             personArt,
-            reducedMotion,
+            reducedMotion: reducedMotion || paused,
+            dimmed: !matchesTownFilter(worker, filter, false),
             onOpen,
           })),
+          // Compact Town HUD overlay (stayed strictly inside TownScene's isolated z-0 stacking context)
+          jsxs('div', {
+            key: 'hud',
+            'data-town-hud': '1',
+            className: 'pointer-events-none absolute inset-x-2.5 top-2 z-20 flex flex-wrap items-center justify-between gap-1.5',
+            style: { zIndex: 24 },
+            children: [
+              jsxs('div', {
+                key: 'filters',
+                role: 'group',
+                'aria-label': 'Filter town workers',
+                className: cn('pointer-events-auto inline-flex flex-wrap items-center gap-0.5 rounded-md border',
+                  'border-(--ui-stroke-secondary) bg-background/90 p-0.5 shadow-sm backdrop-blur-xs'),
+                children: filterOptions.map((option) => {
+                  const active = filter === option.id
+                  return jsx('button', {
+                    key: option.id,
+                    type: 'button',
+                    'aria-pressed': active,
+                    onClick: () => setFilter(option.id),
+                    className: cn(
+                      'rounded px-1.5 py-0.5 text-[0.625rem] leading-tight transition-colors',
+                      active
+                        ? 'bg-primary font-medium text-primary-foreground'
+                        : 'text-(--ui-text-secondary) hover:bg-(--chrome-action-hover)',
+                    ),
+                    children: option.label,
+                  })
+                }),
+              }),
+              jsx('button', {
+                key: 'pause',
+                type: 'button',
+                'aria-pressed': paused,
+                'aria-label': paused ? 'Resume character movement' : 'Pause character movement',
+                title: paused ? 'Resume autonomous character walking' : 'Pause autonomous character walking',
+                onClick: () => setPaused((prev) => !prev),
+                className: cn(
+                  'pointer-events-auto rounded-md border border-(--ui-stroke-secondary) bg-background/90',
+                  'px-2 py-0.5 text-[0.625rem] leading-tight text-(--ui-text-secondary) shadow-sm',
+                  'hover:bg-(--chrome-action-hover)',
+                ),
+                children: paused ? '▶ Walk' : '⏸ Pause',
+              }),
+            ],
+          }),
         ],
       }),
       jsx('p', {
@@ -4927,7 +5064,10 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
   })
 }
 
-function TownSwitcher({ towns, value, onChange, onPrev, onNext, onNew, onReroll, rerolling, onSessions, canPrev, canNext, sessionsRef }) {
+function TownSwitcher({
+  towns, value, onChange, onPrev, onNext, onNew, onReroll, rerolling,
+  failedCount, onRetryFailed, retryingFailed, onSessions, canPrev, canNext, sessionsRef,
+}) {
   const current = towns.find((town) => town.id === value)
   return jsxs('div', {
     className: 'flex min-w-0 flex-wrap items-center gap-1.5',
@@ -4986,6 +5126,16 @@ function TownSwitcher({ towns, value, onChange, onPrev, onNext, onNew, onReroll,
             className: cn('shrink-0 rounded border border-(--ui-stroke-secondary) px-2 py-1',
               'text-xs text-(--ui-text-secondary) hover:bg-(--chrome-action-hover) disabled:opacity-50'),
             children: rerolling ? 'Rerolling…' : '🎲 Reroll sprites',
+          })
+        : null,
+      current && Number(failedCount) > 0 && typeof onRetryFailed === 'function'
+        ? jsx('button', {
+            key: 'retry-failed', type: 'button', onClick: onRetryFailed, disabled: !!retryingFailed,
+            'aria-label': `Retry ${failedCount} failed worker${failedCount === 1 ? '' : 's'}`,
+            title: 'Batch retry all failed or cancelled workers in this town',
+            className: cn('shrink-0 rounded border border-(--ui-stroke-secondary) px-2 py-1',
+              'text-xs text-(--ui-text-secondary) hover:bg-(--chrome-action-hover) disabled:opacity-50'),
+            children: retryingFailed ? 'Retrying…' : `↻ Retry failed (${failedCount})`,
           })
         : null,
       jsx('button', {
@@ -5060,7 +5210,8 @@ function TownChatDialog({
 
   return jsx('div', {
     'data-town-dialog': sessionId,
-    className: 'absolute inset-0 z-30 flex items-center justify-center bg-black/45 p-3',
+    className: 'absolute inset-0 z-40 flex items-center justify-center bg-black/45 p-3',
+    style: { zIndex: 40 },
     onClick: (event) => { if (event && event.target === event.currentTarget) onClose() },
     children: jsxs('section', {
       role: 'dialog',
@@ -5189,7 +5340,8 @@ function TownModal({ title, subtitle, onClose, children }) {
   }, [])
   return jsx('div', {
     'data-town-modal': '1',
-    className: 'absolute inset-0 z-30 flex items-center justify-center bg-black/45 p-3',
+    className: 'absolute inset-0 z-40 flex items-center justify-center bg-black/45 p-3',
+    style: { zIndex: 40 },
     onClick: (event) => { if (event && event.target === event.currentTarget) onClose() },
     children: jsxs('section', {
       role: 'dialog', 'aria-modal': 'true', 'aria-label': title,
@@ -5627,7 +5779,7 @@ function SuperagentPage() {
 
   const archiveChat = useMutation({
     mutationFn: (vars) => rest(`/chats/${encodeURIComponent(vars.id)}/archive`, {
-      method: 'POST', body: { archived: vars.archived },
+      method: 'POST', body: { archived: vars.archived, cascade: !!vars.cascade },
     }),
     onSuccess: () => invalidateChats(queryClient, selectedId),
     onError: () => invalidateChats(queryClient, selectedId),
@@ -5654,7 +5806,7 @@ function SuperagentPage() {
     renameChat.mutate({ id, title })
   }
 
-  const archiveSession = (id, archived) => {
+  const archiveSession = (id, archived, cascade = false) => {
     // A live turn cannot be filed away (the server answers 409). Painting the
     // change first would flash the row out and back, so a busy chat waits for
     // the answer and the error notice instead.
@@ -5666,7 +5818,7 @@ function SuperagentPage() {
       // floating above the next town.
       if (archived && archivedMode !== 'all' && selectedId === id) setSelectedId(null)
     }
-    archiveChat.mutate({ id, archived })
+    archiveChat.mutate({ id, archived, cascade })
   }
 
   const deleteSession = (id) => {
@@ -5982,6 +6134,18 @@ function SuperagentPage() {
     onSuccess: () => invalidateChats(queryClient, selectedId),
   })
 
+  const retryFailedWorkers = useMutation({
+    mutationFn: (rootId) => rest(`/towns/${encodeURIComponent(rootId)}/retry-failed`, {
+      method: 'POST',
+    }),
+    onSuccess: () => invalidateChats(queryClient, selectedId),
+  })
+
+  const failedWorkersCount = useMemo(() => {
+    if (!town || !Array.isArray(town.workers)) return 0
+    return town.workers.filter((w) => w.status === 'failed' || w.status === 'cancelled').length
+  }, [town])
+
   const houseMenu = dialogSession ? [
     { id: 'rename', label: 'Rename…', onSelect: () => renameHouse(dialogSession) },
     {
@@ -6025,6 +6189,13 @@ function SuperagentPage() {
       label: dialogSession.archived_at ? 'Unarchive this chat' : 'Archive this chat',
       onSelect: () => archiveSession(dialogSession.id, !dialogSession.archived_at),
     },
+    ...(!dialogSession.parent_session_id && dialogTown && Array.isArray(dialogTown.workers) && dialogTown.workers.length > 0
+      ? [{
+          id: 'archive-cascade',
+          label: dialogSession.archived_at ? 'Unarchive town + workers' : 'Archive town + workers',
+          onSelect: () => archiveSession(dialogSession.id, !dialogSession.archived_at, true),
+        }]
+      : []),
     { id: 'sessions', label: 'Search all sessions…', onSelect: openSessions },
   ] : null
 
@@ -6081,6 +6252,9 @@ function SuperagentPage() {
             onNew: newChat,
             onReroll: town ? () => rerollPets.mutate({ town_id: town.id }) : undefined,
             rerolling: rerollPets.isPending,
+            failedCount: failedWorkersCount,
+            onRetryFailed: town && failedWorkersCount > 0 ? () => retryFailedWorkers.mutate(town.id) : undefined,
+            retryingFailed: retryFailedWorkers.isPending,
             onSessions: openSessions,
             canPrev: townIndex > 0,
             canNext: townIndex >= 0 && townIndex < towns.length - 1,
@@ -6151,7 +6325,9 @@ function SuperagentPage() {
           })
         : null,
       jsx('div', {
-        key: 'body', className: 'flex min-h-0 flex-1 flex-col',
+        key: 'body',
+        className: 'relative isolate z-0 flex min-h-0 flex-1 flex-col',
+        style: { isolation: 'isolate', zIndex: 0 },
         children: townsQuery.isLoading && !townData
           ? jsx('div', {
               className: 'flex flex-1 items-center justify-center text-xs text-(--ui-text-tertiary)',

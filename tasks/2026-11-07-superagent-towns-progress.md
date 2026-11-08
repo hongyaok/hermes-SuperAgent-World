@@ -1,7 +1,7 @@
 # Superagent Towns — progress and next steps
 
 **Date:** 2026-11-08
-**Status:** the Living Towns & Router↔Worker PR Workflows evolution (`IMPROVEMENTS.md`) is merged on `main` at **0.6.0**. Source, tests (`538 passed`), docs, 26 town environment PNGs, 8 bundled Petdex spritesheets, autonomous waypoint simulation with speech bubbles, per-worker git worktree isolation, and opt-in PR creation/review workflows are complete. The installed desktop pass only needs an external `hermes gateway restart` + **Reload desktop plugins**.
+**Status:** the Living Towns & Router↔Worker PR Workflows evolution (`IMPROVEMENTS.md`, Phases 1–6) is merged on `main` at **0.6.0**. Source, tests (`539 passed`), docs, 26 town environment PNGs, 8 bundled Petdex spritesheets, autonomous waypoint simulation with speech bubbles, isolated CSS stacking context (`z-0` scene vs `z-40` drawers/dialogs), interactive Town HUD (status filter pills, pause toggle, SVG Router↔worker connection paths), batch retry failed workers, cascade town archive/delete, per-worker git worktree isolation, stale worktree cleanup, and opt-in PR creation/review workflows are complete. The installed desktop pass only needs an external `hermes gateway restart` + **Reload desktop plugins**.
 
 ## Landed on `main`
 

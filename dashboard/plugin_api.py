@@ -1184,6 +1184,68 @@ def town_dispatch(root_id: str, body: dict | None = None) -> dict[str, Any]:
     }
 
 
+@router.post("/towns/{root_id}/retry-failed")
+def town_retry_failed(root_id: str) -> dict[str, Any]:
+    """Retry all failed or cancelled worker sessions belonging to `root_id`."""
+    root_id = _check_session_id(root_id)
+    store = _chat_store()
+    parent = store.get_session(root_id, message_limit=0)
+    if parent is None:
+        raise HTTPException(status_code=404, detail=f"unknown chat session {root_id}")
+    if parent.get("parent_session_id") is not None:
+        raise HTTPException(status_code=400, detail=f"session {root_id} is a worker, not a router town")
+
+    towns_payload = store.list_towns(limit=500, archived="hide")
+    town_row = next((t for t in towns_payload.get("towns", []) if t.get("id") == root_id), None)
+    workers = list((town_row or {}).get("workers") or [])
+    retried: list[str] = []
+    skipped: list[str] = []
+    errors: dict[str, str] = {}
+
+    for worker in workers:
+        wid = str(worker.get("id") or "")
+        status = str(worker.get("status") or "")
+        if status not in (sa_chats.FAILED, sa_chats.CANCELLED):
+            skipped.append(wid)
+            continue
+        try:
+            if store.last_user_message(wid) is None and str(worker.get("prompt") or "").strip():
+                store.add_message(wid, "user", str(worker.get("prompt") or "").strip())
+            res = retry_chat(wid)
+            if res.get("ok"):
+                retried.append(wid)
+            else:
+                errors[wid] = str(res.get("error") or "retry failed")
+        except HTTPException as exc:
+            errors[wid] = str(exc.detail)
+        except Exception as exc:
+            errors[wid] = _scrub(str(exc))
+
+    if retried:
+        store.add_event(root_id, "retry", f"batch retried workers: {', '.join(retried)}")
+    return {
+        "ok": len(errors) == 0,
+        "root_id": root_id,
+        "retried": retried,
+        "count": len(retried),
+        "retried_count": len(retried),
+        "skipped": skipped,
+        "errors": errors,
+    }
+
+
+@router.post("/workspaces/cleanup")
+def cleanup_workspaces(body: dict | None = None) -> dict[str, Any]:
+    """Prune stale `pr-*` and `worker-*` worktrees not referenced by active sessions."""
+    _ = body
+    store = _chat_store()
+    active_paths = store.active_workspace_paths()
+    settings = sa_settings.load_settings()
+    repo_path = str(settings.get("repo_path") or "").strip()
+    workspace_root = sa_settings.data_dir() / "workspaces"
+    return sa_github.prune_worktrees(workspace_root, active_paths, repo_path=repo_path)
+
+
 @router.get("/chats/{session_id}")
 def get_chat(session_id: str) -> dict[str, Any]:
     session_id = _check_session_id(session_id)
@@ -1260,11 +1322,15 @@ def archive_chat(session_id: str, body: dict | None = None) -> dict[str, Any]:
 
     The row stays in SQLite with its transcript; only ``archived_at`` changes,
     so the rail can hide it and the header can offer "unarchive".
+    When ``cascade: true`` is supplied on a root town, its non-busy child
+    workers are archived or restored alongside it.
     """
     session_id = _check_session_id(session_id)
     data = body if isinstance(body, dict) else {}
     raw = data.get("archived", True)
     archived = True if raw is None else _settings_bool(raw, "archived")
+    raw_cascade = data.get("cascade", False)
+    cascade = False if raw_cascade is None else _settings_bool(raw_cascade, "cascade")
     store = _chat_store()
     session = store.get_session(session_id, message_limit=0)
     if session is None:
@@ -1274,20 +1340,23 @@ def archive_chat(session_id: str, body: dict | None = None) -> dict[str, Any]:
             status_code=409,
             detail=f"session {session_id} is {session['status']}; wait for the turn to finish",
         )
-    updated = store.set_archived(session_id, archived=archived)
+    updated = store.set_archived(session_id, archived=archived, cascade=cascade)
     if updated is None:  # deleted between the read and the write
         raise HTTPException(status_code=404, detail=f"unknown chat session {session_id}")
-    return {"ok": True, "session": updated}
+    return {"ok": True, "session": updated, **({"cascade": True} if cascade else {})}
 
 
 @router.delete("/chats/{session_id}")
-def delete_chat(session_id: str) -> dict[str, Any]:
+def delete_chat(session_id: str, cascade: bool | str = False) -> dict[str, Any]:
     """Delete one chat and its transcript. 409 while its turn is live.
 
     A database delete only: the session row, its messages and its events go;
     the repository, worktree, branch and pull request are never touched.
+    When ``?cascade=true`` is supplied on a root town, its non-busy child
+    workers are deleted alongside it instead of becoming orphans.
     """
     session_id = _check_session_id(session_id)
+    do_cascade = _settings_bool(cascade, "cascade") if isinstance(cascade, str) else bool(cascade)
     store = _chat_store()
     session = store.get_session(session_id, message_limit=0)
     if session is None:
@@ -1297,9 +1366,9 @@ def delete_chat(session_id: str) -> dict[str, Any]:
             status_code=409,
             detail=f"session {session_id} is {session['status']}; stop it before deleting",
         )
-    if not store.delete_session(session_id):
+    if not store.delete_session(session_id, cascade=do_cascade):
         raise HTTPException(status_code=404, detail=f"unknown chat session {session_id}")
-    return {"ok": True, "id": session_id}
+    return {"ok": True, "id": session_id, **({"cascade": True} if do_cascade else {})}
 
 
 @router.post("/chats")

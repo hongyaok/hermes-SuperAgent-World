@@ -34,10 +34,10 @@ possible.**
 
 | Surface | What it is for |
 | :--- | :--- |
-| Desktop **Superagent** page (`/superagent`) | Town scene (Router + worker houses, wandering Petdex sprites, speech bubbles, **🎲 Reroll sprites**), house chat dialog, town switcher, Sessions drawer, Settings, GitHub, diff/comment/PR create/review. |
+| Desktop **Superagent** page (`/superagent`) | Town scene (Router + worker houses, wandering Petdex sprites, speech bubbles, HUD filter pills, pause toggle, **🎲 Reroll sprites**, **↻ Retry failed**), house chat dialog, town switcher, Sessions drawer, Settings, GitHub, diff/comment/PR create/review. |
 | Status-bar chip + side pane | `▶ N` running chats and `◆ M` chats in `review`/`failed`; ticket attention only as a fallback. |
 | Agent tools | Ticket tools (`superagent_ask`, `superagent_tick`, `superagent_status`, `superagent_run`) and Town/PR tools (`superagent_spawn`, `superagent_town_status`, `superagent_message_worker`, `superagent_pr_create`, `superagent_pr_review`). |
-| CLI | `hermes superagent …` for status, chat, sessions, presets, GitHub, diff and comment. |
+| CLI | `hermes superagent …` for status, chat, sessions, presets, GitHub, diff, comment and worktree cleanup (`hermes superagent cleanup`). |
 | Slash command | `/superagent status\|ask\|tick\|run\|help`. |
 | Cron blueprint | **Superagent watch** every 5 minutes; runs `superagent_tick(wait=true)` as a real agent turn, so it may launch ticket workers. |
 

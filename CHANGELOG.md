@@ -55,6 +55,15 @@ isolated per-worker git worktrees, and opt-in PR creation/review tools.
   provisions a dedicated branch and worktree under
   `<data_dir>/workspaces/worker-<session_id>` so parallel workers never collide
   in the shared working tree.
+- **Interactive Town HUD, connection paths & batch operations (`desktop/plugin.js`,
+  `dashboard/plugin_api.py`, `sa_chats.py`, `sa_github.py`, `sa_cli.py`).**
+  Added an in-scene HUD filter bar (`All`, `Running`, `Review`, `Failed`, `PRs`)
+  that spotlights matching workers and dims non-matching ones, a **⏸ Pause / ▶ Walk**
+  simulation toggle, SVG dashed Router↔worker connection paths (`data-town-connections="1"`),
+  a **↻ Retry failed (N)** button (`POST /towns/{root_id}/retry-failed`), cascade
+  archive/delete for root towns (`cascade=true` on `POST /chats/{id}/archive` and
+  `DELETE /chats/{id}`), and stale worktree pruning (`POST /workspaces/cleanup`,
+  `hermes superagent cleanup`, and a **Clean up stale worktrees** action in Settings).
 
 ### Changed
 
@@ -88,6 +97,13 @@ isolated per-worker git worktrees, and opt-in PR creation/review tools.
   `POST /github/prs/{n}/work` and `GitHubWatcher`.
 - **Windows CRLF handling in render probe (`tests/towns_render_probe.mjs`).**
   Replaced `.replace('\r\n', '\n')` with `.replaceAll('\r\n', '\n')`.
+- **Town scene stacking context & overlay z-index (`desktop/plugin.js`).**
+  Isolated `TownScene` and the page body (`isolation: isolate; z-index: 0`),
+  bounded internal Y-sorted `zIndex` values to `3..25`, and raised `OverlayDrawer`,
+  `TownChatDialog`, and `TownModal` to `z-40` (`ShortcutSheet` to `z-50`) so town
+  houses, props, and Petdex sprites never bleed over Settings, GitHub, Usage, or
+  Sessions drawers while keeping Radix portaled dropdown menus (`z-50`) clickable
+  above drawers.
 
 ## 0.5.10 — 2026-11-08
 

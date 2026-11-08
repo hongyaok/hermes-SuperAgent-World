@@ -659,28 +659,44 @@ class ChatStore:
             raise ValueError(f"title is too long (max {MAX_RENAME_CHARS} chars)")
         return self.update_session(session_id, title=text)
 
-    def set_archived(self, session_id: str, archived: bool = True) -> Optional[dict]:
+    def set_archived(
+        self, session_id: str, archived: bool = True, *, cascade: bool = False
+    ) -> Optional[dict]:
         """Archive or restore a session; returns the row, or None if unknown.
 
         Archiving stamps ``archived_at`` once (a second archive keeps the
         original moment) and deliberately does **not** touch ``updated_at``:
         the row keeps its place in the newest-first list instead of jumping to
         the top merely because it was filed away. Restoring clears the stamp.
+        When ``cascade=True`` and ``session_id`` is a root town, its non-busy
+        child workers are archived or restored in the same transaction.
         """
         if not self.exists(session_id):
             return None
-        if archived:
-            with self._connect() as conn:
+        now = time.time()
+        with self._connect() as conn:
+            if archived:
                 conn.execute(
                     "UPDATE chat_sessions SET archived_at = COALESCE(archived_at, ?)"
                     " WHERE id = ?",
-                    (time.time(), session_id),
+                    (now, session_id),
                 )
-        else:
-            with self._connect() as conn:
+                if cascade:
+                    conn.execute(
+                        "UPDATE chat_sessions SET archived_at = COALESCE(archived_at, ?)"
+                        " WHERE parent_session_id = ? AND status NOT IN (?, ?)",
+                        (now, session_id, QUEUED, RUNNING),
+                    )
+            else:
                 conn.execute(
                     "UPDATE chat_sessions SET archived_at = NULL WHERE id = ?", (session_id,)
                 )
+                if cascade:
+                    conn.execute(
+                        "UPDATE chat_sessions SET archived_at = NULL"
+                        " WHERE parent_session_id = ?",
+                        (session_id,),
+                    )
         return self.get_session(session_id, message_limit=0)
 
     def set_pinned(self, session_id: str, pinned: bool = True) -> Optional[dict]:
@@ -706,13 +722,15 @@ class ChatStore:
                 )
         return self.get_session(session_id, message_limit=0)
 
-    def delete_session(self, session_id: str) -> bool:
+    def delete_session(self, session_id: str, *, cascade: bool = False) -> bool:
         """Delete a session and its transcript in one transaction.
 
         Messages and events go with the row; ``gh_seen`` does **not**, so a
         GitHub comment that already produced a session is not replayed into a
         new one after its session is deleted. Files and worktrees are never
         touched here — this is a database delete, nothing more.
+        When ``cascade=True``, non-busy child workers of ``session_id`` are
+        deleted alongside their parent.
         """
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -721,10 +739,33 @@ class ChatStore:
             ).fetchone()
             if row is None:
                 return False
-            conn.execute("DELETE FROM chat_messages WHERE session_id = ?", (session_id,))
-            conn.execute("DELETE FROM chat_events WHERE session_id = ?", (session_id,))
-            conn.execute("DELETE FROM chat_sessions WHERE id = ?", (session_id,))
+            target_ids = [session_id]
+            if cascade:
+                child_rows = conn.execute(
+                    "SELECT id FROM chat_sessions WHERE parent_session_id = ?"
+                    " AND status NOT IN (?, ?)",
+                    (session_id, QUEUED, RUNNING),
+                ).fetchall()
+                target_ids.extend(str(r["id"]) for r in child_rows)
+            marks = ", ".join("?" for _ in target_ids)
+            conn.execute(f"DELETE FROM chat_messages WHERE session_id IN ({marks})", target_ids)
+            conn.execute(f"DELETE FROM chat_events WHERE session_id IN ({marks})", target_ids)
+            conn.execute(f"DELETE FROM chat_sessions WHERE id IN ({marks})", target_ids)
         return True
+
+    def active_workspace_paths(self) -> set[str]:
+        """Return all `repo` and `worktree_path` strings referenced by non-archived sessions."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT repo, worktree_path FROM chat_sessions WHERE archived_at IS NULL"
+            ).fetchall()
+        paths: set[str] = set()
+        for row in rows:
+            for col in ("repo", "worktree_path"):
+                val = str(row[col] or "").strip()
+                if val:
+                    paths.add(val)
+        return paths
 
     def get_session(
         self, session_id: str, message_limit: int = 200, event_limit: int = 50

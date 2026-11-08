@@ -129,13 +129,16 @@ function render(node) {
   for (const key of [
     'aria-label', 'data-town-house', 'data-town-actor', 'data-town-speech',
     'data-petdex-slug', 'data-petdex-state', 'data-town-road-network',
-    'data-town-landmark', 'data-create-pr-box', 'data-town-dialog',
+    'data-town-landmark', 'data-town-hud', 'data-town-connections',
+    'data-create-pr-box', 'data-town-dialog',
     'data-drawer', 'id', 'role',
   ]) {
     if (props[key] != null) bits.push(`${key}="${props[key]}"`)
   }
   if (props.className) bits.push(`class="${props.className}"`)
   if (props.style && props.style.backgroundColor) bits.push(`bg="${props.style.backgroundColor}"`)
+  if (props.style && props.style.isolation) bits.push(`isolation:${props.style.isolation}`)
+  if (props.style && props.style.zIndex != null) bits.push(`z-index:${props.style.zIndex}`)
   const children = props.children
   if (children != null) bits.push(Array.isArray(children) ? children.map(render).join(' ') : render(children))
   return bits.join(' ')
@@ -200,6 +203,15 @@ assert.match(scene, /data-petdex-slug="hermes-kody"/)
 assert.match(scene, /data-petdex-slug="coding-cat-pet"/)
 assert.match(scene, /data-town-speech="1"/)
 assert.match(scene, /pytest -q/)
+assert.match(scene, /data-town-hud="1"/)
+assert.match(scene, /data-town-connections="1"/)
+assert.match(scene, /Filter town workers/)
+assert.match(scene, /Pause character movement/)
+// Stacking context isolation so town houses/sprites never escape over Settings/Drawers/Dialogs
+assert.match(scene, /isolation:isolate z-index:0/)
+for (const match of scene.matchAll(/z-index:(\d+)/g)) {
+  assert.ok(Number(match[1]) <= 25, `TownScene internal z-index ${match[1]} must stay <= 25`)
+}
 
 const quiet = render(h(plugin.TownScene, {
   town: root,
@@ -226,6 +238,9 @@ const switcher = render(h(plugin.TownSwitcher, {
   onNew: () => undefined,
   onReroll: () => undefined,
   rerolling: false,
+  failedCount: 2,
+  onRetryFailed: () => undefined,
+  retryingFailed: false,
   onSessions: () => undefined,
   canPrev: false,
   canNext: false,
@@ -234,6 +249,7 @@ assert.match(switcher, /Previous town/)
 assert.match(switcher, /Next town/)
 assert.match(switcher, /New town/)
 assert.match(switcher, /Reroll sprites/)
+assert.match(switcher, /Retry failed \(2\)/)
 assert.match(switcher, /2\/12 plots/)
 assert.match(switcher, /Sessions/)
 
@@ -311,6 +327,8 @@ const drawer = render(h(plugin.OverlayDrawer, {
 assert.match(drawer, /data-drawer="settings"/)
 assert.match(drawer, /bg="var\(--card/)
 assert.match(drawer, /md:w-\[420px\]/)
+assert.match(drawer, /z-index:40/)
+assert.match(dialog, /z-index:40/)
 
 const settingsPanel = render(h(plugin.SettingsPanel, {
   settings: {
@@ -333,6 +351,7 @@ assert.match(settingsPanel, /Isolate workers in git worktrees/)
 assert.match(settingsPanel, /Allow workers to create GitHub PRs/)
 assert.match(settingsPanel, /Allow Router & workers to review\/approve PRs/)
 assert.match(settingsPanel, /Use Petdex\.dev random character sprites/)
+assert.match(settingsPanel, /Clean up stale worktrees/)
 
 const commentBox = render(h(plugin.CommentBox, {
   session: { ...workerTwo, pr_number: 42 },

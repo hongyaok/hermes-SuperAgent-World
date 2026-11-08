@@ -476,3 +476,61 @@ def test_town_pets_and_reroll_and_dispatch_endpoints(tmp_path, monkeypatch):
     assert dispatch_resp["action"] == "approve_pr"
     assert dispatch_resp["worker_session_id"] == worker["id"]
     assert "superagent_pr_review" in runner.launches[-1]["prompt"]
+
+
+def test_town_cascade_archive_and_delete_and_retry_failed_and_cleanup(tmp_path, monkeypatch):
+    path = tmp_path / "superagent.db"
+    store = sa_chats.ChatStore(path)
+    api = load_api()
+    runner = FakeRunner(store)
+    monkeypatch.setattr(api, "_db_path", lambda: path)
+    monkeypatch.setattr(api, "_get_runner", lambda: runner)
+    monkeypatch.setattr(api.sa_settings, "data_dir", lambda: tmp_path)
+
+    root = api.create_chat({"prompt": "router"})["session"]
+    w1 = api.create_chat({"prompt": "worker 1", "parent_session_id": root["id"]})["session"]
+    w2 = api.create_chat({"prompt": "worker 2", "parent_session_id": root["id"]})["session"]
+    store.update_session(root["id"], status="done")
+    store.update_session(w1["id"], status="failed")
+    store.update_session(w2["id"], status="done")
+
+    # Batch retry failed workers in the town
+    retry_resp = api.town_retry_failed(root["id"])
+    assert retry_resp["ok"] is True
+    assert retry_resp["count"] == 1
+    assert retry_resp["retried"] == [w1["id"]]
+    store.update_session(w1["id"], status="done")
+
+    # Cascade archive root + all non-busy workers
+    arch_resp = api.archive_chat(root["id"], {"archived": True, "cascade": True})
+    assert arch_resp["ok"] is True
+    assert store.get_session(root["id"])["archived_at"] is not None
+    assert store.get_session(w1["id"])["archived_at"] is not None
+    assert store.get_session(w2["id"])["archived_at"] is not None
+
+    # Unarchive with cascade
+    api.archive_chat(root["id"], {"archived": False, "cascade": True})
+    assert store.get_session(root["id"])["archived_at"] is None
+    assert store.get_session(w1["id"])["archived_at"] is None
+
+    # Workspace cleanup prunes stale worker-* / pr-* dirs while preserving active ones
+    ws_root = tmp_path / "workspaces"
+    active_wt = ws_root / f"worker-{w1['id']}"
+    stale_wt = ws_root / "worker-S-9999"
+    active_wt.mkdir(parents=True)
+    stale_wt.mkdir(parents=True)
+    store.update_session(w1["id"], worktree_path=str(active_wt))
+
+    clean_resp = api.cleanup_workspaces({})
+    assert clean_resp["ok"] is True
+    assert stale_wt.name in clean_resp["removed"]
+    assert active_wt.exists()
+    assert not stale_wt.exists()
+
+    # Cascade delete root + non-busy workers
+    del_resp = api.delete_chat(root["id"], cascade="true")
+    assert del_resp["ok"] is True
+    assert store.get_session(root["id"]) is None
+    assert store.get_session(w1["id"]) is None
+    assert store.get_session(w2["id"]) is None
+

@@ -16,6 +16,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import shutil
 import subprocess
 import urllib.error
 import urllib.parse
@@ -649,3 +650,95 @@ def build_pr_prompt(
         " checks run, and anything unresolved.",
     ]
     return "\n".join(lines)
+
+
+def prune_worktrees(
+    workspace_root: str | Path,
+    active_paths: set[str] | list[str] | tuple[str, ...] = (),
+    *,
+    repo_path: str | Path = "",
+    git_runner: Optional[Handler] = None,
+) -> dict[str, Any]:
+    """Remove unused `pr-*` and `worker-*` worktrees under `workspace_root`.
+
+    Any directory whose resolved path matches an entry in `active_paths` (such
+    as a non-archived session's `repo` or `worktree_path`) is preserved.
+    """
+    run = git_runner or _default_git_runner
+    root = Path(str(workspace_root or "")).expanduser()
+    if not root.is_dir():
+        return {"ok": True, "removed": [], "kept": [], "removed_count": 0, "kept_count": 0}
+    try:
+        root_resolved = root.resolve(strict=True)
+    except OSError:
+        return {"ok": True, "removed": [], "kept": [], "removed_count": 0, "kept_count": 0}
+
+    active_resolved: set[Path] = set()
+    for raw in active_paths or ():
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        try:
+            active_resolved.add(Path(text).expanduser().resolve(strict=False))
+        except OSError:
+            continue
+
+    source_dir: Optional[Path] = None
+    if str(repo_path or "").strip():
+        cand = Path(str(repo_path)).expanduser()
+        if cand.is_dir():
+            try:
+                source_dir = cand.resolve(strict=True)
+            except OSError:
+                source_dir = None
+
+    removed: list[str] = []
+    kept: list[str] = []
+    for entry in sorted(root_resolved.iterdir(), key=lambda p: p.name):
+        if not entry.is_dir():
+            continue
+        if not (entry.name.startswith("pr-") or entry.name.startswith("worker-")):
+            continue
+        try:
+            resolved_entry = entry.resolve(strict=False)
+        except OSError:
+            resolved_entry = entry
+        if resolved_entry in active_resolved:
+            kept.append(entry.name)
+            continue
+        if source_dir is not None:
+            try:
+                run(
+                    ["git", "-C", str(source_dir), "worktree", "remove", "--force", str(resolved_entry)],
+                    str(source_dir),
+                    GIT_TIMEOUT,
+                )
+            except Exception:
+                pass
+        if resolved_entry.exists():
+            try:
+                shutil.rmtree(resolved_entry, ignore_errors=True)
+            except OSError:
+                pass
+        if not resolved_entry.exists():
+            removed.append(entry.name)
+        else:
+            kept.append(entry.name)
+
+    if source_dir is not None:
+        try:
+            run(
+                ["git", "-C", str(source_dir), "worktree", "prune"],
+                str(source_dir),
+                GIT_TIMEOUT,
+            )
+        except Exception:
+            pass
+
+    return {
+        "ok": True,
+        "removed": removed,
+        "kept": kept,
+        "removed_count": len(removed),
+        "kept_count": len(kept),
+    }

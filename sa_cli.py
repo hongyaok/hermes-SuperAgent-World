@@ -49,7 +49,7 @@ USAGE = (
     "usage: hermes superagent "
     "<status|tick|ask <request>|run <ticket-id>|show <ticket-id|session-id>|"
     "chat <prompt>|sessions|stop <session-id>|diff <session-id>|"
-    "comment <session-id> [--body TEXT]|models|settings|"
+    "comment <session-id> [--body TEXT]|models|settings|cleanup|"
     "github <status|test|connect|disconnect|prs|poll|work <number>>|doctor> [--json]"
 )
 
@@ -1856,6 +1856,10 @@ def setup_cli(subparser: argparse.ArgumentParser) -> None:
     _add_json_flag(github_p)
     doctor_p = subs.add_parser("doctor", help="Check configuration and worker availability")
     _add_json_flag(doctor_p)
+    cleanup_p = subs.add_parser(
+        "cleanup", help="Prune unused PR and worker git worktrees"
+    )
+    _add_json_flag(cleanup_p)
     subparser.set_defaults(func=run)
 
 
@@ -2038,6 +2042,28 @@ def run(args: argparse.Namespace, ctx: Any) -> int:
             print(f"error: doctor failed: {exc}")
             return 1
         print(json.dumps(checks, indent=2) if want_json else "\n".join(f"{k}: {v}" for k, v in checks.items()))
+        return 0
+
+    if command == "cleanup":
+        try:
+            store = sa_chats.ChatStore(engine.store.path)
+            active_paths = store.active_workspace_paths()
+            settings = sa_settings.load_settings()
+            repo_path = str(settings.get("repo_path") or "").strip()
+            workspace_root = sa_settings.data_dir() / "workspaces"
+            result = sa_github.prune_worktrees(workspace_root, active_paths, repo_path=repo_path)
+        except Exception as exc:
+            print(f"error: cleanup failed: {exc}")
+            return 1
+        if want_json:
+            print(json.dumps(result, indent=2))
+        else:
+            print(
+                f"cleaned worktrees: removed={result.get('removed_count', 0)} "
+                f"kept={result.get('kept_count', 0)}"
+            )
+            for item in result.get("removed") or []:
+                print(f"  removed: {item}")
         return 0
 
     print(USAGE)
