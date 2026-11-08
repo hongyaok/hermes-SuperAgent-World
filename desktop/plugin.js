@@ -1601,7 +1601,7 @@ function Transcript({ session, optimistic }) {
           stickRef.current = atBottom
           setAway(!atBottom)
         },
-        className: cn('flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-1 py-1'),
+        className: cn('flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto superagent-pixel-scroll px-1 py-1'),
         children: body,
       }),
       away
@@ -5316,7 +5316,10 @@ function TownChatDialog({
       'aria-labelledby': 'superagent-town-dialog-title',
       ref: panelRef,
       tabIndex: -1,
-      className: cn('superagent-pixel superagent-pixel-panel flex h-[min(86vh,760px)] w-full max-w-3xl flex-col overflow-hidden rounded-lg',
+      // Fixed compact popup: 460px wide, 560px tall at most, transcript
+      // scrolls inside (Transcript owns overflow-y-auto) so a long chat
+      // never covers the town.
+      className: cn('superagent-pixel superagent-pixel-panel flex h-[min(78vh,560px)] w-[min(92vw,460px)] flex-col overflow-hidden rounded-lg',
         'border border-(--ui-stroke-secondary) shadow-xl focus:outline-none'),
       style: { backgroundColor: 'var(--card, var(--background, #1c1c1e))', color: 'var(--foreground, #f5f5f5)' },
       children: [
@@ -5443,7 +5446,9 @@ function TownModal({ title, subtitle, onClose, children }) {
     children: jsxs('section', {
       role: 'dialog', 'aria-modal': 'true', 'aria-label': title,
       ref: panelRef, tabIndex: -1,
-      className: cn('superagent-pixel superagent-pixel-panel superagent-pixel-scroll flex max-h-[min(86vh,760px)] w-full max-w-xl flex-col gap-2 overflow-y-auto rounded-lg border',
+      // Fixed compact popup like the chat dialog: 440px wide, 540px tall
+      // at most, body scrolls inside.
+      className: cn('superagent-pixel superagent-pixel-panel superagent-pixel-scroll flex h-[min(78vh,540px)] w-[min(92vw,440px)] flex-col gap-2 overflow-y-auto rounded-lg border',
         'border-(--ui-stroke-secondary) p-3 shadow-xl focus:outline-none'),
       style: { backgroundColor: 'var(--card, var(--background, #1c1c1e))', color: 'var(--foreground, #f5f5f5)' },
       children: [

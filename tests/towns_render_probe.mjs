@@ -341,6 +341,8 @@ assert.match(drawer, /bg="var\(--card/)
 assert.match(drawer, /md:w-\[420px\]/)
 assert.match(drawer, /z-index:40/)
 assert.match(dialog, /z-index:40/)
+assert.match(dialog, /min\(92vw,460px\)/)
+assert.match(dialog, /min\(78vh,560px\)/)
 
 const settingsPanel = render(h(plugin.SettingsPanel, {
   settings: {
