@@ -7,12 +7,22 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from . import sa_chats, sa_diff, sa_engine, sa_github, sa_runner, sa_runtime, sa_settings
+    from . import (
+        sa_chats,
+        sa_diff,
+        sa_engine,
+        sa_github,
+        sa_model_policy,
+        sa_runner,
+        sa_runtime,
+        sa_settings,
+    )
 except ImportError:  # top-level import (root __init__ loaded as `__init__` by pytest)
     import sa_chats  # type: ignore[no-redef]
     import sa_diff  # type: ignore[no-redef]
     import sa_engine  # type: ignore[no-redef]
     import sa_github  # type: ignore[no-redef]
+    import sa_model_policy  # type: ignore[no-redef]
     import sa_runner  # type: ignore[no-redef]
     import sa_runtime  # type: ignore[no-redef]
     import sa_settings  # type: ignore[no-redef]
@@ -138,6 +148,14 @@ def superagent_spawn(args: dict, ctx: Any = None, **kwargs: Any) -> str:
             if (pr_number and gh_repo)
             else None
         )
+
+        # A worker runs headless, so a data-training tier is refused before the
+        # row exists; the router relays the reason instead of spawning a house
+        # that can never start.
+        try:
+            sa_model_policy.check_model(str(parent.get("model") or ""))
+        except ValueError as exc:
+            return json.dumps({"error": str(exc)})
 
         child = store.create_session(
             prompt,

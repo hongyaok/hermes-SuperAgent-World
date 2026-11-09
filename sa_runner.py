@@ -23,9 +23,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 try:  # normal: imported as part of the plugin package
-    from . import sa_chats
+    from . import sa_chats, sa_model_policy
 except ImportError:  # top-level import (dashboard backend, pytest)
     import sa_chats  # type: ignore[no-redef]
+    import sa_model_policy  # type: ignore[no-redef]
 
 # How much stderr is kept for the error message of a failed turn.
 STDERR_LIMIT = 4000
@@ -481,6 +482,13 @@ class Runner:
         )
 
         session = self.chat.get_session(session_id, message_limit=0) or {}
+        # A data-training ("contributor") tier cannot start headless unless the
+        # host opted in. Refuse here, before a process or a queue slot exists,
+        # so every surface (API, tools, CLI, retry) fails with the same reason
+        # instead of a worker that dies on Hermes' consent prompt.
+        sa_model_policy.check_model(
+            str(model or self.model or session.get("model") or "")
+        )
         is_router = session.get("parent_session_id") is None
         can_spawn = bool(is_router and self.router_toolset)
         eff_create_pr = self.can_create_pr if can_create_pr is None else bool(can_create_pr)
@@ -730,7 +738,12 @@ class Runner:
                 argv,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                stdin=subprocess.DEVNULL,
+                # A pipe, not DEVNULL: on Windows an isatty() call on the NUL
+                # device reports True, so a child given DEVNULL still believes
+                # it has a terminal, prints a consent prompt and cancels the
+                # turn. Closing the write end at once gives every worker a real
+                # "no terminal" answer — it either proceeds or refuses fast.
+                stdin=subprocess.PIPE,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
@@ -741,6 +754,10 @@ class Runner:
         except Exception as exc:
             self._finish(session_id, sa_chats.FAILED, error=f"cannot start hermes: {exc}")
             return
+        try:
+            proc.stdin.close()
+        except Exception:
+            pass  # a fake process in a test has no pipe to close
 
         with self._lock:
             self._procs[session_id] = proc

@@ -12,12 +12,22 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from . import sa_chats, sa_diff, sa_engine, sa_github, sa_runner, sa_settings, sa_watcher
+    from . import (
+        sa_chats,
+        sa_diff,
+        sa_engine,
+        sa_github,
+        sa_model_policy,
+        sa_runner,
+        sa_settings,
+        sa_watcher,
+    )
 except ImportError:  # top-level import (root __init__ loaded as `__init__` by pytest)
     import sa_chats  # type: ignore[no-redef]
     import sa_diff  # type: ignore[no-redef]
     import sa_engine  # type: ignore[no-redef]
     import sa_github  # type: ignore[no-redef]
+    import sa_model_policy  # type: ignore[no-redef]
     import sa_runner  # type: ignore[no-redef]
     import sa_settings  # type: ignore[no-redef]
     import sa_watcher  # type: ignore[no-redef]
@@ -279,6 +289,12 @@ def render_settings(data: dict) -> str:
                 data.get("default_reasoning_effort") or "model default",
             ))
     lines.append(line("GitHub token", "set (value never shown)" if data.get("github_token_set") else "not set"))
+    lines.append(line(
+        "data-tier models",
+        "allowed for workers"
+        if data.get("data_training_tiers_allowed")
+        else f"blocked (enable with: {sa_model_policy.SET_COMMAND})",
+    ))
     if presets:
         lines.append("  model presets:")
         for preset in presets:
@@ -294,6 +310,13 @@ def run_settings(want_json: bool) -> int:
     """`hermes superagent settings`: print merged settings, never the token."""
     try:
         data = sa_settings.public_settings()
+        # Host policy, not a Superagent setting: reported so a blocked
+        # contributor model reads as a config fact rather than a mystery.
+        host = sa_model_policy.host_state()
+        data["data_training_tiers_allowed"] = host["allowed"]
+        data["data_training_tiers_config"] = host["config_path"]
+        if host["error"]:
+            data["data_training_tiers_error"] = host["error"]
     except Exception as exc:
         print(f"error: settings failed: {exc}")
         return 1
@@ -826,6 +849,14 @@ def _launch_chat(args: argparse.Namespace, ctx: Any, engine: Any, want_json: boo
         return 2
     effort = effort or str(defaults.get("default_reasoning_effort") or "")
     title = (getattr(args, "title", "") or "").strip()
+
+    # A headless worker cannot answer Hermes' data-tier consent prompt, so say
+    # why the model cannot run instead of creating a session that will fail.
+    try:
+        sa_model_policy.check_model(model)
+    except ValueError as exc:
+        print(f"error: {exc}")
+        return 2
 
     try:
         store = _chat_store(engine)

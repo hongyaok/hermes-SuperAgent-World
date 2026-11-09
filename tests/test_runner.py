@@ -16,6 +16,16 @@ import pytest
 from sa_plugin import sa_chats, sa_runner
 
 
+class FakeStdin:
+    """The write end the runner closes the moment the worker starts."""
+
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
 class FakeProcess:
     """Stands in for subprocess.Popen: canned stdout, no real child.
 
@@ -28,6 +38,7 @@ class FakeProcess:
         self.returncode = returncode
         self.killed = False
         self.closed = False
+        self.stdin = FakeStdin()
         self._lines = list(lines)
         self._block = block
         self._done = threading.Event()
@@ -148,7 +159,8 @@ def test_build_prompt_states_the_worker_rules():
 def test_launch_builds_the_headless_command(chat, popen, tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
-    popen.install(FakeProcess(jsonl({"type": "result", "session_id": "local-1", "exit_code": 0})))
+    process = FakeProcess(jsonl({"type": "result", "session_id": "local-1", "exit_code": 0}))
+    popen.install(process)
     runner = make_runner(
         chat, model="deepseek-v4.1-flash", provider="opencode-go", repo=str(repo), max_turns=9
     )
@@ -174,7 +186,10 @@ def test_launch_builds_the_headless_command(chat, popen, tmp_path):
     assert kwargs["text"] is True
     assert kwargs["encoding"] == "utf-8"
     assert kwargs["errors"] == "replace"
-    assert kwargs["stdin"] == sa_runner.subprocess.DEVNULL
+    assert kwargs["stdin"] == sa_runner.subprocess.PIPE
+    # The write end is closed immediately: that is what tells Hermes the worker
+    # has no terminal (Windows reports DEVNULL as a tty).
+    assert process.stdin.closed is True
     assert kwargs["cwd"] == str(repo)
     assert "shell" not in kwargs
 
@@ -499,3 +514,21 @@ def test_blocking_launch_runs_the_turn_before_returning(chat, popen, tmp_path):
     assert status_of(chat, session["id"]) == "review"  # finished, not queued
     detail = chat.get_session(session["id"], message_limit=10)
     assert any(m["role"] == "assistant" and "pong" in (m["content"] or "") for m in detail["messages"])
+
+
+def test_launch_refuses_a_contributor_model_before_spawning(
+    chat, popen, monkeypatch
+):
+    """The runner is the backstop: retry/resume go through it too."""
+    monkeypatch.setattr(
+        sa_runner.sa_model_policy, "host_allows_data_tiers", lambda: False
+    )
+    runner = make_runner(chat, model="muse-spark-1.3-contributor")
+    session = chat.create_session("tune it")
+
+    with pytest.raises(ValueError) as excinfo:
+        runner.launch_turn(session["id"], "tune it")
+
+    assert sa_runner.sa_model_policy.CONFIG_KEY in str(excinfo.value)
+    assert popen.calls == []
+    assert status_of(chat, session["id"]) == "queued"

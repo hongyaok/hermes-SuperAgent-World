@@ -1,7 +1,7 @@
 ---
 name: superagent-operator
 description: Operate Superagent chats, workers and GitHub watch.
-version: 0.6.0
+version: 0.6.1
 platforms: [linux, macos, windows]
 metadata:
   hermes:
@@ -146,6 +146,29 @@ hermes superagent models
 
 The ⚙ Settings panel edits the same values and invalidates the models/chats
 queries on save, so chips and new sessions agree immediately.
+
+### Contributor (data-training) tiers
+
+A model id carrying a `contributor` dash-token (Meta's `…-contributor` ids)
+lets the vendor train on prompts. Hermes refuses that `-m` override in **every
+unattended run** — which is what every worker is — unless `config.yaml` sets:
+
+```yaml
+security:
+  allow_data_training_tiers_noninteractive: true
+```
+
+- Superagent refuses the model **before** creating a session, in all four
+  places (desktop/API, `superagent_spawn`, CLI chat, and the runner backstop for
+  retry/resume), and the message names the key, the command and the trade-off.
+- Turn it on from ⚙ Settings → **Allow contributor (data-training) models in
+  workers** (saved immediately, not with Save), or from a terminal:
+  `hermes config set security.allow_data_training_tiers_noninteractive true`.
+- `hermes superagent settings` shows `data-tier models: allowed for workers` or
+  `blocked (enable with: …)`; `GET /settings` reports
+  `data_training_tiers_allowed`.
+- The opt-in is **global to Hermes**, not per-Superagent: it applies to every
+  non-interactive run on the machine.
 
 ---
 
@@ -303,6 +326,9 @@ reported as `token_set: true`.
 - **A chat sits in `queued`** — waiting for a worker slot (`max_workers`) or for
   the next reap; a turn older than `turn_timeout_seconds` is cancelled with a
   `while queued` reason.
+- **A contributor model is refused** — a headless worker needs the host opt-in
+  (`security.allow_data_training_tiers_noninteractive: true`); the error names
+  the key and the command, and ⚙ Settings has the checkbox.
 - **A ticket never starts** — see the launch constraint above.
 - **No toasts** — completion notifications need the page mounted and a host that
   exposes `host.notify`; the transcript still updates without them.

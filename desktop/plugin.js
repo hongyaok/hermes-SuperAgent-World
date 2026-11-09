@@ -1979,8 +1979,32 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
   const [allowPrCreate, setAllowPrCreate] = useState(() => !!(settings && settings.allow_worker_pr_create))
   const [allowPrApprove, setAllowPrApprove] = useState(() => !!(settings && settings.allow_router_pr_approve))
   const [petdexEnabled, setPetdexEnabled] = useState(() => !(settings && settings.petdex_enabled === false))
+  const [dataTierAllowed, setDataTierAllowed] = useState(
+    () => !!(settings && settings.data_training_tiers_allowed),
+  )
+  const [tierNotice, setTierNotice] = useState('')
   const [notice, setNotice] = useState('')
   const [cleanupNotice, setCleanupNotice] = useState('')
+
+  // The host opt-in is not part of settings.json, so it is saved on toggle
+  // rather than with the Save button: the checkbox can only mean one thing.
+  const dataTierSave = useMutation({
+    mutationFn: (allowed) => rest('/settings/data-training-tier', {
+      method: 'POST', body: { allowed: !!allowed },
+    }),
+    onSuccess: (result) => {
+      if (!result || result.ok === false) {
+        setTierNotice(String((result && (result.error || result.detail)) || 'could not change the host opt-in'))
+        return
+      }
+      setDataTierAllowed(!!result.allowed)
+      setTierNotice(result.allowed
+        ? 'Contributor tiers allowed for workers.'
+        : 'Contributor tiers blocked for workers.')
+      queryClient.invalidateQueries({ queryKey: [ID, 'settings'] })
+    },
+    onError: (err) => setTierNotice(errorText(err) || 'could not change the host opt-in'),
+  })
 
   const cleanupWorktrees = useMutation({
     mutationFn: () => rest('/workspaces/cleanup', { method: 'POST', body: {} }),
@@ -2006,6 +2030,7 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
     allowPrCreate: !!(settings && settings.allow_worker_pr_create),
     allowPrApprove: !!(settings && settings.allow_router_pr_approve),
     petdexEnabled: !(settings && settings.petdex_enabled === false),
+    dataTier: !!(settings && settings.data_training_tiers_allowed),
   }), [settings])
 
   useEffect(() => {
@@ -2023,6 +2048,7 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
     setAllowPrCreate(!!settings.allow_worker_pr_create)
     setAllowPrApprove(!!settings.allow_router_pr_approve)
     setPetdexEnabled(settings.petdex_enabled !== false)
+    setDataTierAllowed(settings.data_training_tiers_allowed === true)
   }, [signature]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const edited = () => setNotice('')
@@ -2082,6 +2108,9 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
     ? notice
     : (errorText(save.error) || errorText(error))
   const saved = notice === 'Saved.'
+  // Older gateways do not report the host opt-in; hide the control rather
+  // than show a checkbox that cannot do anything.
+  const dataTierSupported = !!(settings && typeof settings.data_training_tiers_allowed === 'boolean')
 
   return jsxs('section', {
     'aria-label': 'Settings',
@@ -2270,6 +2299,41 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
                       jsx('span', { key: 'l', className: 'min-w-0 flex-1', children: 'Use Petdex.dev random character sprites' }),
                     ],
                   }),
+                  dataTierSupported
+                    ? jsxs('label', {
+                        key: 'data-tier', className: 'flex items-center gap-2 text-[0.6875rem] text-(--ui-text-tertiary)',
+                        children: [
+                          jsx('input', {
+                            key: 'i', type: 'checkbox', checked: !!dataTierAllowed,
+                            disabled: dataTierSave.isPending,
+                            'aria-label': 'Allow contributor (data-training) models in workers',
+                            onChange: (event) => {
+                              setTierNotice('')
+                              dataTierSave.mutate(!!event.target.checked)
+                            },
+                            className: 'accent-(--ui-accent)',
+                          }),
+                          jsx('span', {
+                            key: 'l', className: 'min-w-0 flex-1',
+                            children: 'Allow contributor (data-training) models in workers',
+                          }),
+                        ],
+                      })
+                    : null,
+                  tierNotice
+                    ? jsx('div', {
+                        key: 'data-tier-notice',
+                        className: 'text-[0.6875rem] leading-snug text-(--ui-text-secondary)',
+                        children: tierNotice,
+                      })
+                    : null,
+                  dataTierSupported
+                    ? jsx('div', {
+                        key: 'data-tier-help',
+                        className: 'text-[0.6875rem] leading-snug text-(--ui-text-tertiary)',
+                        children: 'Saved immediately to config.yaml as security.allow_data_training_tiers_noninteractive. Those tiers (…-contributor) let the vendor train on worker prompts, and a headless worker is refused without this.',
+                      })
+                    : null,
                   jsx('div', {
                     key: 'yolo-help', className: 'text-[0.6875rem] leading-snug text-(--ui-text-tertiary)',
                     children: 'Skips approval prompts inside a turn; PR creation and PR approval stay off unless explicitly enabled above.',
