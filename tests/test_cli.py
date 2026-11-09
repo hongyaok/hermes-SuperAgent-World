@@ -1293,3 +1293,67 @@ def test_pin_unknown_session_is_an_error(sa, store, fake_executor, monkeypatch, 
     rc = sa.sa_cli.run(_args(superagent_command="pin", session_id="S-9999"), object())
     assert rc == 1
     assert "unknown chat session" in capsys.readouterr().out
+
+
+# -- data-training tiers ----------------------------------------------------
+
+
+def test_chat_refuses_a_contributor_model_before_creating_a_session(
+    sa, store, fake_executor, monkeypatch, capsys
+):
+    engine = _engine(sa, store, fake_executor)
+    _patch_engine(sa, monkeypatch, engine)
+
+    rc = sa.sa_cli.run(
+        _args(
+            superagent_command="chat",
+            prompt=["teach", "the", "router"],
+            model="muse-spark-1.3-contributor",
+            provider="opencode-go",
+            preset="",
+            reasoning="",
+            title="",
+            detach=True,
+            repo="",
+        ),
+        object(),
+    )
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert sa.sa_model_policy.CONFIG_KEY in out
+    # Nothing is created for a model that could never start.
+    chat = sa.sa_chats.ChatStore(store.path)
+    assert chat.list_sessions(limit=10)["sessions"] == []
+
+
+def test_settings_render_reports_a_blocked_data_tier(sa, monkeypatch, capsys):
+    monkeypatch.setattr(sa.sa_settings, "public_settings", lambda: {"mode": "observe"})
+    monkeypatch.setattr(
+        sa.sa_model_policy, "_read_host_state", lambda path=None: (False, "missing")
+    )
+
+    assert sa.sa_cli.run_settings(False) == 0
+    out = capsys.readouterr().out
+    assert "data-tier models" in out
+    assert "blocked" in out
+    assert sa.sa_model_policy.SET_COMMAND in out
+
+
+def test_settings_render_reports_an_allowed_data_tier(sa, monkeypatch, capsys):
+    monkeypatch.setattr(sa.sa_settings, "public_settings", lambda: {"mode": "observe"})
+    monkeypatch.setattr(
+        sa.sa_model_policy, "_read_host_state", lambda path=None: (True, "")
+    )
+
+    assert sa.sa_cli.run_settings(False) == 0
+    assert "allowed for workers" in capsys.readouterr().out
+
+
+def test_settings_json_includes_the_data_tier_state(sa, monkeypatch, capsys):
+    monkeypatch.setattr(sa.sa_settings, "public_settings", lambda: {"mode": "observe"})
+    monkeypatch.setattr(
+        sa.sa_model_policy, "_read_host_state", lambda path=None: (True, "")
+    )
+
+    assert sa.sa_cli.run_settings(True) == 0
+    assert json.loads(capsys.readouterr().out)["data_training_tiers_allowed"] is True

@@ -63,6 +63,7 @@ try:  # loaded as part of the plugin package
         sa_chats,
         sa_diff,
         sa_github,
+        sa_model_policy,
         sa_runner,
         sa_runtime,
         sa_settings,
@@ -73,6 +74,7 @@ except ImportError:  # loaded standalone by the gateway / pytest
     import sa_chats  # type: ignore[no-redef]
     import sa_diff  # type: ignore[no-redef]
     import sa_github  # type: ignore[no-redef]
+    import sa_model_policy  # type: ignore[no-redef]
     import sa_runner  # type: ignore[no-redef]
     import sa_runtime  # type: ignore[no-redef]
     import sa_settings  # type: ignore[no-redef]
@@ -85,7 +87,10 @@ VERSION = "0.7.0"
 # panel feature-detects (v2 = session management; v3 = towns and worker
 # spawning).
 API_VERSION = 3
-FEATURES = ("chats", "settings", "github", "diff", "session_management", "towns", "thinking")
+FEATURES = (
+    "chats", "settings", "github", "diff", "session_management", "towns",
+    "thinking", "data_training_tiers",
+)
 # Module import time: when the gateway loaded this plugin, not the request time.
 STARTED_AT = time.time()
 
@@ -734,6 +739,9 @@ def _settings_payload() -> dict[str, Any]:
     payload = {key: public.get(key, sa_settings.DEFAULTS.get(key)) for key in SETTINGS_KEYS}
     payload["model_presets"] = sa_settings.normalize_presets(payload.get("model_presets"))
     payload["github_token_set"] = bool(public.get("github_token_set"))
+    # Host state, not a Superagent setting: Hermes itself reads this key out of
+    # config.yaml, so the panel reports what the child will actually see.
+    payload["data_training_tiers_allowed"] = sa_model_policy.host_allows_data_tiers()
     return payload
 
 
@@ -866,6 +874,35 @@ def update_settings(body: dict | None = None) -> dict[str, Any]:
             raise HTTPException(status_code=500, detail=_scrub(str(exc))) from exc
         _reset_runner()
     return {"ok": True, "settings": _settings_payload()}
+
+
+@router.post("/settings/data-training-tier")
+def set_data_training_tier(body: dict | None = None) -> dict[str, Any]:
+    """Turn the host's data-training opt-in on or off.
+
+    This is not a Superagent setting: Hermes reads
+    ``security.allow_data_training_tiers_noninteractive`` out of ``config.yaml``
+    and refuses an explicit contributor-tier model in any unattended run
+    without it. The write goes through ``hermes config set`` so the file keeps
+    its comments, and the response reports the *observed* state after the
+    write rather than the requested one.
+    """
+    data = body if isinstance(body, dict) else {}
+    if "allowed" not in data:
+        raise HTTPException(status_code=400, detail="allowed is required")
+    allowed = _settings_bool(data.get("allowed"), "allowed")
+    try:
+        result = sa_model_policy.set_host_allowance(allowed)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=_scrub(str(exc))) from exc
+    except Exception as exc:  # missing hermes binary, permission denied, ...
+        raise HTTPException(status_code=500, detail=_scrub(str(exc))) from exc
+    return {
+        "ok": True,
+        "allowed": bool(result.get("allowed")),
+        "config_path": result.get("path") or "",
+        "settings": _settings_payload(),
+    }
 
 
 @router.get("/usage")
@@ -1461,6 +1498,14 @@ def create_chat(body: dict) -> dict[str, Any]:
         if not effort:
             effort = _reasoning_effort(parent_session.get("reasoning_effort"))
         source = "worker"
+
+    # Refuse a data-training ("contributor") tier before the row exists: a
+    # headless worker cannot answer Hermes' consent prompt, so launching it
+    # would only mark the session failed two seconds later.
+    try:
+        sa_model_policy.check_model(model)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=_scrub(str(exc))) from exc
 
     try:
         session = store.create_session(

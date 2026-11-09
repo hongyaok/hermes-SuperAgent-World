@@ -534,3 +534,50 @@ def test_town_cascade_archive_and_delete_and_retry_failed_and_cleanup(tmp_path, 
     assert store.get_session(w1["id"]) is None
     assert store.get_session(w2["id"]) is None
 
+
+
+def test_spawn_tool_refuses_a_contributor_model_without_the_host_opt_in(
+    tmp_path, monkeypatch, sa
+):
+    path = tmp_path / "superagent.db"
+    store = sa.sa_chats.ChatStore(path)
+    root = store.create_session(
+        "router", model="muse-spark-1.3-contributor", provider="opencode-go"
+    )
+    runner = FakeRunner(store)
+    monkeypatch.setattr(sa.sa_settings, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(sa.sa_runtime, "shared_runner", lambda _store: runner)
+    monkeypatch.setattr(sa.sa_model_policy, "host_allows_data_tiers", lambda: False)
+
+    result = json.loads(
+        sa.sa_tools.superagent_spawn(
+            {"parent_session_id": root["id"], "prompt": "work"}, ctx=object()
+        )
+    )
+    assert sa.sa_model_policy.CONFIG_KEY in result["error"]
+    # No house is built for a worker that could not start.
+    assert runner.launches == []
+    assert store.list_towns()["towns"][0]["workers"] == []
+
+
+def test_spawn_tool_allows_a_contributor_model_when_the_host_opts_in(
+    tmp_path, monkeypatch, sa
+):
+    path = tmp_path / "superagent.db"
+    store = sa.sa_chats.ChatStore(path)
+    root = store.create_session(
+        "router", model="muse-spark-1.3-contributor", provider="opencode-go"
+    )
+    runner = FakeRunner(store)
+    monkeypatch.setattr(sa.sa_settings, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(sa.sa_runtime, "shared_runner", lambda _store: runner)
+    monkeypatch.setattr(sa.sa_model_policy, "host_allows_data_tiers", lambda: True)
+
+    result = json.loads(
+        sa.sa_tools.superagent_spawn(
+            {"parent_session_id": root["id"], "prompt": "work"}, ctx=object()
+        )
+    )
+    assert result["ok"] is True
+    assert result["session"]["model"] == "muse-spark-1.3-contributor"
+    assert runner.launches[0]["model"] == "muse-spark-1.3-contributor"

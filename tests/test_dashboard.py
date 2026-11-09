@@ -907,7 +907,7 @@ def test_health_reports_the_api_shape(api):
     assert body["api_version"] == 3
     assert body["features"] == [
         "chats", "settings", "github", "diff", "session_management", "towns",
-        "thinking",
+        "thinking", "data_training_tiers",
     ]
     assert isinstance(body["pid"], int) and body["pid"] > 0
     assert isinstance(body["started_at"], float)
@@ -1144,3 +1144,93 @@ def test_pin_unknown_session_is_404(chat_api):
     with pytest.raises(api.HTTPException) as excinfo:
         api.pin_chat("S-9999")
     assert excinfo.value.status_code == 404
+
+
+# -- data-training tiers ----------------------------------------------------
+#
+# A contributor-tier model is refused by Hermes in every unattended run unless
+# the host opts in. The API must say so before a session exists, and report the
+# host state the settings panel renders.
+
+
+def test_settings_report_the_host_data_tier_state(chat_api, monkeypatch):
+    api, _ = chat_api
+    assert api.get_settings()["data_training_tiers_allowed"] is False
+
+    monkeypatch.setattr(api.sa_model_policy, "host_allows_data_tiers", lambda: True)
+    assert api.get_settings()["data_training_tiers_allowed"] is True
+
+
+def test_data_tier_route_writes_the_host_key(chat_api, monkeypatch):
+    api, _ = chat_api
+    written = []
+
+    def fake_set(allowed):
+        written.append(allowed)
+        return {"allowed": bool(allowed), "path": "C:/hermes/config.yaml"}
+
+    monkeypatch.setattr(api.sa_model_policy, "set_host_allowance", fake_set)
+    monkeypatch.setattr(api.sa_model_policy, "host_allows_data_tiers", lambda: True)
+
+    body = api.set_data_training_tier({"allowed": True})
+    assert body["ok"] is True
+    assert body["allowed"] is True
+    assert body["config_path"] == "C:/hermes/config.yaml"
+    assert body["settings"]["data_training_tiers_allowed"] is True
+    assert written == [True]
+
+
+def test_data_tier_route_validates_its_body(chat_api):
+    api, _ = chat_api
+    with pytest.raises(api.HTTPException) as missing:
+        api.set_data_training_tier({})
+    assert missing.value.status_code == 400
+    with pytest.raises(api.HTTPException) as invalid:
+        api.set_data_training_tier({"allowed": "maybe"})
+    assert invalid.value.status_code == 400
+
+
+def test_data_tier_route_reports_a_failed_write(chat_api, monkeypatch):
+    api, _ = chat_api
+
+    def boom(allowed):
+        raise ValueError("could not write security.allow_data_training_tiers_noninteractive")
+
+    monkeypatch.setattr(api.sa_model_policy, "set_host_allowance", boom)
+    with pytest.raises(api.HTTPException) as excinfo:
+        api.set_data_training_tier({"allowed": True})
+    assert excinfo.value.status_code == 400
+    assert api.sa_model_policy.CONFIG_KEY in excinfo.value.detail
+
+
+def test_create_chat_refuses_a_contributor_model_without_the_opt_in(chat_api):
+    api, runner = chat_api
+    with pytest.raises(api.HTTPException) as excinfo:
+        api.create_chat(
+            {
+                "prompt": "tune the parser",
+                "model": "muse-spark-1.3-contributor",
+                "provider": "opencode-go",
+            }
+        )
+    assert excinfo.value.status_code == 400
+    assert api.sa_model_policy.CONFIG_KEY in excinfo.value.detail
+    # Nothing was created and nothing was launched: the refusal is a preflight.
+    assert runner.launches == []
+    assert api.list_chats()["sessions"] == []
+
+
+def test_create_chat_allows_a_contributor_model_when_the_host_opts_in(chat_api, monkeypatch):
+    api, runner = chat_api
+    monkeypatch.setattr(api.sa_model_policy, "host_allows_data_tiers", lambda: True)
+
+    body = api.create_chat(
+        {
+            "prompt": "tune the parser",
+            "model": "muse-spark-1.3-contributor",
+            "provider": "opencode-go",
+        }
+    )
+    assert body["ok"] is True
+    assert body["session"]["model"] == "muse-spark-1.3-contributor"
+    assert runner.launches[0]["model"] == "muse-spark-1.3-contributor"
