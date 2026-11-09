@@ -89,10 +89,14 @@ const probePath = join(dir, 'plugin.mjs')
 await writeFile(probePath, rewritten, 'utf8')
 const plugin = await import(pathToFileURL(probePath).href)
 
+// Unique data URLs per sprite: tests can prove which tile an element paints
+// without fetching anything, and a missing sprite is still distinguishable.
+const assetUrl = (name) => `data:image/png;base64,${Buffer.from(`png:${name}`).toString('base64')}`
 const assets = Object.fromEntries(
-  ['grass.png', 'house-router.png', 'house-a.png', 'house-b.png', 'house-c.png', 'house-d.png',
+  ['grass.png', 'grass-b.png', 'grass-c.png', 'plot-empty.png',
+    'house-router.png', 'house-a.png', 'house-b.png', 'house-c.png', 'house-d.png',
     'person.png', 'tree-a.png', 'tree-b.png', 'tree-c.png', 'bush.png', 'fountain.png', 'rock.png', 'lamp.png']
-    .map((name) => [name, { data_url: 'data:image/png;base64,AA==' }]),
+    .map((name) => [name, { data_url: assetUrl(name) }]),
 )
 
 const root = {
@@ -133,6 +137,7 @@ function render(node) {
     'data-petdex-slug', 'data-petdex-state', 'data-town-road-network',
     'data-town-stage', 'data-town-landmark', 'data-town-hud', 'data-town-connections',
     'data-town-time', 'data-town-clock',
+    'data-town-plot', 'data-town-empty-plot',
     'data-town-bulletin', 'data-town-bulletin-modal', 'data-town-bulletin-task',
     'data-transcript-scroll',
     'data-create-pr-box', 'data-town-dialog',
@@ -204,15 +209,16 @@ root.avatar_slug = 'hermes-kody'
 workerOne.avatar_slug = 'coding-cat-pet'
 workerOne.recent_events = [{ kind: 'tool', detail: 'pytest -q' }]
 
+const sceneAssets = {
+  ...assets,
+  'water.png': { data_url: assetUrl('water.png') },
+  'road-h.png': { data_url: assetUrl('road-h.png') },
+  'road-v.png': { data_url: assetUrl('road-v.png') },
+  'plaza-stone.png': { data_url: assetUrl('plaza-stone.png') },
+}
 const sceneNode = h(plugin.TownScene, {
   town: root,
-  assets: {
-    ...assets,
-    'water.png': { data_url: 'data:image/png;base64,AA==' },
-    'road-h.png': { data_url: 'data:image/png;base64,AA==' },
-    'road-v.png': { data_url: 'data:image/png;base64,AA==' },
-    'plaza-stone.png': { data_url: 'data:image/png;base64,AA==' },
-  },
+  assets: sceneAssets,
   pets,
   buildingIds: { 'S-0002': true },
   onOpen: () => undefined,
@@ -378,6 +384,45 @@ const homeActor = render(h(plugin.TownActor, {
 }))
 assert.match(homeActor, /left:330px/)
 assert.match(homeActor, /top:190px/, 'a north actor waits on its doorstep, not on a percentage offset')
+
+// -- twelve authored parcels, occupied or deliberately vacant --------------
+// The fixture has workers in slots 0 and 1, so exactly ten lots are empty.
+// Slot 0 is an ordinary parcel: the Router is a civic building, not a plot
+// occupant, so it neither takes nor blocks a lot.
+assert.equal((scene.match(/data-town-plot="/g) || []).length, 12, 'every parcel renders one marker')
+assert.equal((scene.match(/data-town-empty-plot="/g) || []).length, 10, 'ten parcels are vacant')
+assert.match(scene, /data-town-empty-plot="north-3"/)
+assert.doesNotMatch(scene, /data-town-empty-plot="north-1"/)
+assert.doesNotMatch(scene, /data-town-empty-plot="north-2"/)
+assert.match(scene, /data-town-plot="north-3" data-town-empty-plot="north-3"/, 'a vacant parcel carries both markers')
+assert.match(scene, /data-town-house="S-0002" data-town-plot="north-1"/)
+assert.match(scene, /data-town-house="S-0003" data-town-plot="north-2"/)
+// Occupancy is read from each worker's own slot, deduped and clamped.
+assert.deepEqual([...plugin.townOccupiedSlots(root.workers)].sort((a, b) => a - b), [0, 1])
+assert.deepEqual(plugin.townVacantPlots(root.workers).map((plot) => plot.id),
+  ['north-3', 'north-4', 'west-1', 'west-2', 'east-1', 'east-2', 'south-1', 'south-2', 'south-3', 'south-4'])
+assert.equal(plugin.townVacantPlots(null).length, 12, 'an empty town still draws all twelve parcels')
+assert.deepEqual([...plugin.townOccupiedSlots([{ id: 'S-0009', town_slot: 99 }])], [11],
+  'a legacy slot clamps onto a real parcel instead of inventing a thirteenth')
+assert.deepEqual([...plugin.townOccupiedSlots([{ id: 'S-0009', town_slot: 4 }, { id: 'S-0010', town_slot: 4 }])], [4],
+  'a duplicated slot reserves one parcel')
+assert.deepEqual([...plugin.townOccupiedSlots([{ town_slot: 2 }])], [],
+  'a worker without an id reserves nothing, because it renders no house')
+
+// A town with only its Router: twelve vacant lots, zero worker houses.
+const routerOnly = render(h(plugin.TownScene, {
+  town: { ...root, workers: [] },
+  assets: sceneAssets,
+  pets,
+  buildingIds: {},
+  onOpen: () => undefined,
+  registerHouse: () => () => undefined,
+  reducedMotion: false,
+}))
+assert.equal((routerOnly.match(/data-town-empty-plot="/g) || []).length, 12)
+assert.match(routerOnly, /Router house S-0001/)
+assert.doesNotMatch(routerOnly, /data-town-house="S-0002"/)
+assert.doesNotMatch(routerOnly, /Worker house/)
 
 const switcher = render(h(plugin.TownSwitcher, {
   towns: [root],

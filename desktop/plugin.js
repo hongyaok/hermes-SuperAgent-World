@@ -4510,13 +4510,39 @@ function useElementSize(ref) {
   return size
 }
 
+/** Authored parcel index for a worker slot. The clamp lives in one place so
+ *  the house, the vacancy check and the doorstep anchors can never disagree
+ *  about which parcel a legacy or missing slot belongs to. */
+function townSlotIndex(slot) {
+  const numeric = Math.trunc(Number(slot) || 0)
+  return Math.max(0, Math.min(TOWN_PLOTS.length - 1, numeric))
+}
+
 /** Plot for a worker slot: a pure truncate + clamp lookup that returns a copy.
  *  Out-of-range legacy slots clamp to an authored plot instead of inventing an
  *  outer ring, because the backend already prevents new sessions above 12. */
 function townHousePosition(slot) {
-  const numeric = Math.trunc(Number(slot) || 0)
-  const index = Math.max(0, Math.min(TOWN_PLOTS.length - 1, numeric))
-  return { ...TOWN_PLOTS[index] }
+  return { ...TOWN_PLOTS[townSlotIndex(slot)] }
+}
+
+/** Parcel indexes owned by real workers. Uses each worker's own town_slot —
+ *  never its position in the array — because a filtered or reordered array
+ *  must not shuffle the houses. A worker with no id is not a session and gets
+ *  no house, so it reserves no parcel either. */
+function townOccupiedSlots(workers) {
+  const taken = new Set()
+  for (const worker of Array.isArray(workers) ? workers : []) {
+    if (!worker || worker.id == null || worker.id === '') continue
+    taken.add(townSlotIndex(worker.town_slot))
+  }
+  return taken
+}
+
+/** The parcels nobody owns, in authored plot order. Rendered as deliberate
+ *  vacant lots so an under-populated town still reads as a planned estate. */
+function townVacantPlots(workers) {
+  const taken = townOccupiedSlots(workers)
+  return TOWN_PLOTS.filter((plot, index) => !taken.has(index))
 }
 
 function townStatusLabel(status) {
@@ -5074,6 +5100,75 @@ function TownActor({ session, isRouter, actorState, pet, personArt, reducedMotio
   })
 }
 
+/** A vacant parcel: flat lot marker, one garden tuft and a blank wooden sign.
+ *  Deliberately not a button and not in the tab order — there is no session
+ *  behind it, and aria-hidden keeps screen readers out of the scenery. */
+const TownEmptyPlot = memo(function TownEmptyPlot({ plot, assets }) {
+  const lot = assets && assets['plot-empty.png'] && assets['plot-empty.png'].data_url
+  const garden = assets && assets['bush.png'] && assets['bush.png'].data_url
+  return jsxs('div', {
+    'data-town-plot': plot.id,
+    'data-town-empty-plot': plot.id,
+    'aria-hidden': 'true',
+    className: 'pointer-events-none absolute',
+    style: {
+      left: `${plot.left}px`,
+      top: `${plot.top}px`,
+      width: '112px',
+      height: '130px',
+      transform: 'translate(-50%, -50%)',
+      // Below the sky tint (3) and every house (4+): a vacant lot is ground,
+      // not an entity, so it must never cover an arriving house or actor.
+      zIndex: 2,
+    },
+    children: [
+      lot
+        ? jsx('img', {
+            key: 'lot',
+            src: lot,
+            alt: '',
+            draggable: false,
+            width: 96,
+            style: {
+              position: 'absolute', left: '50%', top: '58%',
+              transform: 'translate(-50%, -50%)', imageRendering: 'pixelated', height: 'auto',
+            },
+          })
+        : null,
+      garden
+        ? jsx('img', {
+            key: 'garden',
+            src: garden,
+            alt: '',
+            draggable: false,
+            width: 20,
+            style: {
+              position: 'absolute', left: '12px', top: '72%',
+              imageRendering: 'pixelated', height: 'auto', opacity: 0.85,
+            },
+          })
+        : null,
+      // Blank lot sign: a wooden post and an unpainted board. No text on
+      // purpose — an empty parcel is not an unnamed session.
+      jsx('span', {
+        key: 'post',
+        style: {
+          position: 'absolute', right: '12px', top: '66%',
+          width: '3px', height: '18px', backgroundColor: '#7a5231',
+        },
+      }),
+      jsx('span', {
+        key: 'board',
+        style: {
+          position: 'absolute', right: '6px', top: '61%',
+          width: '16px', height: '9px', backgroundColor: '#a97b4b',
+          border: '1px solid #6b4626', borderRadius: '1px',
+        },
+      }),
+    ],
+  })
+})
+
 function TownHouse({ session, isRouter, slot, onOpen, houseRef, building, reducedMotion, assets, pet, dimmed }) {
   const sprite = isRouter ? 'house-router.png' : townHouseSprite(session.id)
   const art = assets && assets[sprite] && assets[sprite].data_url
@@ -5086,6 +5181,9 @@ function TownHouse({ session, isRouter, slot, onOpen, houseRef, building, reduce
   const zIndex = townDepth(position.top)
   return jsxs('div', {
     'data-town-house': session.id,
+    // The parcel marker travels with the house so the probe can count all
+    // twelve plots without knowing which ones happen to be occupied.
+    'data-town-plot': isRouter ? null : position.id,
     className: cn('absolute flex flex-col items-center transition-opacity duration-150', dimmed && 'opacity-35'),
     style: {
       left: `${position.left}px`,
@@ -5496,6 +5594,10 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
   const rock = assets && assets['rock.png'] && assets['rock.png'].data_url
   const personArt = assets && assets['person.png'] && assets['person.png'].data_url
   const workers = Array.isArray(town.workers) ? town.workers : []
+  // Vacant parcels come from each worker's own slot, never from the array
+  // index, so a worker that appears later only fills its own lot marker and
+  // never shifts the lots around it.
+  const vacantPlots = townVacantPlots(workers)
   const [filter, setFilter] = useState('all')
   const [paused, setPaused] = useState(false)
   const [bulletinOpen, setBulletinOpen] = useState(false)
@@ -5880,6 +5982,11 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
                   width: tree.width, height: 'auto', imageRendering: 'pixelated',
                   zIndex: townDepth(tree.top),
                 },
+              })),
+              ...vacantPlots.map((plot) => jsx(TownEmptyPlot, {
+                key: `empty:${plot.id}`,
+                plot,
+                assets,
               })),
               jsx(TownBulletinBoard, {
                 key: 'bulletin-board',
@@ -7641,10 +7748,11 @@ function SuperagentChip() {
 export {
   SuperagentPage, SettingsPanel, OverlayDrawer, ModelPicker, PresetSelect,
   modelWithThinking, reasoningLabel, backendNeedsRestart,
-  TownScene, TownHouse, TownActor, PetdexSprite, TownSpeechBubble,
+  TownScene, TownHouse, TownActor, TownEmptyPlot, PetdexSprite, TownSpeechBubble,
   TownBulletinBoard, TownBulletinModal,
   TownSwitcher, TownPickerList, TownPickerPopover, TownChatDialog, TownEmpty, CommentBox, CreatePrBox,
   townChoices, townHousePosition, townHouseSprite, townStatusLabel, deriveSpeechBubble, TOWN_PLOTS,
+  townOccupiedSlots, townVacantPlots,
   TOWN_STAGE, TOWN_STAGE_MIN_SCALE, TOWN_STAGE_MAX_SCALE, TOWN_ROUTER,
   TOWN_ROUTER_RECT, TOWN_FOUNTAIN_RECT, TOWN_BULLETIN_RECT, TOWN_WELL_RECT,
   TOWN_BENCH_WEST_RECT, TOWN_BENCH_EAST_RECT,
