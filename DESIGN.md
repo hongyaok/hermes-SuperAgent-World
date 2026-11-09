@@ -170,6 +170,24 @@ A town is not a second store. It is a read model over `chat_sessions`:
   is enabled (default `true`), `superagent_spawn` provisions an isolated git
   worktree (`<data_dir>/workspaces/worker-<session_id>`) so parallel workers do
   not overwrite each other's working tree.
+- The town is a compact **authored estate**, not a full-bleed percentage scene.
+  Geometry lives on one 1200×700 logical stage, scaled to fit between 0.8× and
+  1.25× and centred, with `overflow: auto` below the minimum so a small pane can
+  still reach every parcel instead of shrinking text. `town_slot` stays the only
+  random thing: slots map to 12 fixed 112×130 parcels, and unoccupied parcels
+  render a quiet `plot-empty` marker, because an estate with empty lots reads as
+  planned while a lawn of blank grass does not.
+- Space is reserved and then *tested*. `townPlotRect()` plus the Router,
+  fountain, noticeboard, well, bench, lamp and pond rectangles all pass through
+  `rectsOverlap()`, and the render probe fails on any pairwise intersection
+  (touching edges allowed). The plaza is a list of axis-aligned bands
+  (`TOWN_PLAZA_BANDS`) rather than one rounded rectangle, so "the paving never
+  runs under a house" is an assertion instead of a screenshot review.
+- Ground is one contiguous SVG estate — rounded loop lane, Main Avenue, one
+  private drive per parcel, stepped plaza, irregular pond bank — and the old
+  dashed Router↔worker connector overlay was deleted outright rather than
+  restyled. Physical paths carry the connection, so the scene no longer reads as
+  a monitoring diagram.
 - The Router can inspect its workers via `superagent_town_status` and send
   follow-up prompts, PR creation requests, or PR review/approval tasks to an
   existing worker via `superagent_message_worker` (or `POST /towns/{root_id}/dispatch`).
@@ -177,18 +195,40 @@ A town is not a second store. It is a read model over `chat_sessions`:
   baseline distinguishes a genuinely new id from a poll. The animation is CSS,
   one-shot, and skipped under reduced motion.
 - Characters are decoupled from house buttons into a depth-sorted `TownActor`
-  layer driven by `useTownSimulation` (`requestAnimationFrame` throttled to
-  25 fps, disabled when `prefers-reduced-motion` is on). Inhabitants walk along
-  town roads between their home doorstep, the plaza, fountain, noticeboard and
-  Router Hall according to session status, play all 9 Petdex animation rows,
-  wave to passing neighbours, and display clickable `TownSpeechBubble` telemetry
-  pills.
+  layer. The population lives in its own memoized `TownPopulation` below the
+  static scene, so a frame tick re-renders actors and bubbles only — never the
+  418 meadow tiles, the paving, the houses or the HUD.
+- Movement is one `requestAnimationFrame` clock at 25 fps owned by
+  `useTownSimulation`. The effect depends on `paused` and `reducedMotion` only;
+  the latest sessions are read through a ref, so the 2 s / 8 s list poll cannot
+  tear the loop down or reshuffle a trip. Elapsed time is clamped to 100 ms and
+  `lastUpdate` is cleared on every stop/visibility change, so a woken tab takes
+  one normal frame instead of a catch-up jump.
+- Each trip is a stored polyline (`path`, `pathIndex`, `destinationId`) built by
+  `townRoute()` from a hub model: every home and civic landmark has one
+  `toHub` node list, and any other route is the outbound list followed by the
+  reversed destination list. This is deliberately not pathfinding — it is 40
+  nodes for 12 homes, inspectable, and predictable.
+- Ground and movement share the same constants (`TOWN_LANES`, `TOWN_AVENUE_Y`,
+  `TOWN_DRIVES`, the plaza bands), which is why a walking character stays on the
+  paving that is drawn under it and why the probe can assert that no route
+  segment crosses the pond or the fountain rectangle.
+- Position is advanced by seconds of elapsed time with a 0.0001 px epsilon and
+  exact clamping at each waypoint; there is no CSS `left`/`top` transition and
+  no "close enough, snap" distance. Arrival is a property of time, not of the
+  pixel gap, so a 1586 px viewport and a 992 px one behave the same.
+- Sprite cells are chosen from simulation time by `petdexFrameCell()`, which
+  clamps the row into the sheet and takes the column modulo the real column
+  count. That removes the old infinite CSS keyframe whose end was one column
+  past the sheet, which is what made characters flicker to a blank frame at the
+  loop boundary. Pause freezes the frame because `animTime` stops advancing;
+  reduced motion pins frame 0.
 - Clicking a house (or its character/bubble) opens the existing
   `ChatHeader`/`Transcript`/`Composer` in a dialog. It is deliberately a reuse,
   not a second chat implementation: stop, retry, follow-up, model/thinking
   changes, diff/export, PR creation and PR review/comment all go through the
   same mutations. Closing the dialog never stops the worker.
-- Town art is served from a 26-file code allowlist (`GET /town/assets`) and
+- Town art is served from a 30-file code allowlist (`GET /town/assets`) and
   Petdex character sheets are proxied, 4× downsampled (`384×468` WebP), cached on
   disk and served from `GET /town/pets` (with 8 bundled offline sheets under
   `assets/town/pets/`). The sprites are vendored with their own licences; see
