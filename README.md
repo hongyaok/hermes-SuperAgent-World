@@ -37,7 +37,7 @@ It separates **routing** from **execution**, and keeps every result behind one r
 - A **deterministic, zero-token router** (`sa_assessor.py`) classifies each request (`accept`, `ignore`, `needs_human`).
 - **SQLite** (`<HERMES_HOME>/plugin-data/superagent/superagent.db`) persists tickets (`T-0001`, `T-0002`, ...), event history, source deduplication, and polling cursors, plus the chat tables (sessions, messages, events) and GitHub dedupe.
 - **Ticket worker subagents** launched via `ctx.subagent_lifecycle` perform the coding work inside your repository and leave uncommitted changes in the working tree for human review (`review` state).
-- **Headless chat workers** — the desktop Superagent tab starts one `hermes chat` process per turn, streams its JSON output into the session transcript, and lets you resume, watch or stop it. A root/Router session gets the plugin toolset, so it can call `superagent_spawn` to create real child sessions; workers cannot spawn further workers. Chat workers follow the same rule as ticket workers: changes stay uncommitted for review.
+- **Headless chat workers** — the desktop Superagent tab starts one `hermes chat` process per turn, streams its JSON output into the session transcript, and lets you resume, watch or stop it. A root/Router session gets the plugin toolset, so it can call `superagent_spawn` to create real child sessions; workers cannot spawn further workers. Spawned workers default to the bash-only `mini` harness (mini-swe-agent style: `-t terminal`, one command per step, explicit completion marker); `worker_harness: hermes` restores the full file + terminal toolset. Chat workers follow the same rule as ticket workers: changes stay uncommitted for review.
 - **GitHub PR watch** — connect a repository, and pull-request comments that mention the agent become sessions. `auto` mode checks each PR out as an isolated `git worktree` and launches a worker on it; `observe` (the default) only records the request.
 - **Session handoff** — a finished session can show exactly what the worker changed (`git status`/`--stat`/patch, capped) and post one human-reviewed summary comment back to its pull request. Nothing is committed, pushed or merged.
 
@@ -78,7 +78,7 @@ hermes config set plugins.entries.superagent.settings.repo_path "/path/to/your/r
 hermes config set plugins.entries.superagent.settings.mode observe
 ```
 
-The same values are editable without the CLI: the Superagent page's **⚙ Settings** panel writes `<HERMES_HOME>/plugin-data/superagent/settings.json` (default model/provider, default thinking level, a separate worker model/provider/thinking level, named model presets, `max_workers`, `chat_max_turns`, `worker_yolo`). The panel, `GET/POST /settings` and the CLI all read through `sa_settings.py`, so they agree on one merged view.
+The same values are editable without the CLI: the Superagent page's **⚙ Settings** panel writes `<HERMES_HOME>/plugin-data/superagent/settings.json` (default model/provider, default thinking level, a separate worker model/provider/thinking level, worker harness, named model presets, `max_workers`, `chat_max_turns`, `worker_yolo`). The panel, `GET/POST /settings` and the CLI all read through `sa_settings.py`, so they agree on one merged view.
 
 ### Model presets
 
@@ -93,6 +93,43 @@ model_presets:
 ```
 
 At most **12** presets are kept, names must be unique (case-insensitive), and every preset needs a `model`. An empty list means **no presets**: the composer hides its chip row and you choose with the model picker (or the configured default). You are never shown a hardcoded model you may have no credentials for. `GET /models` returns `presets` plus a flat `models` list — the preset models in configured order, then the configured `default_model` if it is not already there. The composer shows one chip per preset before a chat starts, and `POST /chats` accepts `preset: "<name>"` (an explicit `model`/`provider` still wins). `hermes superagent chat --preset <name>` resolves the same catalog from the terminal.
+
+### Worker harness
+
+Spawned workers default to `worker_harness: mini`, a bash-only harness modelled on the
+[mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent) **architecture**. It is the
+architecture, not the external package: there is no new Python dependency, no `mini`
+binary and no separate model client. A worker is still a normal headless `hermes chat`
+turn, but it runs with:
+
+- **one action tool** — the turn is launched with `-t terminal`, so bash is the only
+  way to act. (The `superagent` plugin toolset is added when the turn may create or
+  approve a PR, because those tools are its only way to publish.)
+- **one command per step, in a linear transcript** — the prompt requires exactly one
+  terminal command per assistant response, inspection before edits, and the relevant
+  checks before it declares the work done.
+- **an explicit completion marker** — the final action must be
+  `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`; the runner records one `submitted`
+  event when it sees the string, then the worker writes a summary of at most 200 words.
+- **a hard step cap** — `chat_max_turns` reaches Hermes as `--max-turns`, and the
+  existing per-turn timeout/watchdog still applies.
+
+The point is cost and predictability: a bash-only worker has a much smaller tool
+schema to reason about, cannot wander into file-tool retries, and produces a transcript
+that reads as one command → one observation per step. Set `worker_harness: hermes` to
+give workers the full Hermes file + terminal toolset instead. The setting is stored on
+each session row (`harness`), so a change applies to workers spawned afterwards, not to
+ones already running; `NULL` (every pre-harness row) behaves exactly like `hermes`.
+
+**Roots never run mini.** The Router/root session always keeps the full Hermes toolset
+(plus the `superagent` plugin toolset) because it has to spawn and steer workers. `mini`
+is a worker-only mode even if a row somehow carries it.
+
+```bash
+hermes config set plugins.entries.superagent.settings.worker_harness hermes
+# or the equivalent environment override
+SUPERAGENT_WORKER_HARNESS=mini
+```
 
 ### All Settings (`plugin.yaml`)
 
@@ -115,6 +152,7 @@ At most **12** presets are kept, names must be unique (case-insensitive), and ev
 | `worker_model` | `str` | `""` | Model spawned workers use. Empty means each worker inherits its router session's model (the behaviour before this setting existed). A `superagent_spawn` `model` argument still wins. Env: `SUPERAGENT_WORKER_MODEL`. |
 | `worker_provider` | `str` | `""` | Provider for the worker model (for example `opencode-go`). Empty means workers inherit the router session's provider. Env: `SUPERAGENT_WORKER_PROVIDER`. |
 | `worker_reasoning_effort` | `str` | `""` | Thinking level for spawned workers (`none…ultra`). Empty means each worker inherits its router session's level. A `superagent_spawn` `reasoning_effort` argument still wins. Env: `SUPERAGENT_WORKER_REASONING_EFFORT`. |
+| `worker_harness` | `str` (`mini` \| `hermes`) | `mini` | Toolset contract for spawned workers. `mini` = mini-swe-agent style bash-only worker (`-t terminal`, one command per step, explicit completion marker); `hermes` = the full file + terminal toolset. Roots always keep the full Hermes toolset. Env: `SUPERAGENT_WORKER_HARNESS`. |
 | `model_presets` | `list` | `[]` | Named models offered as composer chips. Empty means no chips (the model picker still works). Env: `SUPERAGENT_MODEL_PRESETS` (comma separated). |
 | `worker_yolo` | `bool` | `true` | Pass `--yolo` to headless chat workers so they do not wait for approval prompts. Env: `SUPERAGENT_WORKER_YOLO`. |
 | `chat_max_turns` | `int` | `120` | Maximum agent turns for one headless chat worker. Env: `SUPERAGENT_CHAT_MAX_TURNS`. |
@@ -142,6 +180,7 @@ The dashboard backend is loaded outside the plugin package, so it reads these va
 | `SUPERAGENT_WORKER_MODEL` | Model for spawned workers (empty = inherit the router). |
 | `SUPERAGENT_WORKER_PROVIDER` | Provider for the worker model (empty = inherit the router). |
 | `SUPERAGENT_WORKER_REASONING_EFFORT` | Thinking level for spawned workers (empty = inherit the router). |
+| `SUPERAGENT_WORKER_HARNESS` | Worker harness: `mini` (bash-only, the default) or `hermes` (full file + terminal). |
 | `SUPERAGENT_MODEL_PRESETS` | Comma-separated model picker presets. |
 | `SUPERAGENT_WORKER_YOLO` | `1`/`true`/`yes`/`on` to pass `--yolo`. |
 | `SUPERAGENT_CHAT_MAX_TURNS` | Maximum agent turns per chat worker. |
@@ -412,11 +451,11 @@ they can call `superagent_spawn`, `superagent_town_status`, `superagent_message_
 | `POST` | `/towns/{root_id}/retry-failed` | Batch-retry all `failed` or `cancelled` workers belonging to `root_id`. Returns `{ok, root_id, retried, count, skipped, errors}`. |
 | `POST` | `/workspaces/cleanup` | Prune stale `pr-*` and `worker-*` git worktrees under `<data_dir>/workspaces` that are not referenced by any active (non-archived) session. Returns `{ok, removed, kept, removed_count, kept_count}`. |
 | `GET` | `/usage?days=14` | `{ok, db_exists, days, since, totals, series, models}` — chats and turns created in the window, summed `tokens`/`duration_ms`, status `counts`, one `{date, sessions, tokens}` bucket per **local** day (filled to `days`), and `{model, provider, sessions, tokens}` rows busiest first. `days` is clamped to `1–90`. |
-| `GET` | `/settings` | Merged, public settings (`mode`, `repo_path`, defaults including `default_reasoning_effort`, worker model overrides (`worker_model`, `worker_provider`, `worker_reasoning_effort`), normalised `model_presets`, worker limits, GitHub watch fields, worktree/PR capability toggles) plus `github_token_set`; never the token. `data_training_tiers_allowed` reports the **host** state of `security.allow_data_training_tiers_noninteractive` in `config.yaml` — it is not a Superagent setting. |
+| `GET` | `/settings` | Merged, public settings (`mode`, `repo_path`, defaults including `default_reasoning_effort`, worker model overrides (`worker_model`, `worker_provider`, `worker_reasoning_effort`), the worker harness (`worker_harness`), normalised `model_presets`, worker limits, GitHub watch fields, worktree/PR capability toggles) plus `github_token_set`; never the token. `data_training_tiers_allowed` reports the **host** state of `security.allow_data_training_tiers_noninteractive` in `config.yaml` — it is not a Superagent setting. |
 | `POST` | `/settings/data-training-tier` | `{allowed: bool}` — write the host opt-in through `hermes config set security.allow_data_training_tiers_noninteractive`, never by editing YAML. Returns `{ok, allowed, config_path, settings}` with the **observed** state after the write. `400` for a missing/non-boolean `allowed` or a failed write (the command's stderr tail is reported). |
-| `POST` | `/settings` | Validate and save `mode`, `repo_path`, `default_model`, `default_provider`, `default_reasoning_effort`, `worker_model`, `worker_provider`, `worker_reasoning_effort`, `model_presets`, `max_workers` (1–8), `worker_yolo`, `chat_max_turns` (1–500), `allow_worker_git_worktree`, `allow_worker_pr_create`, `allow_router_pr_approve`, `github_pr_base_branch`, `github_pr_draft_by_default`, `petdex_enabled`; unknown keys and out-of-range values are `400`. Drops the Runner singleton so the next turn uses the new values. Returns `{ok, settings}`. |
+| `POST` | `/settings` | Validate and save `mode`, `repo_path`, `default_model`, `default_provider`, `default_reasoning_effort`, `worker_model`, `worker_provider`, `worker_reasoning_effort`, `worker_harness` (`mini` or `hermes`), `model_presets`, `max_workers` (1–8), `worker_yolo`, `chat_max_turns` (1–500), `allow_worker_git_worktree`, `allow_worker_pr_create`, `allow_router_pr_approve`, `github_pr_base_branch`, `github_pr_draft_by_default`, `petdex_enabled`; unknown keys and out-of-range values are `400`. Drops the Runner singleton so the next turn uses the new values. Returns `{ok, settings}`. |
 | `GET` | `/chats?limit=50&q=` | `{db_exists, sessions, counts, running, archived_count}`; also runs the runaway watchdog before answering. An optional `archived` query takes `hide` (default: no archived rows), `only` or `all`; an unknown value is `400`. An optional `q` searches titles, prompts and every stored message instead of listing, adding `match_field` (`title`/`prompt`/`message`) and `match_snippet` (≤160 chars) per row; a term over 200 chars is `400`. `counts` describe the visible board, not the hit list. |
-| `POST` | `/chats` | Validate, create and launch a chat. Optional `preset` selects a named model (explicit `model`/`provider` still win; unknown preset is `400` listing the available names) and records a `preset` event. `parent_session_id` creates a real worker under a root (one level, known/root parent only). When a worker request omits `model`, `provider` or `reasoning_effort`, the `worker_*` setting is used before the router session's value; with those settings empty the worker inherits the router's model, provider and `reasoning_effort`, and an explicit request value still wins. `reasoning_effort` accepts `none…ultra`. `400` on an empty/oversized prompt, an invalid repo, or a data-training tier the host has not opted into (see Guardrails); `200 {ok:false}` when the worker cannot start (the session is stored as `failed`). |
+| `POST` | `/chats` | Validate, create and launch a chat. Optional `preset` selects a named model (explicit `model`/`provider` still win; unknown preset is `400` listing the available names) and records a `preset` event. `parent_session_id` creates a real worker under a root (one level, known/root parent only). When a worker request omits `model`, `provider` or `reasoning_effort`, the `worker_*` setting is used before the router session's value; with those settings empty the worker inherits the router's model, provider and `reasoning_effort`, and an explicit request value still wins. A root row is always stored with `harness="hermes"`; a worker takes `worker_harness` (`mini` by default). `reasoning_effort` accepts `none…ultra`. `400` on an empty/oversized prompt, an invalid repo, or a data-training tier the host has not opted into (see Guardrails); `200 {ok:false}` when the worker cannot start (the session is stored as `failed`). |
 | `PATCH` | `/chats/{id}` | Rename: `{title}` is trimmed, whitespace-collapsed and capped at 200 chars. `400` empty/oversized/non-string, `404` unknown id. Returns `{ok, session}`; allowed while a turn runs. |
 | `POST` | `/chats/{id}/pin` | `{pinned?: true}` pins a chat above the timeline; `{pinned: false}` releases it. Display-only: allowed while a turn runs, never touches `updated_at`, so unpinning returns the row to its real place. `404` unknown. Returns `{ok, session}`. |
 | `POST` | `/chats/{id}/archive` | `{archived?: true}` archives (stamps `archived_at` once, leaves `updated_at` alone) and `{archived: false}` restores. `409` while queued/running, `404` unknown. Returns `{ok, session}`. |
@@ -505,6 +544,7 @@ A new user should be able to choose models and get started without reading the d
 
 - **Default model** — the same picker as the composer, plus **Inherit** to clear the pin (the provider is shown, or `auto (chosen by Hermes)`).
 - **Worker model** — a separate picker and **Worker thinking** select for spawned workers, plus **Inherit router** to clear all three fields. Empty fields mean a worker follows its router session; a per-call `superagent_spawn` model/provider/reasoning_effort override still wins. This is the control to use when workers should be cheaper or faster than the router.
+- **Worker harness** — a `mini` / `hermes` select. `mini` (the default) gives spawned workers the bash-only mini-swe-agent style harness: one terminal command per step and an explicit completion marker. `hermes` gives them the full file + terminal toolset. The help line under the picker explains the trade-off; roots always keep the full Hermes toolset.
 - **Model presets** — rows of `name`, `model`, `provider` with a remove button and **+ Add preset** (12 max); the hint is *"Presets appear in the composer; pick one before starting a chat."*
 - **Max parallel workers** (`1–8`), **Max turns per worker** (`1–500`) and **Run workers unattended (`--yolo`)** with help text.
 - **Allow contributor (data-training) models in workers** — a checkbox that writes `security.allow_data_training_tiers_noninteractive: true` to `config.yaml` **immediately** (not with Save), because it is a host setting Hermes reads, not a Superagent setting. The helper line states the trade-off: contributor tiers let the vendor train on worker prompts, and a headless worker is refused without the opt-in. The control is hidden on a gateway that does not report `data_training_tiers_allowed`.
@@ -565,6 +605,7 @@ hermes superagent comment S-0001 --body-file review.md
 ## Known limitations
 
 - **Workers never commit, push, or open a PR unless `allow_worker_pr_create` is explicitly enabled.** By default they edit the working tree (or isolated worker worktree) and the session ends in `review`; publishing is an explicit opt-in decision.
+- **`mini` is the mini-swe-agent architecture, not the `mini-swe-agent` package.** There is no extra Python dependency, `mini` binary or model client: Hermes still owns the model loop, and the worker's step cap is the ordinary `chat_max_turns` / `--max-turns` limit. The toolset guarantees bash is the only action tool; the "exactly one command per step" rule is enforced by the prompt, and the completion marker is a convention recorded as a `submitted` event, not a hard process-level submit.
 - **Contributor-tier models need a host opt-in.** Meta's `…-contributor` (data-training) ids are refused by Hermes in any unattended run unless `config.yaml` has `security.allow_data_training_tiers_noninteractive: true`. Superagent reports that state in `hermes superagent settings` and the panel, refuses the model early with the reason, and can flip the key for you — it does not silently enable a tier that lets the vendor train on your prompts. The opt-in is global to Hermes, not per-Superagent.
 - **The GitHub allow-list is the security boundary.** Empty `github_allowed_users` means **nobody** can trigger work (both for `GitHubWatcher` and `GitHubSource`), and the agent ignores comments from its own login — testing with the account that owns the token produces no sessions.
 - **GitHub self-approval constraint.** GitHub's REST API rejects `APPROVE` on a PR authored by the same GitHub account that owns the token (`422 Unprocessable Entity`). `GitHubClient.create_review` automatically falls back to a formal `COMMENT` review prefixed with `✅ **Approved by Superagent**` when this happens.

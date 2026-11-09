@@ -43,6 +43,10 @@ DEFAULTS: dict[str, Any] = {
     "worker_model": "",
     "worker_provider": "",
     "worker_reasoning_effort": "",
+    # Which harness spawned workers run: "mini" (default) is the bash-only
+    # mini-swe-agent architecture, "hermes" is the full file + terminal
+    # toolset. Roots always keep the full Hermes toolset.
+    "worker_harness": "mini",
     "model_presets": [],
     "max_workers": 2,
     "worker_yolo": True,
@@ -74,6 +78,7 @@ ENV_VARS: dict[str, str] = {
     "worker_model": "SUPERAGENT_WORKER_MODEL",
     "worker_provider": "SUPERAGENT_WORKER_PROVIDER",
     "worker_reasoning_effort": "SUPERAGENT_WORKER_REASONING_EFFORT",
+    "worker_harness": "SUPERAGENT_WORKER_HARNESS",
     "model_presets": "SUPERAGENT_MODEL_PRESETS",
     "max_workers": "SUPERAGENT_MAX_WORKERS",
     "worker_yolo": "SUPERAGENT_WORKER_YOLO",
@@ -117,6 +122,30 @@ def normalize_reasoning_effort(value: Any, *, strict: bool = False) -> str:
             )
         return ""
     return text
+
+
+# The two worker harnesses. There is no "empty" spelling: unlike a model or a
+# thinking level, "unset" cannot mean "inherit", because a worker must run one
+# of the two code paths. A blank value is the default, "mini".
+WORKER_HARNESSES = ("mini", "hermes")
+
+
+def normalize_harness(value: Any, *, strict: bool = False) -> str:
+    """Return a canonical worker harness: ``"mini"`` or ``"hermes"``.
+
+    ``strict=True`` is the settings API path: an unknown value is a 400 rather
+    than a silent fallback. The loader stays lenient so a hand-edited file
+    degrades to the default (``mini``) instead of taking the config down.
+    """
+    text = str(value if value is not None else "").strip().lower()
+    if text in WORKER_HARNESSES:
+        return text
+    if strict:
+        raise ValueError(
+            "worker_harness must be one of: " + ", ".join(WORKER_HARNESSES)
+        )
+    return "mini"
+
 
 # A preset is a named (model, provider) pair. Twelve is enough for a picker
 # and keeps a hand-edited settings file from turning into a model catalog.
@@ -290,6 +319,8 @@ def _coerce(key: str, value: Any, fallback: Any) -> Any:
         return normalize_presets(value)
     if key in ("default_reasoning_effort", "worker_reasoning_effort"):
         return normalize_reasoning_effort(value)
+    if key == "worker_harness":
+        return normalize_harness(value)
     default = DEFAULTS.get(key)
     if isinstance(default, bool):
         return _as_bool(value, bool(fallback))

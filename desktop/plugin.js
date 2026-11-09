@@ -1979,6 +1979,11 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
     provider: (settings && settings.worker_provider) || '',
     effort: (settings && settings.worker_reasoning_effort) || '',
   }))
+  // Which toolset a spawned worker gets. mini is the bash-only
+  // mini-swe-agent style harness; hermes is the full file + terminal set.
+  const [workerHarness, setWorkerHarness] = useState(
+    () => (settings && settings.worker_harness) || 'mini',
+  )
   const [rows, setRows] = useState(() => presetRowsFrom(settings))
   const [maxWorkers, setMaxWorkers] = useState(() => Number(settings && settings.max_workers) || 2)
   const [maxTurns, setMaxTurns] = useState(() => Number(settings && settings.chat_max_turns) || 120)
@@ -2033,6 +2038,7 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
     workerModel: (settings && settings.worker_model) || '',
     workerProvider: (settings && settings.worker_provider) || '',
     workerEffort: (settings && settings.worker_reasoning_effort) || '',
+    workerHarness: (settings && settings.worker_harness) || 'mini',
     presets: presetRowsFrom(settings),
     workers: Number(settings && settings.max_workers) || 2,
     turns: Number(settings && settings.chat_max_turns) || 120,
@@ -2056,6 +2062,7 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
       provider: settings.worker_provider || '',
       effort: settings.worker_reasoning_effort || '',
     })
+    setWorkerHarness(settings.worker_harness || 'mini')
     setRows(presetRowsFrom(settings))
     setMaxWorkers(Number(settings.max_workers) || 2)
     setMaxTurns(Number(settings.chat_max_turns) || 120)
@@ -2086,6 +2093,7 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
         worker_model: String(workerModel.model || '').trim(),
         worker_provider: String(workerModel.provider || '').trim(),
         worker_reasoning_effort: String(workerModel.effort || '').trim(),
+        worker_harness: String(workerHarness || 'mini').trim(),
         model_presets: rows
           .map((row) => ({
             name: String(row.name || '').trim(),
@@ -2287,9 +2295,41 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
                       }),
                     ],
                   }),
+                  jsxs('label', {
+                    key: 'worker-harness',
+                    className: 'flex items-center gap-2 text-[0.6875rem] text-(--ui-text-tertiary)',
+                    children: [
+                      jsx('span', {
+                        key: 'l', className: 'min-w-0 flex-1',
+                        children: 'Worker harness',
+                      }),
+                      jsx('select', {
+                        key: 'i',
+                        value: workerHarness || 'mini',
+                        'aria-label': 'Worker harness',
+                        onChange: (event) => {
+                          edited()
+                          setWorkerHarness(event.target.value)
+                        },
+                        className: cn('rounded border border-(--ui-stroke-secondary)',
+                          'bg-background px-1.5 py-1 text-[0.6875rem] text-(--ui-text-secondary)',
+                          'focus:outline-none'),
+                        children: [
+                          jsx('option', {
+                            key: 'mini', value: 'mini',
+                            children: 'mini-swe-agent style (bash-only)',
+                          }),
+                          jsx('option', {
+                            key: 'hermes', value: 'hermes',
+                            children: 'Hermes (full file + terminal tools)',
+                          }),
+                        ],
+                      }),
+                    ],
+                  }),
                   jsx('div', {
                     key: 'worker-help', className: 'text-[0.6875rem] leading-snug text-(--ui-text-tertiary)',
-                    children: 'Spawned workers use this model, provider and thinking level. Empty means they inherit the router session; a superagent_spawn override still wins.',
+                    children: 'Spawned workers use this model, provider and thinking level. Empty means they inherit the router session; a superagent_spawn override still wins. The harness decides their tools: mini gives one terminal command per step, a linear transcript and an explicit completion marker (cheaper and more predictable); hermes gives the full file + terminal set. The Router always keeps the full Hermes toolset.',
                   }),
                   jsxs('label', {
                     key: 'workers', className: 'flex items-center gap-2 text-[0.6875rem] text-(--ui-text-tertiary)',
@@ -3456,6 +3496,16 @@ function ChatHeader({ session, tile, diff, comment, createPr, retry, exportMd })
             key: 'line', className: 'flex min-w-0 items-center gap-1.5 text-[0.6875rem] text-(--ui-text-quaternary)',
             children: [
               jsx('span', { key: 'm', className: 'shrink-0', children: sessionModelLabel(session) }),
+              session.harness === 'mini'
+                ? jsx('span', {
+                    key: 'harness',
+                    'aria-label': 'Worker harness: mini',
+                    title: 'mini-swe-agent style: bash-only worker, one command per step',
+                    className: cn('shrink-0 rounded border border-(--ui-stroke-secondary) px-1',
+                      'text-[0.625rem] font-normal leading-4 text-(--ui-text-quaternary)'),
+                    children: 'mini',
+                  })
+                : null,
               repo
                 ? jsxs('span', {
                     key: 'r', className: 'flex min-w-0 items-center gap-1.5',

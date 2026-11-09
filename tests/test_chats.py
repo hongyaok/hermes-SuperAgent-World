@@ -662,3 +662,46 @@ def test_migrate_adds_pinned_at_to_an_old_database(tmp_path, sa):
     with store._connect() as handle:
         columns = {row["name"] for row in handle.execute("PRAGMA table_info(chat_sessions)")}
     assert {"archived_at", "pinned_at"} <= columns
+
+
+def test_migrate_adds_harness_to_an_old_database(tmp_path, sa):
+    import sqlite3
+
+    path = tmp_path / "old-harness.db"
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE chat_sessions (id TEXT PRIMARY KEY, title TEXT,"
+        " prompt TEXT NOT NULL, status TEXT NOT NULL, model TEXT, provider TEXT,"
+        " repo TEXT, hermes_session_id TEXT, source TEXT, github_repo TEXT,"
+        " pr_number INTEGER, pr_url TEXT, pid INTEGER, tokens INTEGER,"
+        " duration_ms INTEGER, error TEXT, last_event TEXT, created_at REAL NOT NULL,"
+        " updated_at REAL NOT NULL, started_at REAL, finished_at REAL)"
+    )
+    conn.execute(
+        "INSERT INTO chat_sessions (id, title, prompt, status, created_at, updated_at)"
+        " VALUES ('S-0001', 'old work', 'old prompt', 'review', 1, 1)"
+    )
+    conn.commit()
+    conn.close()
+
+    store = sa.sa_chats.ChatStore(path)
+    with store._connect() as handle:
+        columns = {row["name"] for row in handle.execute("PRAGMA table_info(chat_sessions)")}
+    assert "harness" in columns
+    # A row written before the column existed keeps the historical behaviour.
+    assert store.get_session("S-0001", message_limit=0)["harness"] is None
+
+
+def test_create_session_stores_a_canonical_harness(chat):
+    assert chat.create_session("bash work", harness="mini")["harness"] == "mini"
+    assert chat.create_session("full work", harness=" Hermes ")["harness"] == "hermes"
+    # Empty stays empty: NULL is what every pre-harness row carries.
+    assert chat.create_session("legacy work")["harness"] is None
+
+
+def test_create_session_rejects_an_unknown_harness(chat):
+    import pytest
+
+    with pytest.raises(ValueError, match="harness"):
+        chat.create_session("work", harness="bash")
+    assert chat.list_sessions()["sessions"] == []

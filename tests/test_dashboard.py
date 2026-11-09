@@ -182,6 +182,29 @@ def test_create_chat_launches_a_worker(chat_api):
     assert [event["kind"] for event in detail["events"]] == ["created", "launched"]
 
 
+def test_create_chat_roots_are_hermes_workers_default_to_mini(settings_api):
+    api, _ = settings_api
+    root = api.create_chat({"prompt": "router"})["session"]
+    assert root["harness"] == "hermes"
+    child = api.create_chat(
+        {"prompt": "worker", "parent_session_id": root["id"]}
+    )["session"]
+    assert child["harness"] == "mini"
+    assert api.get_chat(child["id"])["session"]["harness"] == "mini"
+
+
+def test_worker_harness_setting_reaches_new_workers(settings_api):
+    api, _ = settings_api
+    api.update_settings({"worker_harness": "hermes"})
+    root = api.create_chat({"prompt": "router"})["session"]
+    child = api.create_chat(
+        {"prompt": "worker", "parent_session_id": root["id"]}
+    )["session"]
+    assert child["harness"] == "hermes"
+    # A root cannot be downgraded, even while the worker setting is hermes.
+    assert root["harness"] == "hermes"
+
+
 def test_create_chat_rejects_bad_prompts(chat_api):
     api, _ = chat_api
     from fastapi import HTTPException
@@ -441,6 +464,7 @@ def test_get_settings_returns_the_public_surface(settings_api):
         "worker_model",
         "worker_provider",
         "worker_reasoning_effort",
+        "worker_harness",
         "model_presets",
         "max_workers",
         "worker_yolo",
@@ -456,6 +480,7 @@ def test_get_settings_returns_the_public_surface(settings_api):
         assert key in body
     assert body["mode"] == "observe"
     assert body["max_workers"] == 2
+    assert body["worker_harness"] == "mini"
     assert body["github_token_set"] is False
     assert "github_token" not in body
 
@@ -482,6 +507,7 @@ def test_post_settings_saves_every_editable_key(settings_api, tmp_path):
             "worker_model": "deepseek-v4.1-flash",
             "worker_provider": "cheap-provider",
             "worker_reasoning_effort": "low",
+            "worker_harness": "hermes",
             "model_presets": [
                 "fast=opencode-go:qwen/qwen3.8-27b",
                 {"name": "strong", "model": "z-ai/glm-5.3-flash", "provider": "opencode-go"},
@@ -500,6 +526,7 @@ def test_post_settings_saves_every_editable_key(settings_api, tmp_path):
     assert settings["worker_model"] == "deepseek-v4.1-flash"
     assert settings["worker_provider"] == "cheap-provider"
     assert settings["worker_reasoning_effort"] == "low"
+    assert settings["worker_harness"] == "hermes"
     assert settings["model_presets"] == [
         {"name": "fast", "model": "qwen/qwen3.8-27b", "provider": "opencode-go"},
         {"name": "strong", "model": "z-ai/glm-5.3-flash", "provider": "opencode-go"},
@@ -591,6 +618,8 @@ def test_post_settings_resets_the_runner_singleton(settings_api):
         {"worker_model": "x" * 201},
         {"worker_provider": 12},
         {"worker_reasoning_effort": "infinite"},
+        {"worker_harness": "bash"},
+        {"worker_harness": ""},
         {"model_presets": "fast=one"},
         {"model_presets": ["fast=one", "FAST=two"]},
         {"model_presets": [{"name": "empty"}]},

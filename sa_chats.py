@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     avatar_slug       TEXT,
     branch_name       TEXT,
     worktree_path     TEXT,
+    harness           TEXT,
     created_at        REAL NOT NULL,
     updated_at        REAL NOT NULL,
     started_at        REAL,
@@ -130,6 +131,13 @@ FAILED = "failed"
 CANCELLED = "cancelled"
 OBSERVED = "observed"
 STATUSES = (QUEUED, RUNNING, REVIEW, IDLE, FAILED, CANCELLED, OBSERVED)
+
+# Which worker harness a session runs. Empty means the historical behaviour
+# (the full Hermes file + terminal toolset) so every row written before the
+# column existed keeps working untouched. "mini" is the mini-swe-agent
+# architecture implemented on top of the same headless chat: bash-only, one
+# action per step, a linear transcript and an explicit completion marker.
+HARNESSES = ("hermes", "mini")
 
 # Columns a caller may change through update_session(). Everything else
 # (id, created_at, ...) is owned by the store.
@@ -436,6 +444,10 @@ class ChatStore:
             conn.execute("ALTER TABLE chat_sessions ADD COLUMN branch_name TEXT")
         if "worktree_path" not in columns:
             conn.execute("ALTER TABLE chat_sessions ADD COLUMN worktree_path TEXT")
+        if "harness" not in columns:
+            # NULL means "no harness recorded", which behaves exactly like the
+            # old full-toolset worker. New rows normally carry "mini".
+            conn.execute("ALTER TABLE chat_sessions ADD COLUMN harness TEXT")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS chat_sessions_archived"
             " ON chat_sessions(archived_at)"
@@ -508,6 +520,7 @@ class ChatStore:
         avatar_slug: str = "",
         branch_name: Optional[str] = None,
         worktree_path: Optional[str] = None,
+        harness: str = "",
         randomize_slot: bool = True,
     ) -> dict:
         """Create a chat session, optionally as a worker under a root town.
@@ -519,8 +532,18 @@ class ChatStore:
         caller — REST, CLI, or the ``superagent_spawn`` tool — shares one rule
         set. The worker slot is allocated inside the same transaction as the
         insert, so two simultaneous spawns cannot land on one plot.
+
+        ``harness`` is the per-session toolset contract: ``"mini"`` is the
+        bash-only mini-swe-agent style worker, ``"hermes"`` (or empty) keeps
+        the full file + terminal toolset. Only those three spellings are
+        accepted here, so a typo cannot silently downgrade a worker.
         """
         now = time.time()
+        clean_harness = str(harness or "").strip().lower()
+        if clean_harness not in ("", *HARNESSES):
+            raise ValueError(
+                f"harness must be '', 'hermes' or 'mini' (got {harness!r})"
+            )
         if parent_session_id is not None and not isinstance(parent_session_id, str):
             raise ValueError("parent_session_id must be a string or null")
         if parent_session_id is not None and not str(parent_session_id).strip():
@@ -555,6 +578,7 @@ class ChatStore:
             "avatar_slug": clean_avatar or None,
             "branch_name": (str(branch_name).strip() if branch_name else None),
             "worktree_path": (str(worktree_path).strip() if worktree_path else None),
+            "harness": clean_harness or None,
             "created_at": now,
             "updated_at": now,
             "started_at": None,
@@ -616,14 +640,15 @@ class ChatStore:
                    (id, title, prompt, status, model, provider, reasoning_effort, repo,
                     hermes_session_id, source, github_repo, pr_number, pr_url, pid, tokens,
                     duration_ms, error, last_event, parent_session_id, town_slot,
-                    avatar_slug, branch_name, worktree_path, created_at,
+                    avatar_slug, branch_name, worktree_path, harness, created_at,
                     updated_at, started_at, finished_at)
                    VALUES (:id, :title, :prompt, :status, :model, :provider,
                            :reasoning_effort, :repo, :hermes_session_id, :source,
                            :github_repo, :pr_number, :pr_url, :pid, :tokens,
                            :duration_ms, :error, :last_event, :parent_session_id,
                            :town_slot, :avatar_slug, :branch_name, :worktree_path,
-                           :created_at, :updated_at, :started_at, :finished_at)""",
+                           :harness, :created_at, :updated_at, :started_at,
+                           :finished_at)""",
                 row,
             )
         detail = f"{row['source']} chat -> {status}"

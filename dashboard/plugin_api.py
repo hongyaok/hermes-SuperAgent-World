@@ -124,6 +124,7 @@ SETTINGS_KEYS = (
     "worker_model",
     "worker_provider",
     "worker_reasoning_effort",
+    "worker_harness",
     "model_presets",
     "max_workers",
     "worker_yolo",
@@ -150,6 +151,7 @@ SETTINGS_EDITABLE = (
     "worker_model",
     "worker_provider",
     "worker_reasoning_effort",
+    "worker_harness",
     "model_presets",
     "max_workers",
     "worker_yolo",
@@ -786,6 +788,14 @@ def _reasoning_effort(value: Any, field: str = "reasoning_effort") -> str:
         raise HTTPException(status_code=400, detail=f"{field}: {exc}") from exc
 
 
+def _worker_harness(value: Any, field: str = "worker_harness") -> str:
+    """Validate a worker harness choice: only ``mini`` and ``hermes`` exist."""
+    try:
+        return sa_settings.normalize_harness(value, strict=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"{field}: {exc}") from exc
+
+
 def _settings_patch(data: Any) -> dict[str, Any]:
     """Validate the editable settings keys; returns only what was supplied."""
     if data is None:
@@ -831,6 +841,8 @@ def _settings_patch(data: Any) -> dict[str, Any]:
         patch["worker_reasoning_effort"] = _reasoning_effort(
             data.get("worker_reasoning_effort"), "worker_reasoning_effort"
         )
+    if "worker_harness" in data:
+        patch["worker_harness"] = _worker_harness(data.get("worker_harness"))
     if "model_presets" in data:
         raw = data.get("model_presets")
         if raw is not None and not isinstance(raw, (list, tuple)):
@@ -1537,6 +1549,16 @@ def create_chat(body: dict) -> dict[str, Any]:
             )
         source = "worker"
 
+    # The harness is a per-session choice, not a model choice: a root is always
+    # the full Hermes Router (it needs the plugin toolset), a worker uses the
+    # town setting. The setting is already normalised by the loader, so a
+    # hand-edited file cannot leave a worker with an unknown harness.
+    harness = (
+        sa_settings.normalize_harness(settings.get("worker_harness"))
+        if parent
+        else "hermes"
+    )
+
     # Refuse a data-training ("contributor") tier before the row exists: a
     # headless worker cannot answer Hermes' consent prompt, so launching it
     # would only mark the session failed two seconds later.
@@ -1555,6 +1577,7 @@ def create_chat(body: dict) -> dict[str, Any]:
             repo=repo[:1000],
             source=source[:40],
             parent_session_id=parent or None,
+            harness=harness,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

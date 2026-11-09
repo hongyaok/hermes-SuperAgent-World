@@ -113,6 +113,17 @@ config_schema:
       Reasoning effort for spawned workers. Empty means each worker inherits
       its router session's level. A superagent_spawn "reasoning_effort"
       argument still wins.
+  worker_harness:
+    type: str
+    choices: [mini, hermes]
+    default: mini
+    label: Worker harness
+    description: >-
+      mini = mini-swe-agent style: workers get only the terminal tool, one
+      command per step, a linear transcript and an explicit completion marker
+      (cheaper and more predictable). hermes = the full file + terminal
+      toolset. The Router/root session always keeps the full Hermes toolset.
+      No extra package is required either way.
   model_presets:
     type: list
     default: []

@@ -270,6 +270,7 @@ def test_render_settings_shows_the_worker_model_or_inherit(sa):
         "worker_reasoning_effort": "low",
     })
     assert "worker model         cheap/model · cheap-provider · low" in text
+    assert "worker harness       mini" in text
     assert "worker model         inherit router" in sa.sa_cli.render_settings({})
     # A partial override keeps the inherited parts explicit.
     partial = sa.sa_cli.render_settings({"worker_reasoning_effort": "max"})
