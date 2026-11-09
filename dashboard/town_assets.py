@@ -24,6 +24,8 @@ PNG = "image/png"
 # request can name.
 ASSETS: dict[str, str] = {
     "grass.png": PNG,
+    "grass-b.png": PNG,
+    "grass-c.png": PNG,
     "house-router.png": PNG,
     "house-a.png": PNG,
     "house-b.png": PNG,
@@ -50,6 +52,7 @@ ASSETS: dict[str, str] = {
     "signpost.png": PNG,
     "bench.png": PNG,
     "flowers.png": PNG,
+    "plot-empty.png": PNG,
 }
 
 

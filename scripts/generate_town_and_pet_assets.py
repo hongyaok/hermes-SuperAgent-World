@@ -4,9 +4,12 @@ Extracts the remaining MIT buildings and props (`house-e.png`, `house-f.png`,
 `house-g.png`, `bridge.png`, `bench.png`, `flowers.png`, `signpost.png`) from
 the upstream Hermes Town atlases (`https://github.com/sxuff/hermes-town`),
 generates the MIT tileable terrain and well sprites (`road-h.png`, `road-v.png`,
-`plaza-stone.png`, `water.png`, `well.png`), and vendors 8 real character and
+`plaza-stone.png`, `water.png`, `well.png`), vendors 8 real character and
 creature spritesheets from `https://petdex.dev/api/manifest` downsampled to
-`384x468` WebP (`8x9` grid of `48x52` frames) in `assets/town/pets/`.
+`384x468` WebP (`8x9` grid of `48x52` frames) in `assets/town/pets/`, and
+derives two subtle meadow tiles and an empty-parcel marker (`grass-b.png`,
+`grass-c.png`, `plot-empty.png`) from the vendored `grass.png` without touching
+the network.
 """
 
 from __future__ import annotations
@@ -368,6 +371,191 @@ def _generate_bulletin_board() -> Image.Image:
     return img
 
 
+def _grass_variant(base: Image.Image, seed: int, tint: tuple[int, int, int]) -> Image.Image:
+    """Return a 64x32 grass tile shifted by ``tint`` with a few seeded tufts.
+
+    The variant recolours ``grass.png`` instead of repainting it, so the blades
+    that cross the tile border keep matching when the tile repeats. Tufts stay
+    two pixels inside the border and reuse colours already present in the tile,
+    which keeps the contrast low enough that a meadow does not read as a
+    checkerboard.
+    """
+    width, height = base.size
+    img = Image.new("RGBA", (width, height))
+    source = base.load()
+    target = img.load()
+    for y in range(height):
+        for x in range(width):
+            r, g, b, a = source[x, y]
+            target[x, y] = (
+                max(0, min(255, r + tint[0])),
+                max(0, min(255, g + tint[1])),
+                max(0, min(255, b + tint[2])),
+                a,
+            )
+
+    def shifted(colour: tuple[int, int, int]) -> tuple[int, int, int, int]:
+        return (
+            max(0, min(255, colour[0] + tint[0])),
+            max(0, min(255, colour[1] + tint[1])),
+            max(0, min(255, colour[2] + tint[2])),
+            255,
+        )
+
+    dark = shifted((80, 193, 64))
+    light = shifted((136, 222, 95))
+    draw = ImageDraw.Draw(img)
+    rng = random.Random(seed)
+    for _ in range(7):
+        x = rng.randint(3, width - 4)
+        y = rng.randint(3, height - 4)
+        blade = light if rng.random() < 0.5 else dark
+        draw.point((x, y), fill=blade)
+        draw.point((x, y + 1), fill=dark)
+        if rng.random() < 0.5:
+            draw.point((x + 1, y), fill=blade)
+        else:
+            draw.point((x - 1, y), fill=dark)
+    return img
+
+
+def _generate_empty_plot() -> Image.Image:
+    """Return a 96x56 pixel-art footprint for an unoccupied residential parcel.
+
+    The marker is quiet on purpose: an irregular patch of packed earth, a broken
+    ring of low foundation stones, four survey pegs, and two weeds. The corners
+    stay transparent so the parcel sits in the meadow as ground cover, not as a
+    dashed selection rectangle or a second road.
+    """
+    width, height = 96, 56
+    img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    rng = random.Random(4204)
+
+    soil_dark = (96, 74, 50, 255)
+    soil_mid = (122, 96, 66, 255)
+    soil_light = (146, 116, 82, 255)
+    stone_dark = (98, 94, 86, 255)
+    stone_mid = (138, 132, 122, 255)
+    stone_dim = (120, 114, 104, 255)
+    stone_light = (170, 164, 152, 255)
+    wood_dark = (84, 54, 30, 255)
+    wood_mid = (128, 84, 46, 255)
+    wood_light = (160, 112, 64, 255)
+    sprout_dark = (60, 108, 50, 255)
+    sprout_light = (106, 158, 76, 255)
+
+    cx, cy = width / 2, height / 2 + 2
+    rx, ry = 31, 15
+
+    # A superellipse gives the footprint the rounded-corner shape of a building
+    # plot; a per-point bulge and seeded jitter then chew the edge so it does
+    # not read as geometry.
+    footprint: list[tuple[int, int]] = []
+    for step in range(16):
+        angle = step * math.tau / 16
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+        # A 0.7 exponent pushes the corners outward into a rounded rectangle.
+        bulge = rng.uniform(0.94, 1.06)
+        x = cx + math.copysign(abs(cos_a) ** 0.7, cos_a) * rx * bulge
+        y = cy + math.copysign(abs(sin_a) ** 0.7, sin_a) * ry * bulge
+        footprint.append(
+            (round(x + rng.uniform(-1.5, 1.5)), round(y + rng.uniform(-1.2, 1.2)))
+        )
+
+    # Drawing the footprint one pixel lower first gives the earth a low side,
+    # so it reads as turned ground rather than a flat decal.
+    draw.polygon([(x, y + 1) for x, y in footprint], fill=soil_dark)
+    draw.polygon(footprint, fill=soil_mid, outline=soil_dark)
+
+    # Clumped earth rather than single-pixel noise: a few two-pixel patches
+    # read as turned soil at town scale.
+    for _ in range(16):
+        angle = rng.uniform(0, math.tau)
+        distance = rng.uniform(0.2, 0.78)
+        gx = round(cx + math.cos(angle) * rx * distance)
+        gy = round(cy + math.sin(angle) * ry * distance)
+        size = rng.randint(1, 2)
+        clump = soil_light if rng.random() < 0.35 else soil_dark
+        draw.rectangle([gx, gy, gx + size, gy + size], fill=clump)
+
+    # A broken footing: stones arrive in a few clusters with long gaps between
+    # them, and the deeper ones are dimmer and unoutlined, as if half sunk.
+    for sector in range(8):
+        if rng.random() < 0.375:
+            continue
+        angle = (sector + rng.uniform(0.2, 0.8)) * math.tau / 8
+        for _ in range(rng.randint(1, 2)):
+            inset = rng.uniform(0.0, 3.0)
+            sx = cx + math.cos(angle) * (rx - 1 - inset)
+            sy = cy + math.sin(angle) * (ry - 1 - inset)
+            sw = rng.randint(3, 6)
+            sh = rng.randint(3, 4)
+            x0 = round(sx - sw / 2)
+            y0 = round(sy - sh / 2)
+            if inset > 1.5:
+                draw.rectangle([x0, y0, x0 + sw, y0 + sh], fill=stone_dim)
+            else:
+                draw.rectangle([x0, y0, x0 + sw, y0 + sh], fill=stone_mid, outline=stone_dark)
+                draw.line([x0 + 1, y0 + 1, x0 + sw - 1, y0 + 1], fill=stone_light)
+
+    # A few loose stones sunk into the earth keep the middle from looking swept.
+    for _ in range(3):
+        angle = rng.uniform(0, math.tau)
+        distance = rng.uniform(0.25, 0.6)
+        pebble_x = round(cx + math.cos(angle) * rx * distance)
+        pebble_y = round(cy + math.sin(angle) * ry * distance)
+        draw.rectangle(
+            [pebble_x, pebble_y, pebble_x + rng.randint(2, 3), pebble_y + 2],
+            fill=stone_dim,
+        )
+
+    # Survey pegs stand at the four rounded corners, with a dark contact line
+    # so they look driven into the earth rather than pasted on top.
+    for angle in (math.pi * 0.25, math.pi * 0.75, math.pi * 1.25, math.pi * 1.75):
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+        peg_x = round(cx + math.copysign(abs(cos_a) ** 0.7, cos_a) * (rx - 4))
+        peg_y = round(cy + math.copysign(abs(sin_a) ** 0.7, sin_a) * (ry - 4))
+        draw.line([peg_x - 1, peg_y + 2, peg_x + 4, peg_y + 2], fill=soil_dark)
+        draw.rectangle([peg_x, peg_y - 8, peg_x + 3, peg_y + 1], fill=wood_mid, outline=wood_dark)
+        draw.line([peg_x + 1, peg_y - 7, peg_x + 1, peg_y], fill=wood_light)
+
+    # Two weeds: a short stem with a pair of leaves on each side.
+    for weed_x, weed_y in ((36, 30), (58, 35)):
+        draw.line([weed_x, weed_y - 4, weed_x, weed_y], fill=sprout_dark)
+        draw.line([weed_x - 2, weed_y - 3, weed_x - 1, weed_y - 3], fill=sprout_light)
+        draw.line([weed_x + 1, weed_y - 2, weed_x + 2, weed_y - 2], fill=sprout_light)
+        draw.point((weed_x, weed_y - 5), fill=sprout_light)
+    return img
+
+
+def _write_pngs(sprites: dict[str, Image.Image]) -> None:
+    """Write sprites into ``assets/town`` and report their real byte size."""
+    TOWN_DIR.mkdir(parents=True, exist_ok=True)
+    for name, img in sprites.items():
+        out_path = TOWN_DIR / name
+        img.save(out_path, format="PNG")
+        print(f"  wrote {name:18} {img.width}x{img.height} ({out_path.stat().st_size} bytes)")
+
+
+def generate_estate_assets() -> None:
+    """Write the meadow variants and the empty-parcel sprite, entirely offline.
+
+    These files need only the vendored ``grass.png``, so the function is kept
+    separate from the atlas download path: tests and contributors can refresh
+    it with no network. The grass variants are recolours of that tile; the
+    parcel is drawn from scratch.
+    """
+    with Image.open(TOWN_DIR / "grass.png") as opened:
+        grass = opened.convert("RGBA")
+    sprites = {
+        "grass-b.png": _grass_variant(grass, 4202, (5, 3, -4)),
+        "grass-c.png": _grass_variant(grass, 4203, (-4, 2, 5)),
+        "plot-empty.png": _generate_empty_plot(),
+    }
+    _write_pngs(sprites)
+
+
 def generate_town_assets() -> None:
     TOWN_DIR.mkdir(parents=True, exist_ok=True)
     print("Downloading Hermes Town MIT source atlases...")
@@ -391,10 +579,10 @@ def generate_town_assets() -> None:
         "water.png": _generate_water(),
     }
 
-    for name, img in extracted.items():
-        out_path = TOWN_DIR / name
-        img.save(out_path, format="PNG")
-        print(f"  wrote {name:18} {img.width}x{img.height} ({out_path.stat().st_size} bytes)")
+    _write_pngs(extracted)
+    # The estate art derives from the vendored grass tile, so a full
+    # regeneration refreshes it alongside the atlas-extracted sprites.
+    generate_estate_assets()
 
 
 def generate_bundled_pets() -> None:

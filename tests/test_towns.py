@@ -7,6 +7,7 @@ one level of workers, stable slots, and no phantom building after a delete.
 
 from __future__ import annotations
 
+import base64
 import importlib.util
 import json
 import sqlite3
@@ -416,13 +417,14 @@ def test_town_assets_are_an_explicit_allowlist_with_correct_mime():
     manifest = module.town_asset_manifest()
     assert manifest["ok"] is True
     assert set(manifest["assets"]) == {
-        "grass.png", "house-router.png", "house-a.png", "house-b.png",
+        "grass.png", "grass-b.png", "grass-c.png", "house-router.png",
+        "house-a.png", "house-b.png",
         "house-c.png", "house-d.png", "house-e.png", "house-f.png",
         "house-g.png", "person.png", "tree-a.png", "tree-b.png",
         "tree-c.png", "bush.png", "fountain.png", "rock.png",
         "lamp.png", "road-h.png", "road-v.png", "plaza-stone.png",
         "water.png", "bridge.png", "bench.png", "well.png",
-        "bulletin-board.png", "flowers.png", "signpost.png",
+        "bulletin-board.png", "flowers.png", "signpost.png", "plot-empty.png",
     }
     for name, item in manifest["assets"].items():
         assert item["mime"] == "image/png"
@@ -436,6 +438,44 @@ def test_town_assets_are_an_explicit_allowlist_with_correct_mime():
         with pytest.raises(HTTPException) as excinfo:
             module.town_asset(name)
         assert excinfo.value.status_code == 404
+
+
+def test_estate_assets_are_tile_variants_and_a_quiet_parcel():
+    from PIL import Image
+
+    town = ROOT / "assets" / "town"
+    with Image.open(town / "grass.png") as opened:
+        assert opened.mode == "RGBA"
+        grass_bytes = opened.convert("RGBA").tobytes()
+
+    # The meadow variants keep grass.png's tile size and pixel style, but a
+    # fixed palette shift and a few tufts make them distinct tiles.
+    for name in ("grass-b.png", "grass-c.png"):
+        with Image.open(town / name) as opened:
+            assert opened.mode == "RGBA"
+            variant = opened.convert("RGBA")
+        assert variant.size == (64, 32)
+        assert variant.tobytes() != grass_bytes
+
+    # An unoccupied parcel is a low, irregular footprint with transparent
+    # corners so it reads as ground cover, not a bordered widget.
+    with Image.open(town / "plot-empty.png") as opened:
+        assert opened.mode == "RGBA"
+        parcel = opened.convert("RGBA")
+    assert parcel.size == (96, 56)
+    alpha = parcel.getchannel("A")
+    for corner in ((0, 0), (95, 0), (0, 55), (95, 55)):
+        assert alpha.getpixel(corner) == 0
+    assert alpha.getbbox() is not None
+
+    module = load_api()
+    assets = module.town_asset_manifest()["assets"]
+    for name in ("grass-b.png", "grass-c.png", "plot-empty.png"):
+        item = assets[name]
+        assert item["mime"] == "image/png"
+        assert item["data_url"].startswith("data:image/png;base64,")
+        payload = base64.b64decode(item["data_url"].split(",", 1)[1])
+        assert payload.startswith(bytes.fromhex("89504e470d0a1a0a"))
 
 
 def test_town_pets_and_reroll_and_dispatch_endpoints(tmp_path, monkeypatch):
