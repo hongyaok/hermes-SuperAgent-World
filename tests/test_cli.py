@@ -128,30 +128,221 @@ def test_tick_queues_without_launch(sa, store, fake_executor, monkeypatch, capsy
     assert "workers are launched only" in out
 
 
-def test_doctor_keys(sa, store, fake_executor, monkeypatch, capsys):
-    engine = _engine(sa, store, fake_executor)
-    _patch_engine(sa, monkeypatch, engine)
+def _git_result(stdout="", code=0, stderr=""):
+    return types.SimpleNamespace(returncode=code, stdout=stdout, stderr=stderr)
+
+
+def _patch_doctor_git(sa, monkeypatch, *, branch="main", dirty=()):
+    """Fake the three local git reads so the repo check never shells out."""
+
+    def fake(repo, *args):
+        if args == ("rev-parse", "--show-toplevel"):
+            return _git_result(stdout=str(repo) + "\n")
+        if args == ("rev-parse", "--abbrev-ref", "HEAD"):
+            return _git_result(stdout=branch + "\n")
+        if args == ("status", "--porcelain"):
+            return _git_result(stdout="".join(f" M {name}\n" for name in dirty))
+        return _git_result()
+
+    monkeypatch.setattr(sa.sa_cli, "_git", fake)
+
+
+def _healthy_doctor_setup(sa, tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sa.sa_settings.save_settings({"repo_path": str(repo), "default_model": "cheap/model"})
+    monkeypatch.setattr(sa.sa_cli.sa_runner, "resolve_hermes_bin", lambda: "hermes")
+    _patch_doctor_git(sa, monkeypatch)
+    return repo
+
+
+def test_doctor_reports_every_check_and_needs_no_engine(
+    sa, tmp_path, monkeypatch, capsys, cli_settings_home
+):
+    def boom(ctx):
+        raise RuntimeError("engine should not start")
+
+    monkeypatch.setattr(sa.sa_cli.sa_engine, "build_engine", boom)
+    _healthy_doctor_setup(sa, tmp_path, monkeypatch)
 
     rc = sa.sa_cli.run(_args(superagent_command="doctor"), object())
     out = capsys.readouterr().out
     assert rc == 0
-    for key in (
-        "mode",
-        "repo_path",
-        "repo_exists",
-        "github_repo",
-        "github_configured",
-        "max_workers",
-        "worker_toolsets",
-        "workers_available",
-        "workers_reason",
+    assert out.splitlines()[0] == "Superagent doctor"
+    for label in (
+        "version",
+        "database",
+        "hermes binary",
+        "repository",
+        "worktrees",
+        "models",
+        "data tier",
     ):
-        assert key in out
+        assert label in out
+    assert "doctor: ok" in out
+    assert "settings" in out and "database" in out
+    assert "harness mini (bash-only" in out
 
     rc = sa.sa_cli.run(_args(superagent_command="doctor", json=True), object())
     data = json.loads(capsys.readouterr().out)
     assert rc == 0
-    assert "workers_available" in data
+    assert data["ok"] is True
+    assert data["version"]
+    assert data["api_version"] >= 1
+    assert [check["id"] for check in data["checks"]] == [
+        "version",
+        "database",
+        "hermes",
+        "repo",
+        "worktrees",
+        "models",
+        "data_tier",
+    ]
+    for check in data["checks"]:
+        assert set(check) == {"id", "status", "label", "detail"}
+        assert check["status"] in ("ok", "warn", "FAIL")
+    assert data["paths"]["settings"].endswith("settings.json")
+    assert data["paths"]["database"].endswith("superagent.db")
+
+
+def test_doctor_counts_database_sessions_and_flags_stale_worktrees(
+    sa, tmp_path, monkeypatch, capsys, cli_settings_home
+):
+    _healthy_doctor_setup(sa, tmp_path, monkeypatch)
+    data_dir = sa.sa_settings.data_dir()
+    chat = sa.sa_chats.ChatStore(data_dir / "superagent.db")
+    root = chat.create_session("Root town")
+    live_dir = data_dir / "workspaces" / "worker-S-0002"
+    live_dir.mkdir(parents=True)
+    chat.create_session(
+        "Worker", parent_session_id=root["id"], status="running", worktree_path=str(live_dir)
+    )
+    chat.update_session(root["id"], archived_at=1.0)
+    (data_dir / "workspaces" / "pr-9").mkdir()
+
+    rc = sa.sa_cli.run(_args(superagent_command="doctor", json=True), object())
+    data = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    checks = {check["id"]: check for check in data["checks"]}
+    assert "1 towns" in checks["database"]["detail"]
+    assert "1 workers" in checks["database"]["detail"]
+    assert "1 running" in checks["database"]["detail"]
+    assert "1 archived" in checks["database"]["detail"]
+    assert checks["worktrees"]["status"] == "warn"
+    assert "1 of 2 stale" in checks["worktrees"]["detail"]
+    assert "pr-9" in checks["worktrees"]["detail"]
+
+
+def test_doctor_missing_hermes_is_a_failure(
+    sa, tmp_path, monkeypatch, capsys, cli_settings_home
+):
+    _healthy_doctor_setup(sa, tmp_path, monkeypatch)
+
+    def missing():
+        raise RuntimeError("hermes executable not found; install hermes")
+
+    monkeypatch.setattr(sa.sa_cli.sa_runner, "resolve_hermes_bin", missing)
+
+    rc = sa.sa_cli.run(_args(superagent_command="doctor"), object())
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "FAIL" in out
+    assert "doctor: 1 problem(s)" in out
+
+    rc = sa.sa_cli.run(_args(superagent_command="doctor", json=True), object())
+    data = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert data["ok"] is False
+    hermes = next(check for check in data["checks"] if check["id"] == "hermes")
+    assert hermes["status"] == "FAIL"
+    assert "hermes executable not found" in hermes["detail"]
+
+
+def test_doctor_missing_repository_is_a_failure(
+    sa, tmp_path, monkeypatch, capsys, cli_settings_home
+):
+    sa.sa_settings.save_settings({"repo_path": str(tmp_path / "absent")})
+    monkeypatch.setattr(sa.sa_cli.sa_runner, "resolve_hermes_bin", lambda: "hermes")
+    _patch_doctor_git(sa, monkeypatch)
+
+    rc = sa.sa_cli.run(_args(superagent_command="doctor", json=True), object())
+    data = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    repo = next(check for check in data["checks"] if check["id"] == "repo")
+    assert repo["status"] == "FAIL"
+    assert "not found" in repo["detail"]
+
+
+def test_doctor_blocks_a_data_training_worker_model(
+    sa, tmp_path, monkeypatch, capsys, cli_settings_home
+):
+    _healthy_doctor_setup(sa, tmp_path, monkeypatch)
+    sa.sa_settings.save_settings({"worker_model": "meta/llama-4-contributor"})
+    monkeypatch.setattr(
+        sa.sa_cli.sa_model_policy,
+        "host_state",
+        lambda: {"allowed": False, "error": "missing", "set_command": "set it"},
+    )
+
+    rc = sa.sa_cli.run(_args(superagent_command="doctor"), object())
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "data tier" in out
+    assert sa.sa_model_policy.SET_COMMAND in out
+
+    rc = sa.sa_cli.run(_args(superagent_command="doctor", json=True), object())
+    data = json.loads(capsys.readouterr().out)
+    data_tier = next(check for check in data["checks"] if check["id"] == "data_tier")
+    assert data_tier["status"] == "FAIL"
+    assert sa.sa_model_policy.SET_COMMAND in data_tier["detail"]
+
+    monkeypatch.setattr(
+        sa.sa_cli.sa_model_policy,
+        "host_state",
+        lambda: {"allowed": True, "error": ""},
+    )
+    rc = sa.sa_cli.run(_args(superagent_command="doctor", json=True), object())
+    data = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    data_tier = next(check for check in data["checks"] if check["id"] == "data_tier")
+    assert data_tier["status"] == "ok"
+
+
+def test_doctor_missing_database_is_a_warning_and_creates_nothing(
+    sa, tmp_path, monkeypatch, capsys, cli_settings_home
+):
+    _healthy_doctor_setup(sa, tmp_path, monkeypatch)
+    db_path = sa.sa_settings.data_dir() / "superagent.db"
+    assert not db_path.exists()
+
+    rc = sa.sa_cli.run(_args(superagent_command="doctor", json=True), object())
+    data = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    database = next(check for check in data["checks"] if check["id"] == "database")
+    assert database["status"] == "warn"
+    assert "missing" in database["detail"]
+    assert not db_path.exists()
+
+
+def test_doctor_dirty_repository_is_a_warning_not_a_failure(
+    sa, tmp_path, monkeypatch, capsys, cli_settings_home
+):
+    _healthy_doctor_setup(sa, tmp_path, monkeypatch)
+    _patch_doctor_git(sa, monkeypatch, dirty=("a.py", "b.py"))
+
+    rc = sa.sa_cli.run(_args(superagent_command="doctor", json=True), object())
+    data = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    repo = next(check for check in data["checks"] if check["id"] == "repo")
+    assert repo["status"] == "warn"
+    assert "2 uncommitted file(s)" in repo["detail"]
+
+
+def test_parser_registers_doctor_json(sa):
+    parser = argparse.ArgumentParser(prog="hermes superagent")
+    sa.sa_cli.setup_cli(parser)
+    ns = parser.parse_args(["doctor", "--json"])
+    assert ns.superagent_command == "doctor" and ns.json is True
 
 
 def test_usage_error_unknown_command(sa, store, fake_executor, monkeypatch, capsys):

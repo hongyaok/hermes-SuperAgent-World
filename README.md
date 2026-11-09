@@ -285,8 +285,11 @@ hermes superagent diff S-0001
 hermes superagent comment S-0001
 hermes superagent comment S-0001 --body-file review.md
 
-# Verify configuration, repo existence, and worker lifecycle availability
+# Diagnose the install read-only: version/API, database totals, hermes binary,
+# repository (branch + dirty count), worktrees, model choices and the data-tier
+# gate. Never starts an engine, a worker or a network call.
 hermes superagent doctor
+hermes superagent doctor --json
 ```
 
 `hermes superagent towns` prints the same hierarchy the desktop town view draws: each root town (newest activity first) with its worker and worker-status counts, then one indented line per worker showing the plot slot, session id, status, elapsed time and any linked PR number and URL. The default limit is 50 (`--limit`, clamped to 1–200); archived towns and workers are hidden unless `--show-archived` is passed, and orphaned workers (whose parent town row is gone) are counted at the end.
@@ -307,7 +310,7 @@ hermes superagent doctor
 | `hermes superagent settings [--json]` | Print the merged settings (the GitHub token is masked to `set`/`not set`); read-only. |
 | `hermes superagent github [status\|test\|connect\|disconnect\|prs\|poll\|work <n>]` | Connect a repository, manage the watch settings, list open PRs, and start work on one (see [GitHub connect & PR watch](#9-github-connect--pr-watch-v03)). |
 | `hermes superagent cleanup [--json]` | Prune stale `pr-*` and `worker-*` git worktree directories under `<data_dir>/workspaces` that are not referenced by any active (non-archived) session. |
-| `hermes superagent doctor` | Configuration, repository and worker-lifecycle checks. |
+| `hermes superagent doctor` | Read-only installation diagnosis: plugin/API version, database totals (towns, workers, running, archived), the resolved `hermes` binary, the configured repository (exists, git work branch, dirty count), stale `worker-*`/`pr-*` worktrees, default/worker models and the data-tier gate. `ok`/`warn`/`FAIL` per check; exit `1` when any check fails. Never writes, launches a worker or touches the network. |
 
 Every subcommand accepts `--json`. Exit codes: `0` ok, `1` runtime error, `2` usage error.
 

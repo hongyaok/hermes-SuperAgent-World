@@ -5,6 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import sqlite3
+import subprocess
 import threading
 import time
 from math import isfinite
@@ -346,6 +349,429 @@ def run_settings(want_json: bool) -> int:
     else:
         print(render_settings(data))
     return 0
+
+
+# -- doctor ----------------------------------------------------------------
+#
+# One-shot install diagnosis. Every helper below only reads: no schema
+# migration, no settings write, no `hermes` child and no network. That is the
+# point of the command, so a broken install can be inspected without making it
+# worse.
+
+
+def _read_text(path: Path) -> str:
+    """File contents, or an empty string when unreadable/missing."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def version_info(plugin_root: Path | None = None) -> tuple[str, int | None]:
+    """Plugin and dashboard API versions, without importing the FastAPI app.
+
+    `dashboard/plugin_api.py` imports FastAPI and rewrites `sys.path` on
+    import. That is correct inside the gateway and wrong for a terminal
+    diagnostic, so both values are read from the source literals instead.
+    """
+    root = Path(plugin_root) if plugin_root is not None else Path(__file__).resolve().parent
+    version = ""
+    manifest = _read_text(root / "plugin.yaml")
+    match = re.search(r"^version\s*:\s*['\"]?([^'\"\s#]+)", manifest, re.MULTILINE)
+    if match:
+        version = match.group(1).strip()
+
+    api_version: int | None = None
+    source = _read_text(root / "dashboard" / "plugin_api.py")
+    match = re.search(r"^API_VERSION\s*=\s*(\d+)", source, re.MULTILINE)
+    if match:
+        api_version = int(match.group(1))
+    return version, api_version
+
+
+def _db_connect(path: Path) -> sqlite3.Connection:
+    """Open an existing SQLite file read-only; never create or migrate it."""
+    conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=2)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def database_counts(path: Path) -> dict[str, Any]:
+    """Totals for the chat tables, read directly so `doctor` cannot write.
+
+    `ChatStore` migrates on open; that is right for a running install and wrong
+    for a diagnosis of one, so the three counts come from a read-only query.
+    """
+    result: dict[str, Any] = {
+        "path": str(path),
+        "exists": path.is_file(),
+        "towns": 0,
+        "workers": 0,
+        "running": 0,
+        "archived": 0,
+        "error": "",
+    }
+    if not result["exists"]:
+        return result
+    try:
+        conn = _db_connect(path)
+        try:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(parent_session_id IS NULL), 0) AS towns,"
+                " COALESCE(SUM(parent_session_id IS NOT NULL), 0) AS workers,"
+                " COALESCE(SUM(status IN ('queued', 'running')"
+                " AND archived_at IS NULL), 0) AS running,"
+                " COALESCE(SUM(archived_at IS NOT NULL), 0) AS archived"
+                " FROM chat_sessions"
+            ).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        result["error"] = str(exc)
+        return result
+    for key in ("towns", "workers", "running", "archived"):
+        result[key] = int(row[key] or 0)
+    return result
+
+
+def _path_key(value: Any) -> str:
+    """Normalized path for set comparison (case-insensitive on Windows)."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        return os.path.normcase(str(Path(text).expanduser().resolve(strict=False)))
+    except OSError:
+        return os.path.normcase(text)
+
+
+def active_session_paths(db_path: Path) -> tuple[set[str], str]:
+    """Repository/worktree paths referenced by non-archived sessions.
+
+    Returns `(keys, error)` so the worktree check can distinguish "no active
+    sessions" from "the database could not be read".
+    """
+    if not db_path.is_file():
+        return set(), ""
+    try:
+        conn = _db_connect(db_path)
+        try:
+            rows = conn.execute(
+                "SELECT repo, worktree_path FROM chat_sessions WHERE archived_at IS NULL"
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        return set(), str(exc)
+    keys = {_path_key(row["repo"]) for row in rows}
+    keys |= {_path_key(row["worktree_path"]) for row in rows}
+    return {key for key in keys if key}, ""
+
+
+def worktree_summary(workspace_root: Path, active: set[str]) -> dict[str, Any]:
+    """Count `worker-*` / `pr-*` directories and name the unreferenced ones."""
+    summary: dict[str, Any] = {"root": str(workspace_root), "total": 0, "active": 0, "stale": []}
+    if not workspace_root.is_dir():
+        return summary
+    try:
+        entries = sorted(workspace_root.iterdir(), key=lambda entry: entry.name)
+    except OSError:
+        return summary
+    for entry in entries:
+        if not entry.is_dir():
+            continue
+        if not (entry.name.startswith("worker-") or entry.name.startswith("pr-")):
+            continue
+        summary["total"] += 1
+        if _path_key(entry) in active:
+            summary["active"] += 1
+        else:
+            summary["stale"].append(entry.name)
+    return summary
+
+
+def _first_line(text: Any) -> str:
+    for line in str(text or "").splitlines():
+        clean = line.strip()
+        if clean:
+            return clean
+    return ""
+
+
+def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
+    """One local git call (no network); isolated so tests can replace it."""
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+
+def repo_check(repo_path: str) -> dict[str, str]:
+    """Missing repo is a failure; a dirty tree is a warning (workers collide)."""
+    text = str(repo_path or "").strip()
+    if not text:
+        return {"status": "FAIL", "detail": "repo_path is not configured (see: hermes superagent settings)"}
+    repo = Path(text).expanduser()
+    if not repo.is_dir():
+        return {"status": "FAIL", "detail": "not found"}
+    try:
+        top = _git(repo, "rev-parse", "--show-toplevel")
+    except FileNotFoundError:
+        return {"status": "warn", "detail": "git not found; cannot verify the work tree"}
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"status": "warn", "detail": f"git failed: {exc}"}
+    if top.returncode != 0:
+        reason = _first_line(top.stderr) or "not a git repository"
+        return {"status": "FAIL", "detail": reason}
+
+    branch = ""
+    try:
+        ref = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+        if ref.returncode == 0:
+            branch = ref.stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    dirty = 0
+    try:
+        status = _git(repo, "status", "--porcelain")
+        if status.returncode == 0:
+            dirty = len([line for line in status.stdout.splitlines() if line.strip()])
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    where = branch or "(no branch)"
+    if dirty:
+        return {"status": "warn", "detail": f"{where} · {dirty} uncommitted file(s)"}
+    return {"status": "ok", "detail": f"{where} · clean"}
+
+
+def models_check(ctx: Any, settings: dict[str, Any]) -> dict[str, str]:
+    """Default and worker model, plus the harness those workers run under."""
+    try:
+        defaults = models_payload(ctx)
+    except Exception:
+        defaults = {}
+    model = str(defaults.get("default_model") or settings.get("default_model") or "").strip()
+    provider = str(defaults.get("default_provider") or settings.get("default_provider") or "").strip()
+    effort = str(
+        defaults.get("default_reasoning_effort") or settings.get("default_reasoning_effort") or ""
+    ).strip()
+    toolsets = _env_list("SUPERAGENT_WORKER_TOOLSETS", ["file", "terminal"])
+    yolo = _env_bool("SUPERAGENT_WORKER_YOLO", bool(settings.get("worker_yolo", True)))
+    harness = sa_settings.normalize_harness(settings.get("worker_harness"))
+    harness_detail = (
+        "mini (bash-only, one command per step)"
+        if harness == "mini"
+        else f"hermes (toolsets {','.join(toolsets)})"
+    )
+    detail = (
+        f"default {model or '(hermes default)'} · {provider or '(default provider)'} · "
+        f"{effort or 'model default'} · worker {worker_model_label(settings)} · "
+        f"harness {harness_detail} · yolo {'on' if yolo else 'off'}"
+    )
+    return {"status": "ok", "detail": detail, "model": model}
+
+
+def data_tier_check(settings: dict[str, Any], default_model: str = "") -> dict[str, str]:
+    """Fail when the resolved worker model is a blocked data-training tier.
+
+    `worker_model` wins over `default_model`, which wins over the host default
+    (reported as an empty model, i.e. nothing this module can inspect).
+    """
+    model = str(settings.get("worker_model") or default_model or "").strip()
+    if not model:
+        return {"status": "ok", "detail": "no explicit worker or default model; the Hermes default applies"}
+    try:
+        host = sa_model_policy.host_state()
+    except Exception as exc:
+        host = {"allowed": False, "error": str(exc)}
+    if not sa_model_policy.is_data_training_tier(model):
+        return {"status": "ok", "detail": f"{model} is not a data-training tier"}
+    if host.get("allowed"):
+        return {"status": "ok", "detail": f"{model} is a data-training tier, allowed by the host"}
+    error = str(host.get("error") or "").strip()
+    suffix = f" ({error})" if error else ""
+    return {
+        "status": "FAIL",
+        "detail": (
+            f"{model} is a data-training tier and the host does not allow it{suffix};"
+            f" run: {sa_model_policy.SET_COMMAND}"
+        ),
+    }
+
+
+def doctor_payload(ctx: Any) -> dict[str, Any]:
+    """Build the whole diagnosis as one JSON-safe object."""
+    settings: dict[str, Any] = {}
+    settings_error = ""
+    try:
+        settings = sa_settings.load_settings()
+    except Exception as exc:
+        settings_error = f"{type(exc).__name__}: {exc}"
+
+    data_dir = sa_settings.data_dir()
+    workspace_root = data_dir / "workspaces"
+    db_path = data_dir / "superagent.db"
+    repo_path = str(settings.get("repo_path") or "").strip()
+
+    version, api_version = version_info()
+    if version and api_version is not None:
+        version_check = {"status": "ok", "detail": f"{version} (api {api_version})"}
+    elif version:
+        version_check = {"status": "warn", "detail": f"{version} (API version not found)"}
+    else:
+        version_check = {"status": "warn", "detail": "plugin.yaml is missing a version"}
+
+    database = database_counts(db_path)
+    if not database["exists"]:
+        database_check = {"status": "warn", "detail": "missing (not created yet; nothing to count)"}
+    elif database["error"]:
+        database_check = {"status": "FAIL", "detail": f"unreadable: {database['error']}"}
+    else:
+        database_check = {
+            "status": "ok",
+            "detail": (
+                f"{database['towns']} towns · {database['workers']} workers · "
+                f"{database['running']} running · {database['archived']} archived"
+            ),
+        }
+
+    try:
+        hermes_check = {"status": "ok", "detail": sa_runner.resolve_hermes_bin()}
+    except Exception as exc:
+        hermes_check = {"status": "FAIL", "detail": str(exc) or "hermes executable not found"}
+
+    if settings_error:
+        repo_result = {"status": "FAIL", "detail": f"cannot read settings: {settings_error}"}
+    else:
+        repo_result = repo_check(repo_path)
+    repo_result["detail"] = f"{repo_path or '(unset)'} · {repo_result['detail']}"
+
+    active, active_error = active_session_paths(db_path)
+    worktrees = worktree_summary(workspace_root, active)
+    if not worktrees["total"]:
+        worktree_check = {"status": "ok", "detail": "no worker-/pr- directories"}
+    elif active_error:
+        worktree_check = {
+            "status": "warn",
+            "detail": f"{worktrees['total']} directories; cannot read sessions ({active_error})",
+        }
+    elif not database["exists"]:
+        worktree_check = {
+            "status": "warn",
+            "detail": f"{worktrees['total']} directories; database missing so active ones cannot be matched",
+        }
+    elif worktrees["stale"]:
+        names = ", ".join(worktrees["stale"][:3])
+        more = "" if len(worktrees["stale"]) <= 3 else ", …"
+        worktree_check = {
+            "status": "warn",
+            "detail": (
+                f"{len(worktrees['stale'])} of {worktrees['total']} stale ({names}{more});"
+                " see: hermes superagent cleanup"
+            ),
+        }
+    else:
+        worktree_check = {
+            "status": "ok",
+            "detail": f"{worktrees['total']} directories, all referenced by active sessions",
+        }
+
+    models_result = models_check(ctx, settings)
+    data_tier_result = data_tier_check(settings, models_result.get("model", ""))
+    checks = [
+        {
+            "id": "version",
+            "status": version_check["status"],
+            "label": "version",
+            "detail": version_check["detail"],
+        },
+        {
+            "id": "database",
+            "status": database_check["status"],
+            "label": "database",
+            "detail": database_check["detail"],
+        },
+        {
+            "id": "hermes",
+            "status": hermes_check["status"],
+            "label": "hermes binary",
+            "detail": hermes_check["detail"],
+        },
+        {
+            "id": "repo",
+            "status": repo_result["status"],
+            "label": "repository",
+            "detail": repo_result["detail"],
+        },
+        {
+            "id": "worktrees",
+            "status": worktree_check["status"],
+            "label": "worktrees",
+            "detail": worktree_check["detail"],
+        },
+        {
+            "id": "models",
+            "status": models_result["status"],
+            "label": "models",
+            "detail": models_result["detail"],
+        },
+        {
+            "id": "data_tier",
+            "status": data_tier_result["status"],
+            "label": "data tier",
+            "detail": data_tier_result["detail"],
+        },
+    ]
+    paths = {
+        "plugin": str(Path(__file__).resolve().parent),
+        "data_dir": str(data_dir),
+        "settings": str(sa_settings.settings_path()),
+        "database": str(db_path),
+        "workspaces": str(workspace_root),
+        "repo": repo_path,
+        "host_config": str(sa_model_policy.host_config_path()),
+    }
+    return {
+        "ok": all(check["status"] != "FAIL" for check in checks),
+        "version": version,
+        "api_version": api_version,
+        "checks": checks,
+        "paths": paths,
+    }
+
+
+def render_doctor(data: dict) -> str:
+    """Human view: one line per check, then the endpoints a user may paste."""
+    lines = ["Superagent doctor"]
+    checks = data.get("checks") or []
+    for check in checks:
+        status = str(check.get("status") or "ok")
+        lines.append(
+            f"  {status:<4}  {str(check.get('label') or check.get('id') or ''):<14}"
+            f" {check.get('detail') or ''}"
+        )
+    paths = data.get("paths") or {}
+    if paths:
+        lines.append("")
+        lines.append("  paths:")
+        for key in ("settings", "database", "data_dir", "repo"):
+            value = str(paths.get(key) or "").strip()
+            if value:
+                lines.append(f"    {key:<9} {value}")
+    failures = [check for check in checks if str(check.get("status")) == "FAIL"]
+    lines.append("")
+    lines.append("doctor: ok" if not failures else f"doctor: {len(failures)} problem(s)")
+    return "\n".join(lines)
+
+
+def run_doctor(ctx: Any, want_json: bool) -> int:
+    """`hermes superagent doctor`: diagnose the install, mutate nothing."""
+    data = doctor_payload(ctx)
+    print(json.dumps(data, indent=2, default=str) if want_json else render_doctor(data))
+    return 0 if data.get("ok") else 1
 
 
 # -- GitHub CLI ------------------------------------------------------------
@@ -2006,7 +2432,7 @@ def setup_cli(subparser: argparse.ArgumentParser) -> None:
     )
     github_p.add_argument("--request", default="", help="Extra instruction for `work`")
     _add_json_flag(github_p)
-    doctor_p = subs.add_parser("doctor", help="Check configuration and worker availability")
+    doctor_p = subs.add_parser("doctor", help="Diagnose the installation (read-only)")
     _add_json_flag(doctor_p)
     cleanup_p = subs.add_parser(
         "cleanup", help="Prune unused PR and worker git worktrees"
@@ -2028,6 +2454,11 @@ def run(args: argparse.Namespace, ctx: Any) -> int:
     # `settings` is read-only and likewise needs no ticket engine.
     if command == "settings":
         return run_settings(want_json)
+
+    # `doctor` is a read-only install diagnosis: it must work when the engine
+    # (or even Hermes itself) cannot start, so it never builds one.
+    if command == "doctor":
+        return run_doctor(ctx, want_json)
 
     # `github` talks to sa_settings/sa_github/GitHubWatcher directly: it needs
     # no ticket engine (and no HTTP layer), so it also works before anyone has
@@ -2188,15 +2619,6 @@ def run(args: argparse.Namespace, ctx: Any) -> int:
             print(f"error: show failed: {exc}")
             return 1
         print(json.dumps(data, indent=2, default=str) if want_json else render_ticket(data))
-        return 0
-
-    if command == "doctor":
-        try:
-            checks = engine.doctor()
-        except Exception as exc:
-            print(f"error: doctor failed: {exc}")
-            return 1
-        print(json.dumps(checks, indent=2) if want_json else "\n".join(f"{k}: {v}" for k, v in checks.items()))
         return 0
 
     if command == "cleanup":
