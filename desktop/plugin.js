@@ -4887,23 +4887,13 @@ const TOWN_CSS = `
   55% { opacity: 1; transform: translateY(-5px) scale(1.06); }
   100% { opacity: 1; transform: translateY(0) scale(1); }
 }
-@keyframes superagent-town-walk {
-  0% { background-position-x: 0; }
-  33.33% { background-position-x: calc(var(--town-person-step, 36px) * -1); }
-  66.66% { background-position-x: calc(var(--town-person-step, 36px) * -2); }
-  100% { background-position-x: 0; }
-}
-@keyframes superagent-petdex-anim {
-  from { background-position-x: 0px; }
-  to { background-position-x: calc(var(--pet-frame-w, 48px) * -8); }
-}
 @keyframes superagent-speech-float {
   0%, 100% { transform: translate(-50%, 0px); }
   50% { transform: translate(-50%, -2px); }
 }
 .superagent-town-build { animation: superagent-town-build 900ms cubic-bezier(.2,.8,.2,1) both; }
-.superagent-town-person { animation: superagent-town-walk 900ms steps(1,end) infinite; }
-.superagent-petdex-sprite { animation: superagent-petdex-anim 850ms steps(8, end) infinite; }
+/* Character frames are chosen by the simulation and painted with a
+ * background-position, never a keyframe: a re-render must not restart them. */
 .superagent-speech-bubble { animation: superagent-speech-float 2200ms ease-in-out infinite; }
 .superagent-town-sky { transition: background-color 800ms linear; }
 .superagent-town-clock { font-variant-numeric: tabular-nums; }
@@ -4931,7 +4921,7 @@ const TOWN_CSS = `
   box-shadow: 0 2px 0 #1a1a2e, inset -2px -2px 0 rgba(0,0,0,0.18), inset 2px 2px 0 rgba(255,255,255,0.22);
 }
 @media (prefers-reduced-motion: reduce) {
-  .superagent-town-build, .superagent-town-person, .superagent-petdex-sprite, .superagent-speech-bubble { animation: none !important; }
+  .superagent-town-build, .superagent-speech-bubble { animation: none !important; }
 }
 `
 
@@ -4977,30 +4967,62 @@ function deriveSpeechBubble(session, isRouter, socialText) {
   return ''
 }
 
-function PetdexSprite({ session, isRouter, pet, personArt, animState, facingLeft, scale, reducedMotion }) {
+/** Which cell of a Petdex sheet an animation state paints. Clamps the row to
+ *  the sheet and wraps the column with a negative-safe modulo, so no state and
+ *  no frame index can ask for the blank column an 8-column sheet does not
+ *  have. Missing metadata falls back to the standard 8x9 layout. */
+function petdexFrameCell(pet, animState, frameIndex) {
+  const cols = Math.max(1, Math.trunc(Number(pet && pet.cols) || 8))
+  const rows = Math.max(1, Math.trunc(Number(pet && pet.rows) || 9))
+  const rowsMap = (pet && pet.rows_map) || {}
+  const mapped = typeof rowsMap[animState] === 'number'
+    ? rowsMap[animState]
+    : Math.max(0, PETDEX_ROW_STATES.indexOf(animState || 'idle'))
+  const row = Math.max(0, Math.min(rows - 1, Math.trunc(mapped)))
+  const tick = Math.trunc(Number(frameIndex) || 0)
+  const col = ((tick % cols) + cols) % cols
+  return { col, row }
+}
+
+// Petdex sheets step about nine frames a second while walking or working; a
+// resting character breathes slower. The simulation owns animTime, so pause
+// freezes the frame and reduced motion stays on 0.
+const TOWN_FRAME_SECONDS = 0.11
+const TOWN_IDLE_FRAME_SECONDS = 0.28
+
+function townFrameIndex(actor, reducedMotion) {
+  if (reducedMotion) return 0
+  const time = Number(actor && actor.animTime) || 0
+  const state = (actor && actor.animState) || 'idle'
+  const slow = state === 'idle' || state === 'waiting' || state === 'failed'
+  return Math.floor(time / (slow ? TOWN_IDLE_FRAME_SECONDS : TOWN_FRAME_SECONDS))
+}
+
+function PetdexSprite({ session, isRouter, pet, personArt, animState, facingLeft, scale, reducedMotion, frameIndex }) {
   const s = Math.max(0.6, Number(scale) || 1)
+  // One clock, one frame: reduced motion pins the sheet to its first cell.
+  const index = reducedMotion ? 0 : (Number(frameIndex) || 0)
   if (pet && pet.data_url) {
     const fw = Math.round((Number(pet.frame_width) || 48) * s)
     const fh = Math.round((Number(pet.frame_height) || 52) * s)
-    const cols = Number(pet.cols) || 8
-    const rows = Number(pet.rows) || 9
-    const rowsMap = pet.rows_map || {}
-    const rowIdx = typeof rowsMap[animState] === 'number'
-      ? rowsMap[animState]
-      : Math.max(0, PETDEX_ROW_STATES.indexOf(animState || 'idle'))
+    const cols = Math.max(1, Math.trunc(Number(pet.cols) || 8))
+    const rows = Math.max(1, Math.trunc(Number(pet.rows) || 9))
+    const { col, row } = petdexFrameCell(pet, animState, index)
     const flip = facingLeft && animState !== 'running-left' && animState !== 'running-right'
     return jsx('span', {
       'data-petdex-slug': pet.slug,
       'data-petdex-state': animState || 'idle',
+      'data-petdex-frame': `${col}:${row}`,
       'aria-hidden': 'true',
-      className: cn('block select-none', !reducedMotion && 'superagent-petdex-sprite'),
+      // No animation class: the frame is chosen here, so React updates the
+      // background position in place instead of restarting a keyframe.
+      className: 'block select-none',
       style: {
         width: `${fw}px`,
         height: `${fh}px`,
         backgroundImage: `url("${pet.data_url}")`,
         backgroundSize: `${fw * cols}px ${fh * rows}px`,
-        backgroundPositionY: `${-rowIdx * fh}px`,
-        '--pet-frame-w': `${fw}px`,
+        backgroundPosition: `${-col * fw}px ${-row * fh}px`,
         imageRendering: 'pixelated',
         transform: flip ? 'scaleX(-1)' : undefined,
       },
@@ -5009,17 +5031,19 @@ function PetdexSprite({ session, isRouter, pet, personArt, animState, facingLeft
   if (!personArt) return null
   const personSize = Math.round((isRouter ? 42 : 36) * s)
   const dirRow = animState === 'running-left' ? 1 : (animState === 'running-right' ? 2 : (animState === 'jumping' ? 3 : 0))
+  const personFrame = ((index % 3) + 3) % 3
   return jsx('span', {
     'data-petdex-fallback': 'person.png',
+    'data-petdex-frame': `${personFrame}:${dirRow}`,
     'aria-hidden': 'true',
-    className: cn('block select-none', !reducedMotion && 'superagent-town-person'),
+    className: 'block select-none',
     style: {
       width: `${personSize}px`,
       height: `${personSize}px`,
       backgroundImage: `url("${personArt}")`,
       backgroundSize: `${personSize * 3}px ${personSize * 4}px`,
-      backgroundPosition: `0 ${-dirRow * personSize}px`,
-      '--town-person-step': `${personSize}px`,
+      // Three walk columns on the row for the current direction.
+      backgroundPosition: `${-personFrame * personSize}px ${-dirRow * personSize}px`,
       imageRendering: 'pixelated',
       filter: townPersonFilter(session.id, isRouter),
     },
@@ -5220,6 +5244,10 @@ function advanceTownSimulation(map, members, dtSeconds) {
     const status = session.status
     const hActor = townHash(`${session.id}:${actor.stepCount || 0}`)
 
+    // Frame time advances only while the clock runs. Pause stops the clock,
+    // so the sheet freezes on its current cell; reduced motion never starts it.
+    actor.animTime = (Number(actor.animTime) || 0) + dt
+
     if (actor.socialCooldown > 0) actor.socialCooldown = Math.max(0, actor.socialCooldown - dt)
     if (actor.speechLeft > 0) {
       actor.speechLeft -= dt
@@ -5375,6 +5403,7 @@ function useTownSimulation(town, buildingIds, reducedMotion, paused) {
         homeId,
         speed: townActorSpeed(session.status),
         animState: startBuilding ? 'jumping' : defaultAnimForStatus(session.status),
+        animTime: 0,
         facingLeft: home.left < TOWN_ROUTER.left,
         socialText: '',
         speechLeft: startSpeaking ? 20 * TOWN_TICK_SECONDS : 0,
@@ -5418,6 +5447,7 @@ function useTownSimulation(town, buildingIds, reducedMotion, paused) {
         existing.destinationId = null
         existing.nodeId = homeId
         existing.animState = defaultAnimForStatus(session.status)
+        existing.animTime = 0
         existing.socialText = ''
       }
     }
@@ -5526,6 +5556,7 @@ function TownActor({ session, isRouter, actorState, pet, personArt, reducedMotio
   const pos = actorState || actorHomePosition(session, isRouter)
   const animState = (actorState && actorState.animState) || defaultAnimForStatus(session.status)
   const facingLeft = !!(actorState && actorState.facingLeft)
+  const frameIndex = townFrameIndex(actorState, reducedMotion)
   const speech = deriveSpeechBubble(session, isRouter, actorState && actorState.socialText)
   const speechVisible = hovered || (actorState ? (actorState.speechLeft > 0 || !!actorState.socialText) : true)
   const petName = (pet && pet.display_name) || session.avatar_slug || (isRouter ? 'Router' : 'Worker')
@@ -5562,6 +5593,7 @@ function TownActor({ session, isRouter, actorState, pet, personArt, reducedMotio
         personArt,
         animState,
         facingLeft,
+        frameIndex,
         scale: isRouter ? 0.96 : 0.86,
         reducedMotion,
       }),
@@ -8196,6 +8228,7 @@ export {
   TOWN_TICK_SECONDS, townActorSpeed, advanceTownSimulation,
   townNextDestination, townTripPause,
   townWalkFrame, TOWN_EPSILON_PX, TOWN_MAX_FRAME_SECONDS, TOWN_FACING_DX_PX,
+  petdexFrameCell, TOWN_FRAME_SECONDS, TOWN_IDLE_FRAME_SECONDS,
 }
 
 export default {

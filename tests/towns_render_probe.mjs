@@ -135,7 +135,7 @@ function render(node) {
     'aria-label', 'aria-haspopup', 'aria-expanded', 'role',
     'data-town-picker', 'data-town-option', 'data-town-id',
     'data-town-house', 'data-town-actor', 'data-town-speech',
-    'data-petdex-slug', 'data-petdex-state', 'data-town-road-network',
+    'data-petdex-slug', 'data-petdex-state', 'data-petdex-frame', 'data-town-road-network',
     'data-town-stage', 'data-town-landmark', 'data-town-hud', 'data-town-connections',
     'data-town-time', 'data-town-clock',
     'data-town-plot', 'data-town-empty-plot',
@@ -160,6 +160,9 @@ function render(node) {
   if (props.style && props.style.left) bits.push(`left:${props.style.left}`)
   if (props.style && props.style.top) bits.push(`top:${props.style.top}`)
   if (props.style && props.style.transform) bits.push(`transform:${props.style.transform}`)
+  // Sprite sheets paint by background-position: serialized so the probe can
+  // prove both axes stay inside the sheet.
+  if (props.style && props.style.backgroundPosition) bits.push(`background-position:${props.style.backgroundPosition}`)
   if (props.viewBox) bits.push(`viewBox="${props.viewBox}"`)
   // Serialized so the probe can prove the paving is continuous: a dashed
   // stroke would bring the old telemetry look straight back.
@@ -781,6 +784,84 @@ const populationBody = source.slice(source.indexOf('function TownPopulation('), 
 assert.match(populationBody, /useTownSimulation\(/, 'TownPopulation owns the simulation')
 assert.match(populationBody, /key: `actor:\$\{town\.id\}`/)
 assert.match(populationBody, /key: `actor:\$\{worker\.id\}`/)
+
+// -- bounded sprite frames --------------------------------------------------
+// Every state, every column: the sheet must never ask for a cell it does not
+// have. The old keyframe ended at -8 * frameWidth on an 8-column sheet, which
+// is the blank column past the artwork.
+const PET_STATES = ['idle', 'running-right', 'running-left', 'waving', 'jumping',
+  'failed', 'waiting', 'running', 'review']
+const kody = pets['hermes-kody']
+assert.deepEqual(plugin.petdexFrameCell(kody, 'idle', 0), { col: 0, row: 0 })
+for (const state of PET_STATES) {
+  for (let index = 0; index <= 15; index += 1) {
+    const cell = plugin.petdexFrameCell(kody, state, index)
+    assert.ok(Number.isInteger(cell.col) && cell.col >= 0 && cell.col < 8,
+      `${state}/${index}: column ${cell.col} is outside the 8-column sheet`)
+    assert.ok(Number.isInteger(cell.row) && cell.row >= 0 && cell.row < 9,
+      `${state}/${index}: row ${cell.row} is outside the 9-row sheet`)
+    assert.equal(cell.col, index % 8)
+    assert.equal(cell.row, kody.rows_map[state])
+  }
+}
+// Negative, huge and nonsense indices wrap instead of painting off-sheet.
+for (const index of [-1, -7, -8, -9, -999, -1000001, Number.MAX_SAFE_INTEGER,
+  1e15, Number.NaN, null, undefined, '7']) {
+  for (const state of PET_STATES) {
+    const cell = plugin.petdexFrameCell(kody, state, index)
+    assert.ok(Number.isInteger(cell.col) && cell.col >= 0 && cell.col < 8, `index ${index}: col ${cell.col}`)
+    assert.ok(Number.isInteger(cell.row) && cell.row >= 0 && cell.row < 9, `index ${index}: row ${cell.row}`)
+  }
+}
+// Missing or wrong metadata falls back to a real cell, never NaN.
+assert.deepEqual(plugin.petdexFrameCell(null, 'idle', 0), { col: 0, row: 0 })
+assert.deepEqual(plugin.petdexFrameCell({}, 'idle', 0), { col: 0, row: 0 })
+assert.deepEqual(plugin.petdexFrameCell({ cols: 0, rows: 0 }, 'idle', 3), { col: 3, row: 0 })
+assert.deepEqual(plugin.petdexFrameCell({ cols: 3, rows: 2 }, 'idle', 4), { col: 1, row: 0 })
+assert.deepEqual(plugin.petdexFrameCell({ cols: 3, rows: 2 }, 'idle', -1), { col: 2, row: 0 })
+assert.deepEqual(plugin.petdexFrameCell({ cols: 4, rows: 4, rows_map: { review: 99 } }, 'review', 2),
+  { col: 2, row: 3 }, 'a row beyond the sheet clamps to the last one')
+assert.deepEqual(plugin.petdexFrameCell({ rows_map: { waving: -5 } }, 'waving', 0), { col: 0, row: 0 })
+assert.deepEqual(plugin.petdexFrameCell({}, 'not-a-state', 1), { col: 1, row: 0 })
+// The last visible column of an 8-column sheet is 7, so the leftmost paint is
+// -7 * frameWidth and never the old -8 * frameWidth blank frame.
+const lastCell = plugin.petdexFrameCell(kody, 'running-right', 7)
+assert.equal(lastCell.col, 7)
+assert.equal(-lastCell.col * 48, -7 * 48)
+
+// The rendered sprite paints both axes in one plain background-position and
+// carries the cell it chose, with no CSS animation left to restart.
+const petSprite = (over) => render(h(plugin.PetdexSprite, {
+  session: workerOne, isRouter: false, pet: kody, personArt: null,
+  animState: 'running-right', facingLeft: false, scale: 1, reducedMotion: false, frameIndex: 3, ...over,
+}))
+assert.match(petSprite({}), /data-petdex-frame="3:1"/)
+assert.match(petSprite({}), /background-position:-144px -52px/, '3 * 48 px across, one row down')
+assert.doesNotMatch(petSprite({}), /superagent-petdex-sprite/, 'the sheet is not CSS-animated')
+assert.match(petSprite({ frameIndex: 7 }), /background-position:-336px -52px/, 'the last visible column is 7')
+assert.doesNotMatch(petSprite({ frameIndex: 7 }), /-384px/, 'column 8 of an 8-column sheet is never painted')
+assert.match(petSprite({ frameIndex: 15 }), /data-petdex-frame="7:1"/, 'the frame index wraps back into the sheet')
+assert.match(petSprite({ frameIndex: 9, reducedMotion: true }), /data-petdex-frame="0:1"/,
+  'reduced motion pins the first cell')
+assert.match(petSprite({ animState: 'review' }), /data-petdex-frame="3:8"/)
+
+// The person.png fallback uses its three walk columns and the direction row.
+const fallbackSprite = (over) => render(h(plugin.PetdexSprite, {
+  session: workerOne, isRouter: false, pet: null, personArt: assets['person.png'].data_url,
+  animState: 'running-left', facingLeft: true, scale: 1, reducedMotion: false, frameIndex: 4, ...over,
+}))
+assert.match(fallbackSprite({}), /background-position:-36px -36px/, 'column 1 of 3 on the left-facing row')
+assert.match(fallbackSprite({}), /data-petdex-frame="1:1"/)
+assert.doesNotMatch(fallbackSprite({}), /superagent-town-person/, 'the fallback is not CSS-animated')
+assert.match(fallbackSprite({ animState: 'running-right' }), /data-petdex-frame="1:2"/)
+assert.match(fallbackSprite({ animState: 'jumping' }), /data-petdex-frame="1:3"/)
+
+// The removed keyframes and their custom properties are gone for good.
+assert.doesNotMatch(source, /superagent-petdex-anim/)
+assert.doesNotMatch(source, /superagent-town-walk/)
+assert.doesNotMatch(source, /--pet-frame-w|--town-person-step/)
+assert.match(source, /animTime/, 'frame time is stored on the actor')
+assert.match(source, /backgroundPosition: `\$\{-col \* fw\}px \$\{-row \* fh\}px`/)
 
 // -- twelve authored parcels, occupied or deliberately vacant --------------
 // The fixture has workers in slots 0 and 1, so exactly ten lots are empty.
