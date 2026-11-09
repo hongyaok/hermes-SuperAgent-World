@@ -42,6 +42,12 @@ MAX_EVENT_CHARS = sa_chats.MAX_EVENT_CHARS
 # A turn older than this is treated as runaway and cancelled by reap()/list.
 DEFAULT_TURN_TIMEOUT_SECONDS = 1800
 
+# The mini-swe-agent style harness ends a task by echoing this exact string.
+# The prompt asks for it as the final action and the runner records a
+# `submitted` event when a tool result carries it, so the transcript says why
+# the worker stopped instead of leaving the reader to infer it from silence.
+COMPLETION_MARKER = "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+
 
 class RepoPathError(ValueError, RuntimeError):
     """A repository path the runner refuses to use.
@@ -225,6 +231,53 @@ Rules:
 {commit_rule}{approve_rule}
 - If the request needs a design decision, ask one concrete question rather than guessing.
 - Finish with a summary of at most 200 words: what changed, files touched, checks run, and anything unresolved.
+"""
+
+
+def build_mini_prompt(
+    request: str,
+    *,
+    repo: str,
+    session_id: str,
+    can_create_pr: bool = False,
+    can_approve_pr: bool = False,
+) -> str:
+    """Instructions for a bash-only worker, in the mini-swe-agent style.
+
+    This is the mini-swe-agent *architecture* on top of Hermes' headless chat,
+    not the external package: the worker has one action tool (the terminal),
+    must issue exactly one command per step, keeps a linear transcript and
+    ends by echoing ``COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT``. Hermes owns the
+    model loop and the hard step cap (``--max-turns``), so there is no extra
+    binary, dependency or model API code to maintain.
+    """
+    if can_create_pr:
+        publish_rule = (
+            f'- Do NOT push directly to main/master or merge. When the request asks you to publish, call the superagent_pr_create tool (session_id="{session_id}"); it is an allowed non-terminal action in this turn.'
+        )
+    else:
+        publish_rule = (
+            "- Do NOT commit, push, merge, or open a pull request. Leave changes in the working tree."
+        )
+    approve_rule = ""
+    if can_approve_pr:
+        approve_rule = (
+            f'\n- When asked to review or approve a pull request, call superagent_pr_review(session_id="{session_id}", pr_number=..., event="APPROVE"|"REQUEST_CHANGES"|"COMMENT", body="..."); it is an allowed non-terminal action in this turn.'
+        )
+    return f"""You are one Superagent worker session ({session_id}) running in bash-only mode.
+
+Request:
+{(request or "").strip()}
+
+Working rules:
+- Work only inside the repository: {repo or "the current working directory"}. Do not touch files outside it.
+- You have exactly one action tool: the terminal (bash). Every assistant response must issue exactly one terminal command. No prose-only turns while work remains, and no multiple commands in one turn.
+- Inspect before you edit: read the relevant files and the repository's existing style first. Make the smallest change that satisfies the request.
+- Run the relevant tests or checks with the same terminal tool. If there are none, say what you checked instead.
+- The turn has a hard step cap (Hermes' --max-turns); prefer a few decisive commands over exploration.
+{publish_rule}{approve_rule}
+- When the task is finished, your final action must be exactly: echo {COMPLETION_MARKER}
+- After that command returns, reply with a plain-text summary of at most 200 words and no further tool call: what changed, files touched, checks run, and anything unresolved.
 """
 
 
@@ -490,16 +543,36 @@ class Runner:
             str(model or self.model or session.get("model") or "")
         )
         is_router = session.get("parent_session_id") is None
+        # The harness lives on the row, so every launch path (REST, tool,
+        # retry, CLI) agrees without threading a new argument through callers.
+        # A root is always the full Hermes Router; mini is a worker-only mode.
+        harness = (
+            "hermes"
+            if is_router
+            else str(session.get("harness") or "hermes").strip().lower()
+        )
+        mini = harness == "mini"
         can_spawn = bool(is_router and self.router_toolset)
         eff_create_pr = self.can_create_pr if can_create_pr is None else bool(can_create_pr)
         eff_approve_pr = self.can_approve_pr if can_approve_pr is None else bool(can_approve_pr)
         needs_plugin_tools = can_spawn or eff_create_pr or eff_approve_pr
-        toolsets = self.toolsets
+        # mini-swe-agent style: bash is the only action tool. The plugin
+        # toolset is still added when the turn may create/approve a PR,
+        # because those are the worker's only way to publish.
+        toolsets = ("terminal",) if mini else self.toolsets
         if needs_plugin_tools and self.router_toolset and self.router_toolset not in toolsets:
             toolsets = toolsets + (self.router_toolset,)
         resume = (resume_session_id or "").strip() or None
         if resume:
             worker_prompt = prompt
+        elif mini:
+            worker_prompt = build_mini_prompt(
+                prompt,
+                repo=repo_path,
+                session_id=session_id,
+                can_create_pr=eff_create_pr,
+                can_approve_pr=eff_approve_pr,
+            )
         else:
             worker_prompt = build_prompt(
                 prompt,
@@ -531,6 +604,10 @@ class Runner:
         elif not str(session.get("reasoning_effort") or "").strip() and effort:
             fields["reasoning_effort"] = effort
         self.chat.update_session(session_id, **fields)
+        if mini and not resume:
+            # One line, on the first turn only, so the transcript explains why
+            # this worker has a terminal and nothing else.
+            self._add_event(session_id, "harness", "mini: bash-only worker")
         self._add_event(session_id, "queued", "waiting for a worker slot")
 
         thread = threading.Thread(
@@ -778,6 +855,7 @@ class Runner:
         buffer: list[str] = []
         buffer_chars = 0
         wrote_text = False
+        submitted = False
 
         def flush_text() -> None:
             """Turn the buffered ``text`` deltas into one assistant message."""
@@ -817,9 +895,23 @@ class Runner:
                     flush_text()
                     self._add_event(session_id, "tool", _tool_detail(event))
                 elif kind == "tool_result":
+                    detail = _tool_detail(event)
+                    # The mini harness marks completion with an echoed string.
+                    # It can land in the command args or in the output, so the
+                    # whole event is checked rather than just the summary.
+                    # Record it once; a worker that keeps going afterwards is
+                    # not trusted to have submitted twice.
+                    if not submitted and COMPLETION_MARKER in json.dumps(
+                        event, ensure_ascii=False, default=str
+                    ):
+                        submitted = True
+                        flush_text()
+                        self._add_event(
+                            session_id, "submitted", "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+                        )
                     if event.get("is_error"):
                         flush_text()
-                        self._add_event(session_id, "tool_error", _tool_detail(event))
+                        self._add_event(session_id, "tool_error", detail)
                 elif kind == "result":
                     result = event
                 elif kind == "error":

@@ -110,7 +110,7 @@ const root = {
 }
 const workerOne = {
   id: 'S-0002', title: 'Fix the parser', prompt: 'Fix the parser', status: 'running',
-  parent_session_id: root.id, town_slot: 0, messages: [], events: [],
+  parent_session_id: root.id, town_slot: 0, messages: [], events: [], harness: 'mini',
 }
 const workerTwo = {
   id: 'S-0003', title: 'Add a test', prompt: 'Add a test', status: 'review',
@@ -396,6 +396,8 @@ const workerDialog = render(h(plugin.TownChatDialog, {
 }))
 assert.match(workerDialog, /Worker house/)
 assert.match(workerDialog, /↗ Router/)
+// The harness badge is a worker-only signal: this fixture is a mini worker.
+assert.match(workerDialog, /aria-label="Worker harness: mini"/)
 const orphanDialog = render(h(plugin.TownChatDialog, {
   ...dialogBase,
   sessionId: workerOne.id,
@@ -442,6 +444,8 @@ assert.match(settingsPanel, /Default thinking/)
 assert.match(settingsPanel, /Extra high/)
 assert.match(settingsPanel, /Ultra/)
 assert.match(settingsPanel, /Model presets/)
+assert.match(settingsPanel, /Worker harness/)
+assert.match(settingsPanel, /mini-swe-agent style \(bash-only\)/)
 assert.match(settingsPanel, /Max parallel workers/)
 assert.match(settingsPanel, /Isolate workers in git worktrees/)
 assert.match(settingsPanel, /Allow workers to create GitHub PRs/)

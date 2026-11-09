@@ -52,6 +52,7 @@ def test_defaults_are_complete(home):
     assert settings["worker_model"] == ""
     assert settings["worker_provider"] == ""
     assert settings["worker_reasoning_effort"] == ""
+    assert settings["worker_harness"] == "mini"
 
 
 def test_worker_model_env_overrides_are_normalised(home, monkeypatch):
@@ -71,6 +72,29 @@ def test_worker_reasoning_effort_degrades_to_inherit(home):
     # A hand-edited unknown level is "inherit", not a fatal settings load.
     write_config(home, {"worker_reasoning_effort": "infinite"})
     assert sa_settings.load_settings()["worker_reasoning_effort"] == ""
+
+
+def test_worker_harness_defaults_to_mini_and_env_normalises(home, monkeypatch):
+    assert sa_settings.load_settings()["worker_harness"] == "mini"
+    monkeypatch.setenv("SUPERAGENT_WORKER_HARNESS", " HERMES ")
+    assert sa_settings.load_settings()["worker_harness"] == "hermes"
+
+
+def test_unknown_worker_harness_degrades_to_mini(home):
+    # A hand-edited file (or a stale env value) must not take settings down.
+    write_config(home, {"worker_harness": "bash"})
+    assert sa_settings.load_settings()["worker_harness"] == "mini"
+
+
+def test_normalize_harness_is_lenient_but_strict_rejects_unknown():
+    assert sa_settings.normalize_harness(" MINI ") == "mini"
+    assert sa_settings.normalize_harness("hermes") == "hermes"
+    assert sa_settings.normalize_harness("") == "mini"
+    assert sa_settings.normalize_harness("bash") == "mini"
+    with pytest.raises(ValueError, match="worker_harness"):
+        sa_settings.normalize_harness("bash", strict=True)
+    with pytest.raises(ValueError, match="worker_harness"):
+        sa_settings.normalize_harness("", strict=True)
 
 
 def test_pr_and_worktree_env_overrides(home, monkeypatch):

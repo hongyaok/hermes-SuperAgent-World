@@ -197,6 +197,10 @@ def superagent_spawn(args: dict, ctx: Any = None, **kwargs: Any) -> str:
             pr_number=pr_number,
             pr_url=pr_url,
             parent_session_id=parent_id,
+            # The town setting is the control; there is deliberately no
+            # per-spawn argument, so a router cannot silently opt a worker out
+            # of the cheap, predictable harness.
+            harness=sa_settings.normalize_harness(settings.get("worker_harness")),
         )
         child_id = str(child["id"])
         worker_repo = parent_repo

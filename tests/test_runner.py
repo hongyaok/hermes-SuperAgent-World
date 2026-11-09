@@ -153,6 +153,32 @@ def test_build_prompt_states_the_worker_rules():
     assert "Work only inside the repository" in prompt
 
 
+def test_build_mini_prompt_states_the_bash_only_rules():
+    prompt = sa_runner.build_mini_prompt(
+        "Fix the parser crash", repo="C:/repo", session_id="S-0001"
+    )
+    assert "Fix the parser crash" in prompt
+    assert "C:/repo" in prompt
+    assert "S-0001" in prompt
+    assert "exactly one terminal command" in prompt
+    assert "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" in prompt
+    assert "Do NOT commit, push" in prompt
+    assert "200 words" in prompt
+    assert "Work only inside the repository" in prompt
+
+
+def test_build_mini_prompt_allows_pr_create_only_when_enabled():
+    without = sa_runner.build_mini_prompt(
+        "fix it", repo="C:/repo", session_id="S-0001"
+    )
+    with_pr = sa_runner.build_mini_prompt(
+        "fix it", repo="C:/repo", session_id="S-0001", can_create_pr=True
+    )
+    assert "Do NOT commit, push" in without
+    assert "superagent_pr_create" not in without
+    assert "superagent_pr_create" in with_pr
+
+
 # -- command construction ------------------------------------------------
 
 
@@ -220,6 +246,106 @@ def test_router_gets_the_superagent_toolset_but_workers_do_not(chat, popen):
     assert child_argv[child_argv.index("-t") + 1] == "file,terminal"
     assert "Town mode" in root_argv[root_argv.index("-q") + 1]
     assert "Town mode" not in child_argv[child_argv.index("-q") + 1]
+
+
+def test_mini_worker_runs_bash_only_and_records_the_mode(chat, popen):
+    popen.install(
+        FakeProcess(
+            jsonl(
+                {
+                    "type": "tool_result",
+                    "name": "terminal",
+                    "output": "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n",
+                },
+                {"type": "result", "session_id": "mini-local"},
+            )
+        )
+    )
+    runner = make_runner(chat, router_toolset="superagent")
+    root = chat.create_session("router")
+    child = chat.create_session(
+        "fix the parser", parent_session_id=root["id"], harness="mini"
+    )
+
+    runner.launch_turn(child["id"], "fix the parser")
+    assert wait_until(lambda: status_of(chat, child["id"]) == "review")
+
+    argv = popen.calls[0]["argv"]
+    assert argv[argv.index("-t") + 1] == "terminal"
+    prompt = argv[argv.index("-q") + 1]
+    assert "bash-only" in prompt
+    assert "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" in prompt
+    assert "fix the parser" in prompt
+    assert runner.toolsets == ("file", "terminal")  # the runner default is unchanged
+
+    events = chat.get_events(child["id"])
+    harness_events = [event for event in events if event["kind"] == "harness"]
+    assert len(harness_events) == 1
+    assert "mini: bash-only worker" in harness_events[0]["detail"]
+    assert [event["kind"] for event in events].count("submitted") == 1
+
+
+def test_mini_worker_still_gets_the_plugin_toolset_when_it_may_open_a_pr(chat, popen):
+    popen.install(FakeProcess(jsonl({"type": "result", "session_id": "mini-pr"})))
+    runner = make_runner(chat, router_toolset="superagent", can_create_pr=True)
+    root = chat.create_session("router")
+    child = chat.create_session("publish", parent_session_id=root["id"], harness="mini")
+
+    runner.launch_turn(child["id"], "publish")
+    assert wait_until(lambda: status_of(chat, child["id"]) == "review")
+    argv = popen.calls[0]["argv"]
+    assert argv[argv.index("-t") + 1] == "terminal,superagent"
+    assert "superagent_pr_create" in argv[argv.index("-q") + 1]
+
+
+def test_mini_resume_turn_sends_the_raw_message(chat, popen):
+    popen.install(FakeProcess(jsonl({"type": "result", "session_id": "mini-2"})))
+    runner = make_runner(chat)
+    root = chat.create_session("router")
+    child = chat.create_session("first", parent_session_id=root["id"], harness="mini")
+
+    runner.launch_turn(child["id"], "what next?", resume_session_id="mini-2")
+    assert wait_until(lambda: status_of(chat, child["id"]) == "review")
+
+    argv = popen.calls[0]["argv"]
+    assert argv[argv.index("-q") + 1] == "what next?"
+    assert argv[argv.index("-t") + 1] == "terminal"
+    # A resume repeats the stored thread; the harness event was recorded once
+    # on the first turn and must not be appended again.
+    kinds = [event["kind"] for event in chat.get_events(child["id"])]
+    assert "harness" not in kinds
+
+
+def test_root_and_hermes_workers_keep_the_full_toolset(chat, popen):
+    popen.install(
+        FakeProcess(jsonl({"type": "result", "session_id": "root-local"})),
+        FakeProcess(jsonl({"type": "result", "session_id": "worker-local"})),
+    )
+    runner = make_runner(chat, max_workers=2, router_toolset="superagent")
+    # Even a root row that says mini must run the full Hermes Router: mini is
+    # a worker-only mode.
+    root = chat.create_session("root", harness="mini")
+    child = chat.create_session(
+        "worker", parent_session_id=root["id"], harness="hermes"
+    )
+
+    runner.launch_turn(root["id"], "root")
+    runner.launch_turn(child["id"], "worker")
+    assert wait_until(lambda: status_of(chat, root["id"]) == "review")
+    assert wait_until(lambda: status_of(chat, child["id"]) == "review")
+
+    def argv_for(session_id):
+        return next(
+            call["argv"] for call in popen.calls
+            if session_id in call["argv"][call["argv"].index("-q") + 1]
+        )
+
+    root_argv = argv_for(root["id"])
+    child_argv = argv_for(child["id"])
+    assert root_argv[root_argv.index("-t") + 1] == "file,terminal,superagent"
+    assert child_argv[child_argv.index("-t") + 1] == "file,terminal"
+    assert "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" not in child_argv[child_argv.index("-q") + 1]
+    assert "Town mode" in root_argv[root_argv.index("-q") + 1]
 
 
 def test_resume_turn_sends_the_raw_message(chat, popen):

@@ -355,6 +355,30 @@ def test_spawn_tool_resolves_worker_model_before_the_parent(spawn_env, sa):
     assert third["session"]["reasoning_effort"] == "high"
 
 
+def test_spawn_tool_stores_the_worker_harness_setting(spawn_env, sa):
+    store, runner = spawn_env
+    root = store.create_session("router")
+
+    # The default is the bash-only mini harness.
+    first = json.loads(
+        sa.sa_tools.superagent_spawn(
+            {"parent_session_id": root["id"], "prompt": "fix the parser"}, ctx=object()
+        )
+    )
+    assert first["ok"] is True
+    assert first["session"]["harness"] == "mini"
+
+    # Switching the town setting changes the stored row for the next worker.
+    sa.sa_settings.save_settings({"worker_harness": "hermes"})
+    second = json.loads(
+        sa.sa_tools.superagent_spawn(
+            {"parent_session_id": root["id"], "prompt": "full-toolset job"}, ctx=object()
+        )
+    )
+    assert second["session"]["harness"] == "hermes"
+    assert store.get_session(second["session"]["id"], message_limit=0)["harness"] == "hermes"
+
+
 def test_spawn_tool_rejects_a_bad_effort_without_creating_a_row(spawn_env, sa):
     store, runner = spawn_env
     root = store.create_session("router")

@@ -308,6 +308,7 @@ def render_settings(data: dict) -> str:
                 data.get("default_reasoning_effort") or "model default",
             ))
             lines.append(line("worker model", worker_model_label(data)))
+            lines.append(line("worker harness", data.get("worker_harness") or "mini"))
     lines.append(line("GitHub token", "set (value never shown)" if data.get("github_token_set") else "not set"))
     lines.append(line(
         "data-tier models",

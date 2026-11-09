@@ -1,7 +1,7 @@
 ---
 name: superagent-operator
 description: Operate Superagent chats, workers and GitHub watch.
-version: 0.6.2
+version: 0.6.3
 platforms: [linux, macos, windows]
 metadata:
   hermes:
@@ -134,6 +134,16 @@ hermes superagent stop S-0001
   `medium`, `high`, `xhigh`, `max`, `ultra`; `xhigh`/`max`/`ultra` are above
   high. The model picker edits the same
   level, and the Runner passes it as `--reasoning`.
+- **Worker harness** (`worker_harness`) is `mini` by default. `mini` is the
+  mini-swe-agent *architecture* adapted to Hermes, not the external package:
+  the worker turn launches with `-t terminal` only, the prompt requires exactly
+  one terminal command per step, a linear transcript, and a final
+  `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT` before a ≤200-word summary.
+  There is no new dependency, no `mini` binary and no separate model client;
+  `chat_max_turns` (`--max-turns`) remains the hard step cap. Set
+  `worker_harness: hermes` to give workers the full file + terminal toolset
+  again. A root/Router session always keeps the full Hermes toolset — mini is
+  worker-only. Env: `SUPERAGENT_WORKER_HARNESS`.
 - **Per-spawn overrides.** `superagent_spawn` accepts optional `model`,
   `provider` and `reasoning_effort`. Precedence per field is explicit argument
   > `worker_*` setting > the router session's value. Use it for a one-off
@@ -303,6 +313,7 @@ error, `2` usage.
 | `default_reasoning_effort` | `""` | New-chat thinking level (`none…ultra`); empty = model/CLI default. |
 | `worker_model` / `worker_provider` | `""` | Spawned-worker model/provider; empty = inherit the router session. |
 | `worker_reasoning_effort` | `""` | Spawned-worker thinking level (`none…ultra`); empty = inherit the router session. |
+| `worker_harness` | `mini` | Worker toolset: `mini` = mini-swe-agent style bash-only; `hermes` = full file + terminal. Roots always use `hermes`. |
 | `model_presets` | `[]` | Composer chips; empty = no chips. |
 | `max_workers` | `2` | Parallel chat/ticket workers. |
 | `chat_max_turns` | `120` | Agent turns per headless chat worker. |
