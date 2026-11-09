@@ -59,10 +59,10 @@ def test_expanded_town_assets_allowlist_and_dimensions():
         "bulletin-board.png",
     }
     assert expected_new <= set(town_assets.ASSETS)
-    assert len(town_assets.ASSETS) == 27
+    assert len(town_assets.ASSETS) == 30
 
     manifest = town_assets.manifest()
-    assert len(manifest) == 27
+    assert len(manifest) == 30
     for name in expected_new:
         raw, mime = town_assets.read(name)
         assert mime == "image/png"
