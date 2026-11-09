@@ -529,6 +529,170 @@ const homeActor = render(h(plugin.TownActor, {
 assert.match(homeActor, /left:330px/)
 assert.match(homeActor, /top:190px/, 'a north actor waits on its doorstep, not on a percentage offset')
 
+// -- actor routes from the drawn estate -------------------------------------
+// The walking graph is data and every route is a polyline over it. Routes that
+// skipped the lanes would still "work" in a unit test and look wrong on screen,
+// so the expected routes below are spelled out node by node.
+
+/** Liang-Barsky: does the segment a->b pass through the inside of `rect`?
+ *  The rect is inset a hair so a walk that grazes a paved edge is not a hit. */
+function segmentHitsRect(a, b, rect) {
+  const inset = 0.01
+  const left = rect.x + inset
+  const right = rect.x + rect.w - inset
+  const top = rect.y + inset
+  const bottom = rect.y + rect.h - inset
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  let t0 = 0
+  let t1 = 1
+  const edges = [[-dx, a.x - left], [dx, right - a.x], [-dy, a.y - top], [dy, bottom - a.y]]
+  for (const [p, q] of edges) {
+    if (p === 0) {
+      if (q < 0) return false
+      continue
+    }
+    const r = q / p
+    if (p < 0) {
+      if (r > t1) return false
+      if (r > t0) t0 = r
+    } else {
+      if (r < t0) return false
+      if (r < t1) t1 = r
+    }
+  }
+  return t1 > t0
+}
+
+const nodeIds = Object.keys(plugin.TOWN_NODES)
+assert.ok(nodeIds.length >= 25, 'the walking graph exports one coordinate per node')
+for (const id of nodeIds) {
+  const node = plugin.TOWN_NODES[id]
+  assert.ok(Number.isFinite(node.x) && Number.isFinite(node.y), `${id} has a numeric coordinate`)
+  assert.ok(node.x >= 0 && node.x <= plugin.TOWN_STAGE.width, `${id} stays inside the stage horizontally`)
+  assert.ok(node.y >= 0 && node.y <= plugin.TOWN_STAGE.height, `${id} stays inside the stage vertically`)
+}
+// A home node is the exact doorstep anchor the actor starts on, and a gate
+// node is the far end of the private drive the ground SVG already paints.
+const homeIds = plugin.TOWN_PLOTS.map((plot) => plot.id).concat('router')
+for (const plot of plugin.TOWN_PLOTS) {
+  assert.deepEqual(plugin.TOWN_NODES[plot.id],
+    { x: plot.left, y: plugin.TOWN_DOORSTEP_Y[plot.region] },
+    `${plot.id} home node is its doorstep anchor`)
+  assert.deepEqual(plugin.TOWN_NODES[`${plot.id}-gate`],
+    { x: plot.left, y: plugin.TOWN_GATE_Y[plot.region] },
+    `${plot.id} gate node is the end of its drive`)
+}
+for (const drive of plugin.TOWN_DRIVES) {
+  assert.deepEqual(plugin.TOWN_NODES[`${drive.id}-gate`], { x: drive.x, y: drive.gateY },
+    `the ${drive.id} gate stands on its drawn drive`)
+}
+assert.deepEqual(plugin.TOWN_NODES.router, { x: plugin.TOWN_ROUTER.left, y: plugin.TOWN_ROUTER_DOOR_Y })
+// Plaza nodes ride the authored fountain corridors, so the walked detour is
+// also the paved detour.
+const linkWest = plugin.TOWN_PLAZA_BANDS.find((band) => band.id === 'fountain-link-west')
+const linkEast = plugin.TOWN_PLAZA_BANDS.find((band) => band.id === 'fountain-link-east')
+assert.ok(plugin.TOWN_NODES['fountain-west'].x >= linkWest.x
+  && plugin.TOWN_NODES['fountain-west'].x <= linkWest.x + linkWest.w,
+  'the west fountain node stands on the west corridor')
+assert.ok(plugin.TOWN_NODES['fountain-east'].x >= linkEast.x
+  && plugin.TOWN_NODES['fountain-east'].x <= linkEast.x + linkEast.w,
+  'the east fountain node stands on the east corridor')
+assert.equal(plugin.TOWN_NODES['fountain-west'].y, plugin.TOWN_FOUNTAIN_RECT.y + plugin.TOWN_FOUNTAIN_RECT.h)
+assert.equal(plugin.TOWN_NODES['fountain-east'].y, plugin.TOWN_FOUNTAIN_RECT.y + plugin.TOWN_FOUNTAIN_RECT.h)
+
+// Every place can reach the hub, first and last ids are honest, every hop is a
+// real node, and no route repeats a node back to back.
+const civicIds = ['router', 'noticeboard', 'well', 'fountain-west', 'fountain-east',
+  'bench-west', 'bench-east', 'plaza-west', 'plaza-east']
+assert.deepEqual(plugin.townRoute('plaza-hub', 'plaza-hub'), ['plaza-hub'], 'the identity route is one node')
+assert.deepEqual(plugin.townRoute('nowhere', 'plaza-hub'), [], 'an unknown node has no route instead of throwing')
+for (const id of homeIds.concat(civicIds)) {
+  const route = plugin.townRoute(id, 'plaza-hub')
+  assert.ok(route.length >= 1, `${id} has a route to the plaza hub`)
+  assert.equal(route[0], id, `${id} route starts at itself`)
+  assert.equal(route[route.length - 1], 'plaza-hub', `${id} route ends at the hub`)
+  for (const nodeId of route) assert.ok(plugin.TOWN_NODES[nodeId], `${id} route uses a real node: ${nodeId}`)
+  for (let i = 1; i < route.length; i += 1) {
+    assert.notEqual(route[i], route[i - 1], `${id} route repeats ${route[i]}`)
+  }
+  assert.ok(plugin.TOWN_ROUTES_TO_HUB[id], `${id} is in the routes-to-hub table`)
+}
+// Home routes leave by their own private drive and reach the hub. This is the
+// assertion that fails loudly if someone "optimises" a route through the grass.
+for (const plot of plugin.TOWN_PLOTS) {
+  const route = plugin.townRoute(plot.id, 'plaza-hub')
+  assert.ok(route.includes(`${plot.id}-gate`), `${plot.id} leaves by its own gate`)
+  assert.ok(route.includes('plaza-hub'), `${plot.id} reaches the plaza hub`)
+}
+// Two concrete routes, north and middle, in full.
+assert.deepEqual(plugin.townRoute('north-1', 'plaza-hub'),
+  ['north-1', 'north-1-gate', 'corner-north-west', 'lane-west-avenue', 'plaza-hub'])
+assert.deepEqual(plugin.townRoute('west-1', 'plaza-hub'),
+  ['west-1', 'west-1-gate', 'plaza-hub'])
+assert.deepEqual(plugin.townRoute('south-4', 'plaza-hub'),
+  ['south-4', 'south-4-gate', 'corner-south-east', 'lane-east-avenue', 'plaza-hub'])
+// No walked segment wades through the pond or the fountain, between any two
+// places a character can actually be sent.
+for (const from of homeIds) {
+  for (const to of civicIds) {
+    const route = plugin.townRoute(from, to)
+    assert.ok(route.length >= (from === to ? 1 : 2), `${from} can reach ${to}`)
+    assert.equal(route[0], from)
+    assert.equal(route[route.length - 1], to)
+    for (let i = 1; i < route.length; i += 1) {
+      assert.notEqual(route[i], route[i - 1], `${from}->${to} repeats ${route[i]}`)
+      const a = plugin.TOWN_NODES[route[i - 1]]
+      const b = plugin.TOWN_NODES[route[i]]
+      assert.equal(segmentHitsRect(a, b, plugin.TOWN_POND_RECT), false,
+        `${from}->${to} wades through the pond on the way to ${route[i]}`)
+      assert.equal(segmentHitsRect(a, b, plugin.TOWN_FOUNTAIN_RECT), false,
+        `${from}->${to} walks through the fountain on the way to ${route[i]}`)
+    }
+  }
+}
+for (const from of civicIds) {
+  for (const to of civicIds) {
+    const route = plugin.townRoute(from, to)
+    for (let i = 1; i < route.length; i += 1) {
+      const a = plugin.TOWN_NODES[route[i - 1]]
+      const b = plugin.TOWN_NODES[route[i]]
+      assert.equal(segmentHitsRect(a, b, plugin.TOWN_FOUNTAIN_RECT), false,
+        `${from}->${to} walks through the fountain on the way to ${route[i]}`)
+    }
+  }
+}
+// Fountain and bench trips go around the basin, not across it.
+assert.ok(plugin.townRoute('plaza-hub', 'bench-west').includes('plaza-west'))
+assert.ok(plugin.townRoute('plaza-hub', 'bench-east').includes('plaza-east'))
+assert.deepEqual(plugin.townRoute('fountain-west', 'fountain-east'),
+  ['fountain-west', 'plaza-west', 'plaza-hub', 'plaza-east', 'fountain-east'])
+
+// Destination choice is deterministic and never a trip to where the actor
+// already stands: a refreshed town object cannot reshuffle a walk.
+const standing = { nodeId: 'plaza-hub', homeId: 'north-1', stepCount: 1 }
+assert.equal(plugin.townNextDestination(standing, 'failed', 3), 'north-1')
+assert.equal(plugin.townNextDestination(standing, 'queued', 7), 'noticeboard')
+assert.equal(
+  plugin.townNextDestination({ ...standing, nodeId: 'noticeboard' }, 'queued', 7),
+  'plaza-hub',
+  'already at the noticeboard: step off instead of standing still',
+)
+assert.equal(
+  plugin.townNextDestination(standing, 'running', 42),
+  plugin.townNextDestination({ ...standing }, 'running', 42),
+  'the same actor and hash pick the same destination',
+)
+for (const status of ['running', 'review', 'idle', 'queued', 'failed']) {
+  for (let step = 0; step < 12; step += 1) {
+    const destination = plugin.townNextDestination(
+      { nodeId: 'plaza-hub', homeId: 'north-1', stepCount: step }, status, step * 37,
+    )
+    assert.ok(plugin.TOWN_NODES[destination], `${status} destination ${destination} is a real node`)
+    assert.notEqual(destination, 'plaza-hub', `${status} trip ${step} is not a trip to itself`)
+  }
+}
+
 // -- twelve authored parcels, occupied or deliberately vacant --------------
 // The fixture has workers in slots 0 and 1, so exactly ten lots are empty.
 // Slot 0 is an ordinary parcel: the Router is a civic building, not a plot

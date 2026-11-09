@@ -208,6 +208,95 @@ const TOWN_PLAZA_BANDS = [
   { id: 'south-court', x: 536, y: 570, w: 128, h: 70 },
 ]
 
+// -- walking graph ---------------------------------------------------------
+// One coordinate per node, in stage pixels. Actor routes are polylines over
+// these ids, so the walked line and the drawn estate share one source of
+// truth: every gate node is the far end of a TOWN_DRIVES path, every corner is
+// a loop corner, and the plaza nodes sit on the authored plaza bands.
+const TOWN_ROUTER_DOOR_Y = 420
+// Centre line of each fountain corridor (fountain-link-west/east). Walking
+// around the fountain keeps these x values, so no route can cross it.
+const TOWN_PLAZA_WEST_X = 543
+const TOWN_PLAZA_EAST_X = 657
+const TOWN_FOUNTAIN_SOUTH_Y = TOWN_FOUNTAIN_RECT.y + TOWN_FOUNTAIN_RECT.h
+
+const TOWN_NODES = {
+  // Civic landmarks: the doorstep or forecourt point an actor stands on.
+  'plaza-hub': { x: 600, y: TOWN_AVENUE_Y },
+  router: { x: TOWN_ROUTER.left, y: TOWN_ROUTER_DOOR_Y },
+  noticeboard: { x: TOWN_BULLETIN_RECT.x + TOWN_BULLETIN_RECT.w / 2, y: TOWN_BULLETIN_RECT.y - 15 },
+  well: { x: TOWN_WELL_RECT.x + TOWN_WELL_RECT.w / 2, y: TOWN_WELL_RECT.y - 15 },
+  // The plaza junctions: the hub band's two ends, and the fountain corridor
+  // mouths. A bench or fountain trip passes through these, never the fountain.
+  'plaza-west': { x: TOWN_PLAZA_WEST_X, y: TOWN_AVENUE_Y },
+  'plaza-east': { x: TOWN_PLAZA_EAST_X, y: TOWN_AVENUE_Y },
+  'fountain-west': { x: TOWN_PLAZA_WEST_X, y: TOWN_FOUNTAIN_SOUTH_Y },
+  'fountain-east': { x: TOWN_PLAZA_EAST_X, y: TOWN_FOUNTAIN_SOUTH_Y },
+  // South court, in front of the two benches (bench boxes are 580..610).
+  'bench-west': { x: 560, y: 600 },
+  'bench-east': { x: 640, y: 600 },
+  // The estate loop's four corners, where a side lane meets a cross lane.
+  'corner-north-west': { x: TOWN_LANE_WEST_X, y: TOWN_LANE_NORTH_Y },
+  'corner-north-east': { x: TOWN_LANE_EAST_X, y: TOWN_LANE_NORTH_Y },
+  'corner-south-west': { x: TOWN_LANE_WEST_X, y: TOWN_LANE_SOUTH_Y },
+  'corner-south-east': { x: TOWN_LANE_EAST_X, y: TOWN_LANE_SOUTH_Y },
+  // Where each side lane crosses Main Avenue.
+  'lane-west-avenue': { x: TOWN_LANE_WEST_X, y: TOWN_AVENUE_Y },
+  'lane-east-avenue': { x: TOWN_LANE_EAST_X, y: TOWN_AVENUE_Y },
+}
+for (const plot of TOWN_PLOTS) {
+  // Home is the doorstep the actor waits on; the gate is the far end of the
+  // private drive the ground SVG already paints for this parcel.
+  TOWN_NODES[plot.id] = { x: plot.left, y: TOWN_DOORSTEP_Y[plot.region] }
+  TOWN_NODES[`${plot.id}-gate`] = { x: plot.left, y: TOWN_GATE_Y[plot.region] }
+}
+
+// One polyline per place, always ending at the plaza hub. A trip is "out from
+// here, then back down the other place's path in reverse"; this is a hub
+// model, not a pathfinding engine, and it is small enough to read.
+const TOWN_ROUTES_TO_HUB = {
+  'plaza-hub': ['plaza-hub'],
+  router: ['router', 'plaza-hub'],
+  noticeboard: ['noticeboard', 'plaza-hub'],
+  well: ['well', 'plaza-hub'],
+  'plaza-west': ['plaza-west', 'plaza-hub'],
+  'plaza-east': ['plaza-east', 'plaza-hub'],
+  // Around the fountain: down its west/east corridor to the south court.
+  'fountain-west': ['fountain-west', 'plaza-west', 'plaza-hub'],
+  'fountain-east': ['fountain-east', 'plaza-east', 'plaza-hub'],
+  'bench-west': ['bench-west', 'fountain-west', 'plaza-west', 'plaza-hub'],
+  'bench-east': ['bench-east', 'fountain-east', 'plaza-east', 'plaza-hub'],
+}
+for (const plot of TOWN_PLOTS) {
+  const gate = `${plot.id}-gate`
+  const west = plot.left < 600
+  if (plot.region === 'middle') {
+    TOWN_ROUTES_TO_HUB[plot.id] = [plot.id, gate, 'plaza-hub']
+  } else {
+    const corner = `${plot.region === 'north' ? 'corner-north' : 'corner-south'}-${west ? 'west' : 'east'}`
+    TOWN_ROUTES_TO_HUB[plot.id] = [
+      plot.id, gate, corner, west ? 'lane-west-avenue' : 'lane-east-avenue', 'plaza-hub',
+    ]
+  }
+}
+
+// Places an idle or running character may wander to. Junction nodes are
+// deliberately absent: you pass through a junction, you do not visit it.
+const TOWN_CIVIC_DESTINATIONS = [
+  'noticeboard', 'well', 'bench-west', 'bench-east', 'fountain-west', 'fountain-east',
+]
+
+/** Route between two nodes: our path to the hub plus the destination's path
+ *  reversed, with the shared hub node written once. Unknown ids return an
+ *  empty route instead of throwing, so a bad destination parks the actor. */
+function townRoute(fromId, toId) {
+  if (fromId === toId) return [fromId]
+  const from = TOWN_ROUTES_TO_HUB[fromId]
+  const to = TOWN_ROUTES_TO_HUB[toId]
+  if (!from || !to) return []
+  return from.concat(to.slice(0, -1).reverse())
+}
+
 // Pond bank: an irregular closed curve that stays inside TOWN_POND_RECT
 // (70,510,140,90), so it is clear of the west lane (x=240) and every parcel.
 const TOWN_POND_PATH = [
@@ -4980,29 +5069,12 @@ function TownSpeechBubble({ text, status, visible = true }) {
   })
 }
 
-// Landmarks in stage pixels, converted 1:1 from the old percentage map (x% of
-// 1200, y% of 700) so the walking pattern stays put until the estate routes
-// replace it. Keeping them in the same unit as the actors is what stops a
-// stroll from teleporting to "50% of whatever the pane happens to be".
-const TOWN_WAYPOINTS = [
-  { left: 600, top: 448 }, // Central Plaza North
-  { left: 600, top: 525 }, // Central Fountain
-  { left: 444, top: 441 }, // Noticeboard / West Plaza
-  { left: 756, top: 441 }, // Wishing Well / East Plaza
-  { left: 264, top: 364 }, // West Avenue Crossroad
-  { left: 936, top: 364 }, // East Avenue Crossroad
-  { left: 312, top: 532 }, // Southwest Stream Bridge
-  { left: 888, top: 518 }, // Southeast Park Bench
-  { left: 456, top: 238 }, // North Promenade West
-  { left: 744, top: 238 }, // North Promenade East
-]
-
 // Where each row of parcels opens onto the estate is authored once in
 // TOWN_DOORSTEP_Y at the top of the file; an actor waits on its own doorstep,
 // so it never stands in a doorway.
 
 function actorHomePosition(session, isRouter) {
-  if (isRouter) return { left: TOWN_ROUTER.left, top: 420 } // Router door
+  if (isRouter) return { left: TOWN_ROUTER.left, top: TOWN_ROUTER_DOOR_Y } // Router door
   const pos = townHousePosition(session.town_slot)
   const doorstep = TOWN_DOORSTEP_Y[pos.region]
   return {
@@ -5011,14 +5083,240 @@ function actorHomePosition(session, isRouter) {
   }
 }
 
-// The old map moved 0.8-1.35 percent of the pane per 120 ms tick. On the
-// 1200 px stage one percent is 12 px, so the same pacing is 9.6-16.2 px; one
-// shared conversion keeps the town feeling the width it used to be.
-const TOWN_TICK_PX = 12
-const TOWN_TICK_PY = TOWN_STAGE.height / 100
-const TOWN_ARRIVE_PX = TOWN_TICK_PX * 0.9
-const TOWN_GREET_NEAR_PX = TOWN_TICK_PX * 1.5
-const TOWN_GREET_FAR_PX = TOWN_TICK_PX * 8.5
+// Walking speeds in stage px per second. The old simulation moved 0.8-1.35
+// percent of the pane per 120 ms tick, which on the 1200 px stage is 80 / 105 /
+// 135 px per second. Writing the pace per second means any clock (the 120 ms
+// tick for now, rAF next) produces the same walk.
+const TOWN_WALK_PX_PER_SEC = 80
+const TOWN_REVIEW_PX_PER_SEC = 105
+const TOWN_RUN_PX_PER_SEC = 135
+// One old tick, in seconds. Speech and pause durations were tuned in ticks, so
+// they are authored in ticks and converted once, here.
+const TOWN_TICK_SECONDS = 0.12
+// Two characters greet at about one and a half body widths and stop noticing
+// each other past eight.
+const TOWN_GREET_NEAR_PX = 18
+const TOWN_GREET_FAR_PX = 102
+// A frame that lands inside this many px of a waypoint snaps onto it exactly.
+// It is a floating-point guard, not an arrival radius: the old 0.9 px snap is
+// gone, and a slow walker keeps its last fraction of a pixel for the next frame.
+const TOWN_EPSILON_PX = 0.0001
+// A stalled or hidden tab reports a huge elapsed time. Capping one frame keeps
+// the town from teleporting when the pane comes back.
+const TOWN_MAX_FRAME_SECONDS = 0.1
+// Only a horizontal segment wider than this changes facing, so a vertical path
+// cannot oscillate around dx = 0 and flip the sprite every frame.
+const TOWN_FACING_DX_PX = 1
+
+function townActorSpeed(status) {
+  if (status === 'running') return TOWN_RUN_PX_PER_SEC
+  if (status === 'review') return TOWN_REVIEW_PX_PER_SEC
+  return TOWN_WALK_PX_PER_SEC
+}
+
+/** How long an actor stands at a waypoint before the next trip, in seconds.
+ *  Same intent as the old tick counts: failures sulk, queues wait, running
+ *  workers hop from errand to errand, idle characters stroll. */
+function townTripPause(status, h) {
+  if (status === 'failed' || status === 'cancelled') return 25 * TOWN_TICK_SECONDS
+  if (status === 'queued' || status === 'observed') return 18 * TOWN_TICK_SECONDS
+  if (status === 'review') return 22 * TOWN_TICK_SECONDS
+  if (status === 'running') return (12 + (h % 10)) * TOWN_TICK_SECONDS
+  return (18 + (h % 16)) * TOWN_TICK_SECONDS
+}
+
+/** Where an actor heads next. Pure and deterministic: the callers pass the
+ *  same hash a poll would pass again, so refreshing the town object can never
+ *  send a character somewhere new halfway through a walk. */
+function townNextDestination(actor, status, h) {
+  const homeId = actor.homeId || 'plaza-hub'
+  const civic = TOWN_CIVIC_DESTINATIONS[h % TOWN_CIVIC_DESTINATIONS.length]
+  let destination
+  if (status === 'failed' || status === 'cancelled') {
+    destination = homeId
+  } else if (status === 'queued' || status === 'observed') {
+    // Wait near the noticeboard, where the Router pins work.
+    destination = 'noticeboard'
+  } else if (status === 'review') {
+    // Celebrate by the fountain, then walk the celebration home.
+    destination = (actor.stepCount % 2) === 0
+      ? (h % 2 === 0 ? 'fountain-west' : 'fountain-east')
+      : homeId
+  } else if (status === 'running') {
+    // Commute: home, a civic errand, then Router Hall to report back.
+    const leg = actor.stepCount % 3
+    destination = leg === 0 ? homeId : (leg === 1 ? civic : 'router')
+  } else {
+    // Idle / Router: a leisurely circuit of the estate.
+    destination = (actor.stepCount % 3) === 0 ? homeId : civic
+  }
+  // A trip to where you already stand has no path; step off the node instead.
+  if (destination === actor.nodeId) {
+    destination = actor.nodeId === 'plaza-hub' ? homeId : 'plaza-hub'
+  }
+  return destination
+}
+
+/** One frame of walking, pure: returns the patch to apply, never mutates.
+ *  A frame crosses at most one waypoint — it lands exactly on it and the next
+ *  frame continues along the following segment — so a slow frame cannot cut a
+ *  corner and a fast one cannot overshoot. A completed route keeps its exact
+ *  final coordinate. */
+function townWalkFrame(actor, dtSeconds) {
+  const dt = Math.min(TOWN_MAX_FRAME_SECONDS, Math.max(0, Number(dtSeconds) || 0))
+  const patch = {
+    left: Number(actor && actor.left) || 0,
+    top: Number(actor && actor.top) || 0,
+    pathIndex: Math.max(0, Math.trunc(Number(actor && actor.pathIndex) || 0)),
+    facingLeft: !!(actor && actor.facingLeft),
+    arrived: false,
+    moved: false,
+  }
+  const path = actor && Array.isArray(actor.path) ? actor.path : null
+  if (!path || patch.pathIndex >= path.length) {
+    patch.arrived = true
+    return patch
+  }
+  const target = path[patch.pathIndex]
+  if (!target) {
+    patch.arrived = true
+    return patch
+  }
+  const dx = target.x - patch.left
+  const dy = target.y - patch.top
+  const distance = Math.hypot(dx, dy)
+  const step = (Number(actor && actor.speed) || 0) * dt
+  if (distance <= TOWN_EPSILON_PX || step >= distance - TOWN_EPSILON_PX) {
+    // Land on the node exactly, never a fraction past it, and queue the next
+    // segment for the next frame.
+    patch.left = target.x
+    patch.top = target.y
+    patch.pathIndex += 1
+    patch.moved = true
+    patch.arrived = patch.pathIndex >= path.length
+  } else if (step > 0) {
+    patch.left = patch.left + (dx / distance) * step
+    patch.top = patch.top + (dy / distance) * step
+    patch.moved = true
+  }
+  // Facing comes from the whole segment, not this frame's dx, so a vertical
+  // stretch keeps the last horizontal direction instead of flickering.
+  if (Math.abs(dx) > TOWN_FACING_DX_PX) patch.facingLeft = dx < 0
+  return patch
+}
+
+/** One simulation frame for every actor: walk the stored polyline, count down
+ *  the pause, and choose the next trip only once the previous one is complete.
+ *  Mutates the caller's map and reads the latest sessions, so a poll may change
+ *  speed and speech but never a route that is already in progress. */
+function advanceTownSimulation(map, members, dtSeconds) {
+  if (!map || !Array.isArray(members)) return
+  const dt = Math.min(TOWN_MAX_FRAME_SECONDS, Math.max(0, Number(dtSeconds) || 0))
+  for (const member of members) {
+    const session = member && member.session
+    if (!session || session.id == null) continue
+    const actor = map[session.id]
+    if (!actor) continue
+    const status = session.status
+    const hActor = townHash(`${session.id}:${actor.stepCount || 0}`)
+
+    if (actor.socialCooldown > 0) actor.socialCooldown = Math.max(0, actor.socialCooldown - dt)
+    if (actor.speechLeft > 0) {
+      actor.speechLeft -= dt
+      if (actor.speechLeft <= 0) {
+        actor.speechLeft = 0
+        actor.socialText = ''
+        actor.speechCooldown = (status === 'running' || status === 'queued')
+          ? (55 + (hActor % 35)) * TOWN_TICK_SECONDS
+          : (95 + (hActor % 65)) * TOWN_TICK_SECONDS
+      }
+    } else {
+      actor.speechCooldown = Math.max(0, actor.speechCooldown - dt)
+      if (actor.speechCooldown <= 0) {
+        if (status === 'running' || status === 'queued') {
+          actor.speechLeft = 18 * TOWN_TICK_SECONDS
+          actor.speechCooldown = (60 + (hActor % 40)) * TOWN_TICK_SECONDS
+        } else if (status === 'review') {
+          actor.speechLeft = 14 * TOWN_TICK_SECONDS
+          actor.speechCooldown = (120 + (hActor % 80)) * TOWN_TICK_SECONDS
+        } else {
+          actor.speechLeft = 0
+          actor.speechCooldown = 100 * TOWN_TICK_SECONDS
+        }
+      }
+    }
+
+    // Walk first: a trip in progress always gets its frame, whatever the
+    // status now says. Speed follows the status, direction follows the path.
+    actor.speed = townActorSpeed(status)
+    const complete = !Array.isArray(actor.path) || actor.pathIndex >= actor.path.length
+    if (!complete) {
+      const frame = townWalkFrame(actor, dt)
+      actor.left = frame.left
+      actor.top = frame.top
+      actor.pathIndex = frame.pathIndex
+      actor.facingLeft = frame.facingLeft
+      if (frame.arrived) {
+        actor.nodeId = actor.destinationId || actor.nodeId
+        actor.pauseLeft = townTripPause(status, hActor)
+        actor.animState = actor.socialText ? 'waving' : defaultAnimForStatus(status)
+      } else if (frame.moved) {
+        actor.animState = actor.facingLeft ? 'running-left' : 'running-right'
+      }
+    }
+
+    // Waiting at a waypoint — or at the doorstep on the very first frame:
+    // count the pause in real seconds, then pick the next destination from the
+    // node we are actually standing on.
+    const routeDone = !actor.path || actor.pathIndex >= actor.path.length
+    if (routeDone) {
+      if (actor.pauseLeft > 0) {
+        actor.pauseLeft = Math.max(0, actor.pauseLeft - dt)
+        actor.animState = actor.socialText ? 'waving' : defaultAnimForStatus(status)
+        continue
+      }
+      actor.stepCount = (actor.stepCount || 0) + 1
+      actor.socialText = ''
+      const h = townHash(`${session.id}:${actor.stepCount}`)
+      const destinationId = townNextDestination(actor, status, h)
+      const route = townRoute(actor.nodeId, destinationId)
+        .map((id) => TOWN_NODES[id])
+        .filter(Boolean)
+      if (route.length > 1) {
+        actor.path = route
+        actor.pathIndex = 1
+        actor.destinationId = destinationId
+      }
+    }
+  }
+
+  // Occasional friendly banter when two characters pass each other. Same
+  // cooldowns as before, now in seconds, and the same priority: a session's own
+  // event bubble already won because socialText only fills the empty case.
+  const ids = members.map((member) => member && member.session && member.session.id).filter((id) => id != null)
+  for (let i = 0; i < ids.length; i += 1) {
+    for (let j = i + 1; j < ids.length; j += 1) {
+      const a = map[ids[i]]
+      const b = map[ids[j]]
+      if (!a || !b) continue
+      if ((a.speechLeft || 0) > 0 || (b.speechLeft || 0) > 0) continue
+      if ((a.socialCooldown || 0) > 0 || (b.socialCooldown || 0) > 0) continue
+      const distance = Math.hypot(a.left - b.left, a.top - b.top)
+      if (distance > TOWN_GREET_NEAR_PX && distance < TOWN_GREET_FAR_PX && !a.socialText && !b.socialText) {
+        const pick = TOWN_BANTER[(townHash(ids[i]) + (a.stepCount || 0)) % TOWN_BANTER.length]
+        a.socialText = pick
+        a.speechLeft = 15 * TOWN_TICK_SECONDS
+        a.speechCooldown = 90 * TOWN_TICK_SECONDS
+        a.socialCooldown = 140 * TOWN_TICK_SECONDS
+        b.socialText = '👋'
+        b.speechLeft = 12 * TOWN_TICK_SECONDS
+        b.speechCooldown = 90 * TOWN_TICK_SECONDS
+        b.socialCooldown = 140 * TOWN_TICK_SECONDS
+        break
+      }
+    }
+  }
+}
 
 function defaultAnimForStatus(status) {
   if (status === 'running') return 'running'
@@ -5047,6 +5345,7 @@ function useTownSimulation(town, buildingIds, reducedMotion) {
   for (const { session, isRouter } of members) {
     seenIds.add(session.id)
     const home = actorHomePosition(session, isRouter)
+    const homeId = isRouter ? 'router' : townHousePosition(session.town_slot).id
     const isBuilding = !!(buildingIds && buildingIds[session.id])
     const events = Array.isArray(session.recent_events) ? session.recent_events.filter(Boolean) : []
     const latest = events.length ? events[0] : null
@@ -5054,39 +5353,64 @@ function useTownSimulation(town, buildingIds, reducedMotion) {
     const existing = stateMap[session.id]
     if (!existing) {
       const h = townHash(session.id)
-      const startLeft = isBuilding && !reducedMotion ? TOWN_ROUTER.left : home.left
-      const startTop = isBuilding && !reducedMotion ? 399 : home.top
-      const startSpeaking = session.status === 'running' || session.status === 'queued' || isBuilding
-      stateMap[session.id] = {
-        left: startLeft,
-        top: startTop,
-        targetLeft: home.left,
-        targetTop: home.top,
-        animState: isBuilding && !reducedMotion ? 'jumping' : defaultAnimForStatus(session.status),
+      // A brand-new house: its worker walks from Router Hall to the doorstep
+      // along the estate paths, instead of starting on the grass.
+      const startBuilding = isBuilding && !reducedMotion
+      const startNode = startBuilding ? 'router' : homeId
+      const start = TOWN_NODES[startNode]
+      const startSpeaking = session.status === 'running' || session.status === 'queued' || startBuilding
+      const actor = {
+        left: start ? start.x : home.left,
+        top: start ? start.y : home.top,
+        path: null,
+        pathIndex: 0,
+        destinationId: null,
+        nodeId: startNode,
+        homeId,
+        speed: townActorSpeed(session.status),
+        animState: startBuilding ? 'jumping' : defaultAnimForStatus(session.status),
         facingLeft: home.left < TOWN_ROUTER.left,
         socialText: '',
-        speechTicks: startSpeaking ? 20 : 0,
-        speechCooldown: startSpeaking ? (55 + (h % 35)) : (50 + (h % 60)),
-        socialCooldown: 30 + (h % 50),
+        speechLeft: startSpeaking ? 20 * TOWN_TICK_SECONDS : 0,
+        speechCooldown: startSpeaking
+          ? (55 + (h % 35)) * TOWN_TICK_SECONDS
+          : (50 + (h % 60)) * TOWN_TICK_SECONDS,
+        socialCooldown: (30 + (h % 50)) * TOWN_TICK_SECONDS,
         lastStatus: session.status,
         lastEventKey: currentEventKey,
-        pauseTicks: (h % 14) + 4,
+        pauseLeft: ((h % 14) + 4) * TOWN_TICK_SECONDS,
         stepCount: h % 7,
       }
+      if (startBuilding) {
+        const route = townRoute('router', homeId).map((id) => TOWN_NODES[id]).filter(Boolean)
+        if (route.length > 1) {
+          actor.path = route
+          actor.pathIndex = 1
+          actor.destinationId = homeId
+        }
+      }
+      stateMap[session.id] = actor
     } else {
-      existing.homeLeft = home.left
-      existing.homeTop = home.top
+      // The parcel can never move, but a legacy slot may clamp differently
+      // after a reload; keep the route target in sync with the house.
+      existing.homeId = homeId
       if (session.status !== existing.lastStatus || currentEventKey !== existing.lastEventKey) {
         existing.lastStatus = session.status
         existing.lastEventKey = currentEventKey
         if (currentEventKey || session.status === 'running' || session.status === 'review' || session.status === 'failed') {
-          existing.speechTicks = 24
-          existing.speechCooldown = 60
+          // A real event outranks banter: re-arm the bubble for about three
+          // seconds, exactly like the old 24-tick notice.
+          existing.speechLeft = 24 * TOWN_TICK_SECONDS
+          existing.speechCooldown = 60 * TOWN_TICK_SECONDS
         }
       }
       if (reducedMotion) {
         existing.left = home.left
         existing.top = home.top
+        existing.path = null
+        existing.pathIndex = 0
+        existing.destinationId = null
+        existing.nodeId = homeId
         existing.animState = defaultAnimForStatus(session.status)
         existing.socialText = ''
       }
@@ -5099,131 +5423,7 @@ function useTownSimulation(town, buildingIds, reducedMotion) {
   useEffect(() => {
     if (reducedMotion || !members.length || typeof window === 'undefined') return undefined
     const timer = window.setInterval(() => {
-      const map = simRef.current
-      const ids = members.map((m) => m.session.id)
-      for (const { session, isRouter } of members) {
-        const actor = map[session.id]
-        if (!actor) continue
-        const home = actorHomePosition(session, isRouter)
-        const status = session.status
-        const hActor = townHash(`${session.id}:${actor.stepCount || 0}`)
-
-        if (actor.socialCooldown > 0) actor.socialCooldown -= 1
-        if (actor.speechTicks > 0) {
-          actor.speechTicks -= 1
-          if (actor.speechTicks === 0) {
-            actor.socialText = ''
-            actor.speechCooldown = (status === 'running' || status === 'queued')
-              ? 55 + (hActor % 35)
-              : 95 + (hActor % 65)
-          }
-        } else {
-          if (actor.speechCooldown > 0) actor.speechCooldown -= 1
-          if (actor.speechCooldown <= 0) {
-            if (status === 'running' || status === 'queued') {
-              actor.speechTicks = 18
-              actor.speechCooldown = 60 + (hActor % 40)
-            } else if (status === 'review') {
-              actor.speechTicks = 14
-              actor.speechCooldown = 120 + (hActor % 80)
-            } else {
-              actor.speechTicks = 0
-              actor.speechCooldown = 100
-            }
-          }
-        }
-
-        const dx = actor.targetLeft - actor.left
-        const dy = actor.targetTop - actor.top
-        const dist = Math.hypot(dx, dy)
-
-        if (dist > TOWN_ARRIVE_PX) {
-          const speed = (status === 'running' ? 1.35 : (status === 'review' ? 1.05 : 0.8)) * TOWN_TICK_PX
-          const step = Math.min(dist, speed)
-          actor.left = Math.round((actor.left + (dx / dist) * step) * 100) / 100
-          actor.top = Math.round((actor.top + (dy / dist) * step) * 100) / 100
-          actor.facingLeft = dx < -0.05 * TOWN_TICK_PX
-          actor.animState = dx < -0.15 * TOWN_TICK_PX ? 'running-left' : (dx > 0.15 * TOWN_TICK_PX ? 'running-right' : 'running')
-        } else {
-          actor.left = actor.targetLeft
-          actor.top = actor.targetTop
-          if (actor.pauseTicks > 0) {
-            actor.pauseTicks -= 1
-            actor.animState = actor.socialText ? 'waving' : defaultAnimForStatus(status)
-          } else {
-            actor.stepCount = (actor.stepCount || 0) + 1
-            actor.socialText = ''
-            const h = townHash(`${session.id}:${actor.stepCount}`)
-            if (status === 'failed' || status === 'cancelled') {
-              actor.targetLeft = home.left
-              actor.targetTop = home.top
-              actor.pauseTicks = 25
-            } else if (status === 'queued' || status === 'observed') {
-              // Pace near the town signpost / noticeboard
-              actor.targetLeft = 444 + ((h % 5) - 2) * TOWN_TICK_PX
-              actor.targetTop = 441 + (((h >>> 4) % 5) - 2) * TOWN_TICK_PY
-              actor.pauseTicks = 18
-            } else if (status === 'review') {
-              // Celebrate at the central plaza fountain or home
-              const goPlaza = (actor.stepCount % 2) === 0
-              actor.targetLeft = goPlaza ? 552 + (h % 9) * TOWN_TICK_PX : home.left
-              actor.targetTop = goPlaza ? 497 + ((h >>> 3) % 6) * TOWN_TICK_PY : home.top
-              actor.pauseTicks = 22
-            } else if (status === 'running') {
-              // Commute between workshop and plaza / Router hall
-              const leg = actor.stepCount % 3
-              if (leg === 0) {
-                actor.targetLeft = home.left
-                actor.targetTop = home.top
-              } else if (leg === 1) {
-                const wp = TOWN_WAYPOINTS[h % TOWN_WAYPOINTS.length]
-                actor.targetLeft = wp.left
-                actor.targetTop = wp.top
-              } else {
-                actor.targetLeft = 600 + ((h % 9) - 4) * TOWN_TICK_PX
-                actor.targetTop = 427 + (((h >>> 4) % 7) - 3) * TOWN_TICK_PY
-              }
-              actor.pauseTicks = 12 + (h % 10)
-            } else {
-              // Idle / Router: stroll around town landmarks and greet neighbors
-              const goHome = (actor.stepCount % 3) === 0
-              if (goHome) {
-                actor.targetLeft = home.left
-                actor.targetTop = home.top
-              } else {
-                const wp = TOWN_WAYPOINTS[h % TOWN_WAYPOINTS.length]
-                actor.targetLeft = wp.left + ((h % 5) - 2) * TOWN_TICK_PX
-                actor.targetTop = wp.top + (((h >>> 5) % 5) - 2) * TOWN_TICK_PY
-              }
-              actor.pauseTicks = 18 + (h % 16)
-            }
-          }
-        }
-      }
-
-      // Check proximity between actors for occasional friendly town banter & waving
-      for (let i = 0; i < ids.length; i += 1) {
-        for (let j = i + 1; j < ids.length; j += 1) {
-          const a = map[ids[i]]
-          const b = map[ids[j]]
-          if (!a || !b) continue
-          if ((a.speechTicks || 0) > 0 || (b.speechTicks || 0) > 0) continue
-          if ((a.socialCooldown || 0) > 0 || (b.socialCooldown || 0) > 0) continue
-          const d = Math.hypot(a.left - b.left, a.top - b.top)
-          if (d > TOWN_GREET_NEAR_PX && d < TOWN_GREET_FAR_PX && !a.socialText && !b.socialText) {
-            const pick = TOWN_BANTER[(townHash(ids[i]) + (a.stepCount || 0)) % TOWN_BANTER.length]
-            a.socialText = pick
-            a.speechTicks = 15
-            a.speechCooldown = 90
-            a.socialCooldown = 140
-            b.socialText = '👋'
-            b.speechTicks = 12
-            b.speechCooldown = 90
-            b.socialCooldown = 140
-            break
-          }
-        }
-      }
+      advanceTownSimulation(simRef.current, members, TOWN_TICK_SECONDS)
       setTick((t) => (t + 1) % 1000000)
     }, 120)
     return () => window.clearInterval(timer)
@@ -5249,7 +5449,7 @@ function TownActor({ session, isRouter, actorState, pet, personArt, reducedMotio
   const animState = (actorState && actorState.animState) || defaultAnimForStatus(session.status)
   const facingLeft = !!(actorState && actorState.facingLeft)
   const speech = deriveSpeechBubble(session, isRouter, actorState && actorState.socialText)
-  const speechVisible = hovered || (actorState ? (actorState.speechTicks > 0 || !!actorState.socialText) : true)
+  const speechVisible = hovered || (actorState ? (actorState.speechLeft > 0 || !!actorState.socialText) : true)
   const petName = (pet && pet.display_name) || session.avatar_slug || (isRouter ? 'Router' : 'Worker')
   const zIndex = townDepth(pos.top, 2)
 
@@ -7924,6 +8124,11 @@ export {
   TOWN_ESTATE_LOOP_PATH, TOWN_MEADOW_TILES, townMeadowSprite,
   TOWN_DOORSTEP_Y, TOWN_GATE_Y,
   TOWN_GARDEN_ZONES, TOWN_TREES, TOWN_GARDEN_PROPS, TOWN_CIVIC_PROPS,
+  TOWN_NODES, TOWN_ROUTES_TO_HUB, TOWN_CIVIC_DESTINATIONS, townRoute,
+  TOWN_ROUTER_DOOR_Y, TOWN_PLAZA_WEST_X, TOWN_PLAZA_EAST_X,
+  TOWN_WALK_PX_PER_SEC, TOWN_REVIEW_PX_PER_SEC, TOWN_RUN_PX_PER_SEC,
+  TOWN_TICK_SECONDS, townActorSpeed, advanceTownSimulation,
+  townNextDestination, townTripPause,
 }
 
 export default {
