@@ -135,6 +135,143 @@ const TOWN_RESERVED_RECTS = [
   TOWN_LAMP_NW_RECT, TOWN_LAMP_NE_RECT, TOWN_LAMP_SW_RECT, TOWN_LAMP_SE_RECT,
   TOWN_POND_RECT,
 ]
+
+// -- estate ground ---------------------------------------------------------
+// Lane and drive coordinates in stage pixels. The ground SVG draws them, and
+// the actor routes (a later task) must read the same numbers, so this is the
+// one place the estate's paths are authored. Nothing here may be an inline
+// literal at a call site.
+const TOWN_LANE_NORTH_Y = 205
+const TOWN_LANE_SOUTH_Y = 640
+const TOWN_LANE_WEST_X = 240
+const TOWN_LANE_EAST_X = 960
+const TOWN_AVENUE_Y = 440
+const TOWN_LANE_WIDTH = 26
+// The moss under-stroke is wider than the stone so every joint shows a border.
+const TOWN_LANE_UNDER_WIDTH = 34
+const TOWN_DRIVE_WIDTH = 14
+const TOWN_DRIVE_UNDER_WIDTH = 20
+const TOWN_LANE_CORNER = 30
+// Doorsteps, per row, and the lane each drive meets.
+const TOWN_DOORSTEP_Y = { north: 190, middle: 415, south: 630 }
+const TOWN_GATE_Y = {
+  north: TOWN_LANE_NORTH_Y,
+  middle: TOWN_AVENUE_Y,
+  south: TOWN_LANE_SOUTH_Y,
+}
+// One private drive per authored parcel, drawn whether or not a worker owns
+// the lot: the estate is planned first and occupied second.
+const TOWN_DRIVES = TOWN_PLOTS.map((plot) => ({
+  id: plot.id,
+  x: plot.left,
+  doorY: TOWN_DOORSTEP_Y[plot.region],
+  gateY: TOWN_GATE_Y[plot.region],
+}))
+// The loop: up the west lane, across the north lane, down the east lane, back
+// along the south lane, with quadratic corners so the four sides read as one
+// continuous path instead of abutting rectangles.
+const TOWN_ESTATE_LOOP_PATH = [
+  `M ${TOWN_LANE_WEST_X} ${TOWN_LANE_NORTH_Y + TOWN_LANE_CORNER}`,
+  `L ${TOWN_LANE_WEST_X} ${TOWN_LANE_SOUTH_Y - TOWN_LANE_CORNER}`,
+  `Q ${TOWN_LANE_WEST_X} ${TOWN_LANE_SOUTH_Y} ${TOWN_LANE_WEST_X + TOWN_LANE_CORNER} ${TOWN_LANE_SOUTH_Y}`,
+  `L ${TOWN_LANE_EAST_X - TOWN_LANE_CORNER} ${TOWN_LANE_SOUTH_Y}`,
+  `Q ${TOWN_LANE_EAST_X} ${TOWN_LANE_SOUTH_Y} ${TOWN_LANE_EAST_X} ${TOWN_LANE_SOUTH_Y - TOWN_LANE_CORNER}`,
+  `L ${TOWN_LANE_EAST_X} ${TOWN_LANE_NORTH_Y + TOWN_LANE_CORNER}`,
+  `Q ${TOWN_LANE_EAST_X} ${TOWN_LANE_NORTH_Y} ${TOWN_LANE_EAST_X - TOWN_LANE_CORNER} ${TOWN_LANE_NORTH_Y}`,
+  `L ${TOWN_LANE_WEST_X + TOWN_LANE_CORNER} ${TOWN_LANE_NORTH_Y}`,
+  `Q ${TOWN_LANE_WEST_X} ${TOWN_LANE_NORTH_Y} ${TOWN_LANE_WEST_X} ${TOWN_LANE_NORTH_Y + TOWN_LANE_CORNER}`,
+  'Z',
+].join(' ')
+
+// The plaza is a stepped octagon built from axis-aligned bands, not one big
+// rectangle: a rectangle at x=400..800 / y=250..610 would pave under west-2
+// (x 364..476) and east-1 (x 724..836). Every band below clears those parcel
+// boxes, Router Hall's reserved box and the fountain; touching edges are
+// intentional. The waist is the only free ground between the middle parcels
+// and the Router, and the fountain stays an island in the southern half.
+const TOWN_PLAZA_BANDS = [
+  { id: 'north-west', x: 400, y: 250, w: 110, h: 35 },
+  { id: 'north-east', x: 690, y: 250, w: 110, h: 35 },
+  { id: 'waist-west', x: 476, y: 285, w: 34, h: 130 },
+  { id: 'waist-east', x: 690, y: 285, w: 34, h: 130 },
+  { id: 'avenue-west', x: 400, y: 415, w: 110, h: 45 },
+  { id: 'avenue-east', x: 690, y: 415, w: 110, h: 45 },
+  { id: 'avenue-hub', x: 510, y: 435, w: 180, h: 25 },
+  { id: 'fountain-west', x: 480, y: 460, w: 70, h: 45 },
+  { id: 'fountain-east', x: 650, y: 460, w: 70, h: 45 },
+  // Two 14 px corridors run down each side of the fountain: the only ground
+  // between it and the south-inner parcels.
+  { id: 'fountain-link-west', x: 536, y: 505, w: 14, h: 65 },
+  { id: 'fountain-link-east', x: 650, y: 505, w: 14, h: 65 },
+  // The southern court between south-2 and south-3, with the two benches on
+  // it, opening onto the south lane.
+  { id: 'south-court', x: 536, y: 570, w: 128, h: 70 },
+]
+
+// Pond bank: an irregular closed curve that stays inside TOWN_POND_RECT
+// (70,510,140,90), so it is clear of the west lane (x=240) and every parcel.
+const TOWN_POND_PATH = [
+  'M 84 552',
+  'C 78 538 90 524 110 520',
+  'C 134 515 158 518 176 526',
+  'C 196 534 204 550 196 566',
+  'C 188 583 166 594 142 594',
+  'C 118 594 92 580 84 562',
+  'Z',
+].join(' ')
+
+// -- meadow and garden layout ---------------------------------------------
+// 64x32 meadow cells; 19 x 22 covers the 1200x700 stage with a little overhang
+// so no seam appears at the right or bottom edge. The sprite mix is 80% base
+// grass, 12% grass-b, 8% grass-c, chosen from a spatial hash: identical on
+// every render, never a checkerboard, and no Math.random() during a frame.
+const TOWN_MEADOW_TILE = { width: 64, height: 32 }
+const TOWN_MEADOW_COLS = Math.ceil(TOWN_STAGE.width / TOWN_MEADOW_TILE.width)
+const TOWN_MEADOW_ROWS = Math.ceil(TOWN_STAGE.height / TOWN_MEADOW_TILE.height)
+// Only the outer greenbelt and the south verge are planted. Large trees need
+// room for their full canopy, so they never stand inside a parcel box.
+const TOWN_GARDEN_ZONES = [
+  { id: 'greenbelt-west', x: 0, y: 0, w: 240, h: 700 },
+  { id: 'greenbelt-east', x: 960, y: 0, w: 240, h: 700 },
+  { id: 'verge-south', x: 0, y: 640, w: 1200, h: 60 },
+]
+const TOWN_TREES = [
+  { key: 'tree-w-north', left: 90, top: 240, width: 56, sprite: 'tree-c.png' },
+  { key: 'tree-w-mid', left: 60, top: 420, width: 84, sprite: 'tree-a.png' },
+  { key: 'tree-w-south', left: 120, top: 700, width: 54, sprite: 'tree-a.png' },
+  { key: 'tree-e-north', left: 1110, top: 240, width: 70, sprite: 'tree-b.png' },
+  { key: 'tree-e-mid', left: 1150, top: 470, width: 76, sprite: 'tree-b.png' },
+  { key: 'tree-e-south', left: 1080, top: 700, width: 60, sprite: 'tree-a.png' },
+  { key: 'tree-s-west', left: 320, top: 700, width: 60, sprite: 'tree-a.png' },
+  { key: 'tree-s-east', left: 880, top: 700, width: 60, sprite: 'tree-b.png' },
+]
+// Bushes, flowers and rocks stay small: greenbelt edges and the south verge.
+const TOWN_GARDEN_PROPS = [
+  { key: 'bush-w', left: 180, top: 300, width: 40, sprite: 'bush.png' },
+  { key: 'bush-e', left: 1020, top: 300, width: 40, sprite: 'bush.png' },
+  { key: 'bush-w-south', left: 180, top: 640, width: 40, sprite: 'bush.png' },
+  { key: 'bush-e-south', left: 1020, top: 640, width: 40, sprite: 'bush.png' },
+  { key: 'bush-s-west', left: 420, top: 700, width: 36, sprite: 'bush.png' },
+  { key: 'bush-s-east', left: 780, top: 700, width: 36, sprite: 'bush.png' },
+  { key: 'flowers-w', left: 80, top: 330, width: 28, sprite: 'flowers.png' },
+  { key: 'flowers-e', left: 1120, top: 330, width: 28, sprite: 'flowers.png' },
+  { key: 'flowers-s-west', left: 520, top: 700, width: 28, sprite: 'flowers.png' },
+  { key: 'flowers-s-east', left: 680, top: 700, width: 28, sprite: 'flowers.png' },
+  { key: 'rock-w', left: 60, top: 620, width: 25, sprite: 'rock.png' },
+  { key: 'rock-e', left: 1140, top: 620, width: 25, sprite: 'rock.png' },
+]
+// Civic props, placed from the authored contract (section 3 of the plan).
+// `top` is the bottom-centre anchor used by the img layer.
+const TOWN_CIVIC_PROPS = [
+  { key: 'fountain', left: 600, top: 568, width: 82, sprite: 'fountain.png' },
+  { key: 'well', left: 750, top: 503, width: 44, sprite: 'well.png' },
+  { key: 'bench-w', left: 560, top: 608, width: 40, sprite: 'bench.png' },
+  { key: 'bench-e', left: 640, top: 608, width: 40, sprite: 'bench.png' },
+  { key: 'lamp-nw', left: 400, top: 282, width: 22, sprite: 'lamp.png', glow: true },
+  { key: 'lamp-ne', left: 800, top: 282, width: 22, sprite: 'lamp.png', glow: true },
+  { key: 'lamp-sw', left: 400, top: 577, width: 22, sprite: 'lamp.png', glow: true },
+  { key: 'lamp-se', left: 800, top: 577, width: 22, sprite: 'lamp.png', glow: true },
+]
 const TOWN_MAX_WORKERS = TOWN_PLOTS.length
 const TOWN_HOUSE_SPRITES = [
   'house-a.png', 'house-b.png', 'house-c.png', 'house-d.png',
@@ -4440,6 +4577,66 @@ function townHash(value) {
   return hash >>> 0
 }
 
+/** Sprite for one 64x32 meadow cell: 80% base grass, 12% grass-b, 8% grass-c.
+ *  A spatial hash keeps the pattern identical on every render, so a 120 ms
+ *  actor tick can never reshuffle the ground, and no smooth gradient or
+ *  checkerboard is possible. */
+function townMeadowSprite(column, row) {
+  const pick = townHash(`meadow:${column}:${row}`) % 100
+  if (pick < 80) return 'grass.png'
+  if (pick < 92) return 'grass-b.png'
+  return 'grass-c.png'
+}
+
+// Built exactly once at module load: 19 x 22 = 418 cells.
+const TOWN_MEADOW_TILES = (() => {
+  const tiles = []
+  for (let row = 0; row < TOWN_MEADOW_ROWS; row += 1) {
+    for (let column = 0; column < TOWN_MEADOW_COLS; column += 1) {
+      tiles.push({
+        key: `${column}:${row}`,
+        left: column * TOWN_MEADOW_TILE.width,
+        top: row * TOWN_MEADOW_TILE.height,
+        sprite: townMeadowSprite(column, row),
+      })
+    }
+  }
+  return tiles
+})()
+
+/** The static meadow layer. Memoized because the scene re-renders on every
+ *  simulation tick: 418 ground nodes must never be rebuilt while actors walk. */
+const TownGround = memo(function TownGround({ assets }) {
+  const base = assets && assets['grass.png'] && assets['grass.png'].data_url
+  return jsx('div', {
+    'data-town-meadow': '1',
+    'aria-hidden': 'true',
+    className: 'pointer-events-none absolute inset-0',
+    style: { zIndex: 0 },
+    children: TOWN_MEADOW_TILES.map((tile) => {
+      const art = assets && assets[tile.sprite] && assets[tile.sprite].data_url
+      const src = art || base
+      if (!src) return null
+      return jsx('img', {
+        key: tile.key,
+        src,
+        alt: '',
+        draggable: false,
+        width: TOWN_MEADOW_TILE.width,
+        height: TOWN_MEADOW_TILE.height,
+        className: 'absolute',
+        style: {
+          left: `${tile.left}px`,
+          top: `${tile.top}px`,
+          width: `${TOWN_MEADOW_TILE.width}px`,
+          height: `${TOWN_MEADOW_TILE.height}px`,
+          imageRendering: 'pixelated',
+        },
+      })
+    }),
+  })
+})
+
 function townHouseSprite(sessionId) {
   return TOWN_HOUSE_SPRITES[townHash(sessionId) % TOWN_HOUSE_SPRITES.length]
 }
@@ -4800,10 +4997,9 @@ const TOWN_WAYPOINTS = [
   { left: 744, top: 238 }, // North Promenade East
 ]
 
-// Where each row of parcels opens onto the estate: the north row's drive meets
-// the north lane, the middle row faces Main Avenue and the south row the south
-// lane. An actor waits on its own doorstep, so it never stands in a doorway.
-const TOWN_DOORSTEP_Y = { north: 190, middle: 415, south: 630 }
+// Where each row of parcels opens onto the estate is authored once in
+// TOWN_DOORSTEP_Y at the top of the file; an actor waits on its own doorstep,
+// so it never stands in a doorway.
 
 function actorHomePosition(session, isRouter) {
   if (isRouter) return { left: TOWN_ROUTER.left, top: 420 } // Router door
@@ -5289,10 +5485,10 @@ function TownBulletinBoard({ assets, inProgressCount, totalTasksCount, onOpenBul
       'focus-visible:outline focus-visible:outline-2 focus-visible:outline-(--ui-accent)',
     ),
     style: {
-      // Stage pixels, converted from 35% / 58%; the authored civic re-placement
-      // into TOWN_BULLETIN_RECT belongs to the estate-ground task.
-      left: '420px',
-      top: '406px',
+      // Stage pixels, anchored in TOWN_BULLETIN_RECT (420,435,60,70). The art
+      // is bottom-anchored: `top` is the bottom of the reserved box.
+      left: '450px',
+      top: '499px',
       transform: 'translate(-50%, -85%)',
       zIndex: 12,
     },
@@ -5576,23 +5772,10 @@ function TownBulletinModal({ town, pets, onClose, onSelectTask }) {
 
 function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, reducedMotion }) {
   const grass = assets && assets['grass.png'] && assets['grass.png'].data_url
-  const roadH = assets && assets['road-h.png'] && assets['road-h.png'].data_url
-  const roadV = assets && assets['road-v.png'] && assets['road-v.png'].data_url
   const plazaStone = assets && assets['plaza-stone.png'] && assets['plaza-stone.png'].data_url
   const water = assets && assets['water.png'] && assets['water.png'].data_url
-  const bridge = assets && assets['bridge.png'] && assets['bridge.png'].data_url
-  const bench = assets && assets['bench.png'] && assets['bench.png'].data_url
-  const well = assets && assets['well.png'] && assets['well.png'].data_url
-  const flowers = assets && assets['flowers.png'] && assets['flowers.png'].data_url
-  const signpost = assets && assets['signpost.png'] && assets['signpost.png'].data_url
-  const treeA = assets && assets['tree-a.png'] && assets['tree-a.png'].data_url
-  const treeB = assets && assets['tree-b.png'] && assets['tree-b.png'].data_url
-  const treeC = assets && assets['tree-c.png'] && assets['tree-c.png'].data_url
-  const bush = assets && assets['bush.png'] && assets['bush.png'].data_url
-  const fountain = assets && assets['fountain.png'] && assets['fountain.png'].data_url
-  const lamp = assets && assets['lamp.png'] && assets['lamp.png'].data_url
-  const rock = assets && assets['rock.png'] && assets['rock.png'].data_url
   const personArt = assets && assets['person.png'] && assets['person.png'].data_url
+  const artFor = (name) => (assets && assets[name] && assets[name].data_url) || null
   const workers = Array.isArray(town.workers) ? town.workers : []
   // Vacant parcels come from each worker's own slot, never from the array
   // index, so a worker that appears later only fills its own lot marker and
@@ -5629,46 +5812,145 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
     { id: 'pr', label: `PRs (${prCount})` },
   ]
 
-  // Trees and props keep their existing arrangement, converted 1:1 from the
-  // old percentage map into stage pixels (x% of 1200, y% of 700). The authored
-  // re-placement into garden zones is a later task; this one only unifies the
-  // coordinate system, so `top` is now also the depth key.
-  const trees = [
-    { left: 48, top: 504, src: treeA, width: 82 },
-    { left: 1140, top: 476, src: treeB, width: 76 },
-    { left: 36, top: 224, src: treeC, width: 58 },
-    { left: 1140, top: 203, src: treeA, width: 70 },
-    { left: 240, top: 98, src: treeC, width: 50 },
-    { left: 960, top: 98, src: treeB, width: 56 },
-    { left: 528, top: 126, src: treeB, width: 62 },
-    { left: 684, top: 119, src: treeC, width: 52 },
-    { left: 228, top: 651, src: treeA, width: 68 },
-    { left: 984, top: 651, src: treeB, width: 64 },
-  ].filter((tree) => tree.src)
+  // Props and planting read authored stage coordinates instead of the old
+  // scattered percentages. Civic props come from the reserved-box table;
+  // garden props only from the greenbelt and the south verge.
+  const decorations = [...TOWN_CIVIC_PROPS, ...TOWN_GARDEN_PROPS]
 
-  const decorations = [
-    { key: 'fountain', left: 600, top: 532, src: fountain, width: 84 },
-    { key: 'well', left: 756, top: 441, src: well, width: 42 },
-    { key: 'signpost', left: 444, top: 441, src: signpost, width: 28 },
-    { key: 'bench-l', left: 516, top: 532, src: bench, width: 38 },
-    { key: 'bench-r', left: 684, top: 532, src: bench, width: 38 },
-    { key: 'bench-park', left: 888, top: 511, src: bench, width: 36 },
-    { key: 'bridge-sw', left: 288, top: 518, src: bridge, width: 56 },
-    { key: 'lamp-nw', left: 468, top: 336, src: lamp, width: 22, glow: anyRunning || isDark },
-    { key: 'lamp-ne', left: 732, top: 336, src: lamp, width: 22, glow: anyRunning || isDark },
-    { key: 'lamp-sw', left: 432, top: 476, src: lamp, width: 22, glow: anyRunning || isDark },
-    { key: 'lamp-se', left: 768, top: 476, src: lamp, width: 22, glow: anyRunning || isDark },
-    { key: 'bush-nw', left: 192, top: 224, src: bush, width: 44 },
-    { key: 'bush-ne', left: 1008, top: 224, src: bush, width: 44 },
-    { key: 'bush-sw', left: 192, top: 462, src: bush, width: 44 },
-    { key: 'bush-se', left: 1008, top: 462, src: bush, width: 44 },
-    { key: 'flowers-1', left: 408, top: 252, src: flowers, width: 32 },
-    { key: 'flowers-2', left: 792, top: 252, src: flowers, width: 32 },
-    { key: 'flowers-3', left: 480, top: 588, src: flowers, width: 32 },
-    { key: 'flowers-4', left: 720, top: 588, src: flowers, width: 32 },
-    { key: 'rock-l', left: 72, top: 623, src: rock, width: 25 },
-    { key: 'rock-r', left: 1116, top: 616, src: rock, width: 25 },
-  ].filter((item) => item.src)
+  // Estate paving, one SVG. The pattern id is derived from the town id so two
+  // mounted scenes can never share (or collide on) one pattern definition.
+  const patternKey = `town-${townHash(town.id).toString(36)}`
+  const stonePatternId = `${patternKey}-stone`
+  const waterPatternId = `${patternKey}-water`
+  const stoneFill = plazaStone ? `url(#${stonePatternId})` : 'rgba(165,148,126,0.72)'
+  const waterFill = water ? `url(#${waterPatternId})` : 'rgba(70,120,150,0.85)'
+  const paved = [
+    { key: 'loop', d: TOWN_ESTATE_LOOP_PATH, width: TOWN_LANE_WIDTH, lane: 'loop' },
+    {
+      key: 'avenue',
+      d: `M ${TOWN_LANE_WEST_X} ${TOWN_AVENUE_Y} L ${TOWN_LANE_EAST_X} ${TOWN_AVENUE_Y}`,
+      width: TOWN_LANE_WIDTH,
+      lane: 'avenue',
+    },
+    ...TOWN_DRIVES.map((drive) => ({
+      key: `drive:${drive.id}`,
+      d: `M ${drive.x} ${drive.doorY} L ${drive.x} ${drive.gateY}`,
+      width: TOWN_DRIVE_WIDTH,
+      drive: drive.id,
+    })),
+  ]
+  const ground = jsxs('svg', {
+    'aria-hidden': 'true',
+    'data-town-ground': '1',
+    viewBox: `0 0 ${TOWN_STAGE.width} ${TOWN_STAGE.height}`,
+    preserveAspectRatio: 'none',
+    className: 'pointer-events-none absolute inset-0 h-full w-full',
+    style: { zIndex: 0 },
+    children: [
+      jsx('defs', {
+        key: 'defs',
+        children: [
+          plazaStone
+            ? jsx('pattern', {
+                key: 'stone',
+                id: stonePatternId,
+                patternUnits: 'userSpaceOnUse',
+                width: 64,
+                height: 64,
+                children: jsx('image', {
+                  key: 'tile', href: plazaStone, width: 64, height: 64, preserveAspectRatio: 'none',
+                }),
+              })
+            : null,
+          water
+            ? jsx('pattern', {
+                key: 'water',
+                id: waterPatternId,
+                patternUnits: 'userSpaceOnUse',
+                width: 64,
+                height: 64,
+                children: jsx('image', {
+                  key: 'tile', href: water, width: 64, height: 64, preserveAspectRatio: 'none',
+                }),
+              })
+            : null,
+        ],
+      }),
+      // Moss first, stone on top. The wider under-stroke is what makes a lane
+      // look edged rather than painted straight onto the meadow.
+      jsx('g', {
+        key: 'lane-banks',
+        children: paved.map((path) => jsx('path', {
+          key: `bank:${path.key}`,
+          d: path.d,
+          fill: 'none',
+          stroke: '#4a5d33',
+          strokeWidth: path.width === TOWN_LANE_WIDTH ? TOWN_LANE_UNDER_WIDTH : TOWN_DRIVE_UNDER_WIDTH,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          opacity: '0.9',
+        })),
+      }),
+      jsx('g', {
+        key: 'paving',
+        children: paved.map((path) => jsx('path', {
+          key: `stone:${path.key}`,
+          d: path.d,
+          'data-town-lane': path.lane || null,
+          'data-town-drive': path.drive || null,
+          fill: 'none',
+          stroke: stoneFill,
+          strokeWidth: path.width,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+        })),
+      }),
+      // Plaza: a moss halo around the stepped bands, then the bands themselves.
+      jsx('g', {
+        key: 'plaza-halo',
+        children: TOWN_PLAZA_BANDS.map((band) => jsx('rect', {
+          key: `halo:${band.id}`,
+          x: band.x - 4,
+          y: band.y - 4,
+          width: band.w + 8,
+          height: band.h + 8,
+          rx: 8,
+          fill: '#4a5d33',
+          opacity: '0.9',
+        })),
+      }),
+      jsx('g', {
+        key: 'plaza',
+        'data-town-landmark': 'plaza',
+        children: TOWN_PLAZA_BANDS.map((band) => jsx('rect', {
+          key: `band:${band.id}`,
+          'data-town-plaza-band': band.id,
+          x: band.x,
+          y: band.y,
+          width: band.w,
+          height: band.h,
+          fill: stoneFill,
+        })),
+      }),
+      // The pond: one irregular closed bank and a patterned water fill, both
+      // inside TOWN_POND_RECT.
+      jsx('path', {
+        key: 'pond-water',
+        'data-town-landmark': 'stream',
+        d: TOWN_POND_PATH,
+        fill: waterFill,
+      }),
+      jsx('path', {
+        key: 'pond-bank',
+        d: TOWN_POND_PATH,
+        fill: 'none',
+        stroke: '#5c6b3c',
+        strokeWidth: 6,
+        strokeLinejoin: 'round',
+        opacity: '0.95',
+      }),
+    ],
+  })
 
   const petMap = pets || {}
   const routerPet = petMap[town.avatar_slug] || null
@@ -5766,15 +6048,17 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
         role: 'group',
         'aria-label': `${sessionTitle(town)} — town`,
         'data-town-workers': workers.length,
-        'data-town-road-network': 'cobblestone',
+        'data-town-road-network': 'contiguous-estate',
         className: cn('superagent-pixel-scroll relative isolate z-0 flex min-h-[390px] flex-1 overflow-auto rounded-lg border',
           'border-(--ui-stroke-secondary)'),
         style: grass
           ? {
               isolation: 'isolate',
               zIndex: 0,
+              // Same base grass as the meadow, so the letterbox margin around
+              // a capped stage has no visible hard edge.
               backgroundImage: `url("${grass}")`,
-              backgroundSize: '128px 64px',
+              backgroundSize: '64px 32px',
               backgroundRepeat: 'repeat',
               imageRendering: 'pixelated',
             }
@@ -5800,127 +6084,21 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
               transformOrigin: '0 0',
               isolation: 'isolate',
               zIndex: 0,
+              // Fallback only: TownGround paints every cell on top of this.
               backgroundImage: grass ? `url("${grass}")` : undefined,
-              backgroundSize: '128px 64px',
+              backgroundSize: '64px 32px',
               backgroundRepeat: 'repeat',
               imageRendering: 'pixelated',
             },
             children: [
-              // Meadow pond, in its authored southwest rect. It sits at x=70..210,
-              // clear of the west lane (x=240) and every parcel, so no house can
-              // stand in water. Task 5 replaces this ellipse with an SVG bank.
-              water
-                ? jsx('div', {
-                    key: 'water-pond',
-                    'aria-hidden': 'true',
-                    'data-town-landmark': 'stream',
-                    className: 'pointer-events-none absolute z-0 rounded-full opacity-90',
-                    style: {
-                      left: '70px', top: '510px', width: '140px', height: '90px',
-                      backgroundImage: `url("${water}")`,
-                      backgroundSize: '48px 48px',
-                      backgroundRepeat: 'repeat',
-                      imageRendering: 'pixelated',
-                      boxShadow: 'inset 0 0 8px rgba(20,55,90,0.45)',
-                    },
-                  })
-                : null,
-              // Cobblestone road network connecting every plot to the Central Plaza
-              jsx('div', {
-                key: 'road-west-ave', 'aria-hidden': 'true',
-                className: 'pointer-events-none absolute z-[1] opacity-90',
-                style: {
-                  left: '240px', top: '357px', width: '24px', height: '490px',
-                  transform: 'translate(-50%, -50%)',
-                  backgroundImage: roadV ? `url("${roadV}")` : undefined,
-                  backgroundColor: roadV ? undefined : 'rgba(145,132,114,0.65)',
-                  backgroundSize: '24px 48px',
-                  backgroundRepeat: 'repeat-y',
-                  imageRendering: 'pixelated',
-                },
-              }),
-              jsx('div', {
-                key: 'road-east-ave', 'aria-hidden': 'true',
-                className: 'pointer-events-none absolute z-[1] opacity-90',
-                style: {
-                  left: '960px', top: '357px', width: '24px', height: '490px',
-                  transform: 'translate(-50%, -50%)',
-                  backgroundImage: roadV ? `url("${roadV}")` : undefined,
-                  backgroundColor: roadV ? undefined : 'rgba(145,132,114,0.65)',
-                  backgroundSize: '24px 48px',
-                  backgroundRepeat: 'repeat-y',
-                  imageRendering: 'pixelated',
-                },
-              }),
-              jsx('div', {
-                key: 'road-north-st', 'aria-hidden': 'true',
-                className: 'pointer-events-none absolute z-[1] opacity-90',
-                style: {
-                  left: '600px', top: '168px', width: '984px', height: '22px',
-                  transform: 'translate(-50%, -50%)',
-                  backgroundImage: roadH ? `url("${roadH}")` : undefined,
-                  backgroundColor: roadH ? undefined : 'rgba(145,132,114,0.65)',
-                  backgroundSize: '48px 22px',
-                  backgroundRepeat: 'repeat-x',
-                  imageRendering: 'pixelated',
-                },
-              }),
-              jsx('div', {
-                key: 'road-main-st', 'aria-hidden': 'true',
-                className: 'pointer-events-none absolute z-[1] opacity-95',
-                style: {
-                  left: '600px', top: '385px', width: '1008px', height: '26px',
-                  transform: 'translate(-50%, -50%)',
-                  backgroundImage: roadH ? `url("${roadH}")` : undefined,
-                  backgroundColor: roadH ? undefined : 'rgba(145,132,114,0.75)',
-                  backgroundSize: '48px 26px',
-                  backgroundRepeat: 'repeat-x',
-                  imageRendering: 'pixelated',
-                },
-              }),
-              jsx('div', {
-                key: 'road-south-st', 'aria-hidden': 'true',
-                className: 'pointer-events-none absolute z-[1] opacity-90',
-                style: {
-                  left: '600px', top: '588px', width: '984px', height: '22px',
-                  transform: 'translate(-50%, -50%)',
-                  backgroundImage: roadH ? `url("${roadH}")` : undefined,
-                  backgroundColor: roadH ? undefined : 'rgba(145,132,114,0.65)',
-                  backgroundSize: '48px 22px',
-                  backgroundRepeat: 'repeat-x',
-                  imageRendering: 'pixelated',
-                },
-              }),
-              jsx('div', {
-                key: 'road-center-promenade', 'aria-hidden': 'true',
-                className: 'pointer-events-none absolute z-[1] opacity-95',
-                style: {
-                  left: '600px', top: '378px', width: '28px', height: '434px',
-                  transform: 'translate(-50%, -50%)',
-                  backgroundImage: roadV ? `url("${roadV}")` : undefined,
-                  backgroundColor: roadV ? undefined : 'rgba(145,132,114,0.75)',
-                  backgroundSize: '28px 48px',
-                  backgroundRepeat: 'repeat-y',
-                  imageRendering: 'pixelated',
-                },
-              }),
-              // Paved Central Town Square around Router Hall & Fountain
-              jsx('div', {
-                key: 'plaza', 'aria-hidden': 'true',
-                'data-town-landmark': 'plaza',
-                className: 'pointer-events-none absolute z-[2] rounded-2xl border border-black/15 shadow-inner',
-                style: {
-                  left: '600px', top: '441px', width: '384px', height: '238px',
-                  transform: 'translate(-50%, -50%)',
-                  backgroundImage: plazaStone ? `url("${plazaStone}")` : undefined,
-                  backgroundColor: plazaStone ? undefined : 'rgba(165,148,126,0.7)',
-                  backgroundSize: '48px 48px',
-                  backgroundRepeat: 'repeat',
-                  imageRendering: 'pixelated',
-                },
-              }),
-              // Device-clock sky tint. Sits above roads/plaza (z-2) but below
-              // houses (z-4+) and actors, so it tints the ground, not the UI.
+              // Deterministic meadow first: every other layer paints above it.
+              jsx(TownGround, { key: 'meadow', assets }),
+              // One SVG paints every paved surface (lane banks, stone lanes,
+              // drives, stepped plaza, pond). pointer-events-none and below all
+              // entities, so the map is scenery and never a click target.
+              ground,
+              // Device-clock sky tint: above the ground but below houses (z-4+)
+              // and actors, so it tints the terrain, not the UI.
               jsx('div', {
                 key: 'sky',
                 'aria-hidden': 'true',
@@ -5929,60 +6107,41 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
                 className: 'superagent-town-sky pointer-events-none absolute inset-0 z-[3]',
                 style: { backgroundColor: townTimeOverlay(townTime.phase) },
               }),
-              // Router ↔ Worker visual connection paths
-              workers.length > 0
-                ? jsx('svg', {
-                    key: 'connections',
-                    'aria-hidden': 'true',
-                    'data-town-connections': '1',
-                    viewBox: '0 0 1200 700',
-                    preserveAspectRatio: 'none',
-                    className: 'pointer-events-none absolute inset-0 z-[2] h-full w-full',
-                    children: workers.map((worker) => {
-                      const pos = townHousePosition(worker.town_slot)
-                      const active = worker.status === 'running' || worker.status === 'queued'
-                      const matches = matchesTownFilter(worker, filter, false)
-                      return jsx('line', {
-                        key: `link:${worker.id}`,
-                        x1: '600',
-                        y1: '329',
-                        x2: String(pos.left),
-                        y2: String(pos.top),
-                        stroke: active ? 'rgba(255, 208, 92, 0.85)' : 'rgba(255, 255, 255, 0.25)',
-                        strokeWidth: active ? '5.4' : '3.4',
-                        strokeDasharray: active ? '14 10' : '11 13',
-                        opacity: matches ? '1' : '0.25',
-                      })
-                    }),
-                  })
-                : null,
-              ...decorations.map((item) => jsx('img', {
-                key: `deco:${item.key}`,
-                src: item.src,
-                alt: '',
-                'aria-hidden': 'true',
-                draggable: false,
-                className: 'pointer-events-none absolute -translate-x-1/2 -translate-y-full opacity-95',
-                style: {
-                  left: `${item.left}px`, top: `${item.top}px`,
-                  width: item.width, height: 'auto', imageRendering: 'pixelated',
-                  zIndex: townDepth(item.top),
-                  filter: item.glow ? (isDark ? 'drop-shadow(0 0 8px rgba(255,214,102,0.95)) drop-shadow(0 0 2px rgba(255,240,180,0.9))' : 'drop-shadow(0 0 6px rgba(255,214,102,0.85))') : undefined,
-                },
-              })),
-              ...trees.map((tree, index) => jsx('img', {
-                key: `tree:${index}`,
-                src: tree.src,
-                alt: '',
-                'aria-hidden': 'true',
-                draggable: false,
-                className: 'pointer-events-none absolute -translate-x-1/2 -translate-y-full opacity-95',
-                style: {
-                  left: `${tree.left}px`, top: `${tree.top}px`,
-                  width: tree.width, height: 'auto', imageRendering: 'pixelated',
-                  zIndex: townDepth(tree.top),
-                },
-              })),
+              ...decorations.map((item) => {
+                const art = artFor(item.sprite)
+                if (!art) return null
+                return jsx('img', {
+                  key: `deco:${item.key}`,
+                  src: art,
+                  alt: '',
+                  'aria-hidden': 'true',
+                  draggable: false,
+                  className: 'pointer-events-none absolute -translate-x-1/2 -translate-y-full opacity-95',
+                  style: {
+                    left: `${item.left}px`, top: `${item.top}px`,
+                    width: item.width, height: 'auto', imageRendering: 'pixelated',
+                    zIndex: townDepth(item.top),
+                    filter: item.glow ? (isDark ? 'drop-shadow(0 0 8px rgba(255,214,102,0.95)) drop-shadow(0 0 2px rgba(255,240,180,0.9))' : 'drop-shadow(0 0 6px rgba(255,214,102,0.85))') : undefined,
+                  },
+                })
+              }),
+              ...TOWN_TREES.map((tree) => {
+                const art = artFor(tree.sprite)
+                if (!art) return null
+                return jsx('img', {
+                  key: `tree:${tree.key}`,
+                  src: art,
+                  alt: '',
+                  'aria-hidden': 'true',
+                  draggable: false,
+                  className: 'pointer-events-none absolute -translate-x-1/2 -translate-y-full opacity-95',
+                  style: {
+                    left: `${tree.left}px`, top: `${tree.top}px`,
+                    width: tree.width, height: 'auto', imageRendering: 'pixelated',
+                    zIndex: townDepth(tree.top),
+                  },
+                })
+              }),
               ...vacantPlots.map((plot) => jsx(TownEmptyPlot, {
                 key: `empty:${plot.id}`,
                 plot,
@@ -7759,6 +7918,12 @@ export {
   TOWN_LAMP_NW_RECT, TOWN_LAMP_NE_RECT, TOWN_LAMP_SW_RECT, TOWN_LAMP_SE_RECT,
   TOWN_POND_RECT, TOWN_RESERVED_RECTS,
   rectsOverlap, townPlotRect, townDepth, townStageScale,
+  TownGround, TOWN_PLAZA_BANDS, TOWN_POND_PATH, TOWN_DRIVES,
+  TOWN_LANE_NORTH_Y, TOWN_LANE_SOUTH_Y, TOWN_LANE_WEST_X, TOWN_LANE_EAST_X,
+  TOWN_AVENUE_Y, TOWN_LANE_WIDTH, TOWN_DRIVE_WIDTH, TOWN_LANE_CORNER,
+  TOWN_ESTATE_LOOP_PATH, TOWN_MEADOW_TILES, townMeadowSprite,
+  TOWN_DOORSTEP_Y, TOWN_GATE_Y,
+  TOWN_GARDEN_ZONES, TOWN_TREES, TOWN_GARDEN_PROPS, TOWN_CIVIC_PROPS,
 }
 
 export default {

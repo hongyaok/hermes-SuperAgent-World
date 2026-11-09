@@ -95,7 +95,8 @@ const assetUrl = (name) => `data:image/png;base64,${Buffer.from(`png:${name}`).t
 const assets = Object.fromEntries(
   ['grass.png', 'grass-b.png', 'grass-c.png', 'plot-empty.png',
     'house-router.png', 'house-a.png', 'house-b.png', 'house-c.png', 'house-d.png',
-    'person.png', 'tree-a.png', 'tree-b.png', 'tree-c.png', 'bush.png', 'fountain.png', 'rock.png', 'lamp.png']
+    'person.png', 'tree-a.png', 'tree-b.png', 'tree-c.png', 'bush.png', 'fountain.png',
+    'rock.png', 'lamp.png', 'bench.png', 'well.png', 'bulletin-board.png', 'flowers.png']
     .map((name) => [name, { data_url: assetUrl(name) }]),
 )
 
@@ -138,6 +139,8 @@ function render(node) {
     'data-town-stage', 'data-town-landmark', 'data-town-hud', 'data-town-connections',
     'data-town-time', 'data-town-clock',
     'data-town-plot', 'data-town-empty-plot',
+    'data-town-ground', 'data-town-meadow', 'data-town-lane', 'data-town-drive',
+    'data-town-plaza-band',
     'data-town-bulletin', 'data-town-bulletin-modal', 'data-town-bulletin-task',
     'data-transcript-scroll',
     'data-create-pr-box', 'data-town-dialog',
@@ -157,6 +160,10 @@ function render(node) {
   if (props.style && props.style.left) bits.push(`left:${props.style.left}`)
   if (props.style && props.style.top) bits.push(`top:${props.style.top}`)
   if (props.style && props.style.transform) bits.push(`transform:${props.style.transform}`)
+  if (props.viewBox) bits.push(`viewBox="${props.viewBox}"`)
+  // Serialized so the probe can prove the paving is continuous: a dashed
+  // stroke would bring the old telemetry look straight back.
+  if (props.strokeDasharray != null) bits.push(`stroke-dasharray="${props.strokeDasharray}"`)
   const children = props.children
   if (children != null) bits.push(Array.isArray(children) ? children.map(render).join(' ') : render(children))
   return bits.join(' ')
@@ -212,8 +219,6 @@ workerOne.recent_events = [{ kind: 'tool', detail: 'pytest -q' }]
 const sceneAssets = {
   ...assets,
   'water.png': { data_url: assetUrl('water.png') },
-  'road-h.png': { data_url: assetUrl('road-h.png') },
-  'road-v.png': { data_url: assetUrl('road-v.png') },
   'plaza-stone.png': { data_url: assetUrl('plaza-stone.png') },
 }
 const sceneNode = h(plugin.TownScene, {
@@ -233,7 +238,7 @@ assert.match(scene, /running/)
 assert.match(scene, /review/)
 assert.match(scene, /superagent-town-build/)
 assert.match(scene, /data-town-house="S-0002"/)
-assert.match(scene, /data-town-road-network="cobblestone"/)
+assert.match(scene, /data-town-road-network="contiguous-estate"/)
 assert.match(scene, /data-town-landmark="plaza"/)
 assert.match(scene, /data-town-landmark="stream"/)
 assert.match(scene, /data-town-actor="S-0001"/)
@@ -249,7 +254,7 @@ assert.match(scene, /superagent-pixel/)
 assert.match(scene, /data-town-time="/)
 assert.match(scene, /pytest -q/)
 assert.match(scene, /data-town-hud="1"/)
-assert.match(scene, /data-town-connections="1"/)
+assert.doesNotMatch(scene, /data-town-connections/, 'the Router→worker spokes are deleted, not hidden')
 assert.match(scene, /Filter town workers/)
 assert.match(scene, /Pause character movement/)
 // Stacking context isolation so town houses/sprites never escape over Settings/Drawers/Dialogs
@@ -284,14 +289,14 @@ assert.doesNotMatch(stageTree, /role="status"/, 'the status line must not be ins
 assert.equal((scene.match(/data-town-hud="1"/g) || []).length, 1)
 assert.match(scene, /data-town-hud="1"/)
 assert.match(scene, /overflow-auto/)
-// Entities inside the stage: houses/actors on their plots and the ground
-// layers converted to the same stage-pixel system.
+// Entities inside the stage: houses/actors on their plots, and the meadow,
+// paving and pond in the same stage-pixel system.
 assert.match(stageTree, /data-town-house="S-0002"/)
 assert.match(stageTree, /data-town-actor="S-0002"/)
 assert.match(stageTree, /data-town-landmark="stream"/)
-assert.match(stageTree, /left:70px top:510px/, 'the pond uses its authored stage rect')
-assert.match(stageTree, /left:600px top:441px/, 'the plaza is anchored in stage pixels')
-assert.match(stageTree, /left:240px top:357px/, 'the west lane is anchored in stage pixels')
+assert.match(stageTree, /data-town-landmark="plaza"/)
+assert.match(stageTree, /data-town-ground="1"/)
+assert.match(stageTree, /data-town-meadow="1"/)
 assert.doesNotMatch(stageTree, /left:24%/, 'the old percentage pond position is gone')
 
 const quiet = render(h(plugin.TownScene, {
@@ -346,6 +351,17 @@ assert.equal(plugin.rectsOverlap({ x: 0, y: 0, w: 10, h: 10 }, { x: 9, y: 9, w: 
 // reserved boxes may overlap either.
 const reserved = plugin.TOWN_RESERVED_RECTS
 assert.ok(Array.isArray(reserved) && reserved.length >= 10, 'reserved boxes are exported')
+for (const rect of reserved) {
+  assert.ok(rect.x >= 0 && rect.y >= 0
+    && rect.x + rect.w <= plugin.TOWN_STAGE.width
+    && rect.y + rect.h <= plugin.TOWN_STAGE.height,
+    'a reserved prop box escaped the stage')
+}
+// The major props are part of the pairwise check, not an illustration of it.
+for (const prop of [plugin.TOWN_ROUTER_RECT, plugin.TOWN_FOUNTAIN_RECT,
+  plugin.TOWN_BULLETIN_RECT, plugin.TOWN_WELL_RECT, plugin.TOWN_POND_RECT]) {
+  assert.ok(reserved.includes(prop), 'every major prop has a reserved box')
+}
 for (let i = 0; i < reserved.length; i += 1) {
   for (let j = i + 1; j < reserved.length; j += 1) {
     assert.equal(plugin.rectsOverlap(reserved[i], reserved[j]), false,
@@ -363,6 +379,134 @@ assert.equal(
   plugin.rectsOverlap(plugin.townPlotRect(plugin.townHousePosition(4)), plugin.TOWN_POND_RECT),
   false,
 )
+
+// -- contiguous estate ground ----------------------------------------------
+// One SVG draws every paved surface from the same authored lane/drive data
+// the actor routes will read. The rectangle road grid and the dashed
+// Router→worker spokes are gone, not restyled: no data-town-connections and
+// no dashed ground stroke may come back.
+const groundNode = findElement(sceneNode, 'data-town-ground', '1')
+assert.ok(groundNode, 'the estate ground SVG exists')
+const groundTree = render(groundNode)
+assert.match(groundTree, /viewBox="0 0 1200 700"/)
+assert.match(groundTree, /pointer-events-none/)
+assert.equal((groundTree.match(/data-town-drive="/g) || []).length, 12, 'all twelve private drives exist')
+assert.equal((groundTree.match(/data-town-lane="/g) || []).length, 2, 'the estate loop and Main Avenue are drawn')
+assert.equal((groundTree.match(/data-town-plaza-band="/g) || []).length, plugin.TOWN_PLAZA_BANDS.length)
+assert.doesNotMatch(groundTree, /stroke-dasharray/, 'paving is continuous, never dashed')
+assert.doesNotMatch(scene, /stroke-dasharray/, 'no rendered ground element is dashed')
+assert.doesNotMatch(scene, /data-town-connections/)
+assert.equal((stageTree.match(/data-town-ground="1"/g) || []).length, 1, 'one ground SVG, not a layer per road')
+assert.equal((stageTree.match(/data-town-meadow="1"/g) || []).length, 1, 'one meadow layer')
+
+// Drives come from the plot table itself, so paving and occupancy can never
+// disagree about where a private path belongs.
+assert.equal(plugin.TOWN_DRIVES.length, 12)
+assert.deepEqual(plugin.TOWN_DRIVES.map((drive) => drive.id), plugin.TOWN_PLOTS.map((plot) => plot.id))
+for (const drive of plugin.TOWN_DRIVES) {
+  const plot = plugin.TOWN_PLOTS.find((candidate) => candidate.id === drive.id)
+  assert.equal(drive.x, plot.left, `drive ${drive.id} meets the middle of its parcel`)
+  assert.ok(drive.doorY < drive.gateY, `drive ${drive.id} runs from the doorstep to its lane`)
+  assert.equal(drive.gateY, plugin.TOWN_GATE_Y[plot.region])
+}
+assert.equal(plugin.TOWN_DRIVES.find((drive) => drive.id === 'north-1').gateY, plugin.TOWN_LANE_NORTH_Y)
+assert.equal(plugin.TOWN_DRIVES.find((drive) => drive.id === 'west-1').gateY, plugin.TOWN_AVENUE_Y)
+assert.equal(plugin.TOWN_DRIVES.find((drive) => drive.id === 'south-1').gateY, plugin.TOWN_LANE_SOUTH_Y)
+
+// The pond is one irregular path inside its authored rect, and that rect
+// touches no parcel and no lane centre.
+assert.match(groundTree, /data-town-landmark="stream"/)
+for (const plot of plugin.TOWN_PLOTS) {
+  assert.equal(plugin.rectsOverlap(plugin.townPlotRect(plot), plugin.TOWN_POND_RECT), false,
+    `the pond must not touch ${plot.id}`)
+}
+assert.ok(plugin.TOWN_POND_RECT.x + plugin.TOWN_POND_RECT.w < plugin.TOWN_LANE_WEST_X,
+  'the pond ends before the west lane')
+
+// The plaza is a stepped set of axis-aligned bands, chosen so no band paves
+// under a parcel, Router Hall or the fountain. That property is checked here
+// instead of being left to visual taste.
+const bands = plugin.TOWN_PLAZA_BANDS
+assert.ok(Array.isArray(bands) && bands.length >= 6, 'the plaza is built from explicit bands')
+let plazaMinX = Infinity
+let plazaMinY = Infinity
+let plazaMaxX = -Infinity
+let plazaMaxY = -Infinity
+for (const band of bands) {
+  const rect = { x: band.x, y: band.y, w: band.w, h: band.h }
+  assert.ok(band.id, 'every plaza band has an id')
+  assert.ok(rect.w > 0 && rect.h > 0, `${band.id} has area`)
+  assert.ok(rect.x >= 0 && rect.y >= 0
+    && rect.x + rect.w <= plugin.TOWN_STAGE.width
+    && rect.y + rect.h <= plugin.TOWN_STAGE.height, `${band.id} stays inside the stage`)
+  for (const plot of plugin.TOWN_PLOTS) {
+    assert.equal(plugin.rectsOverlap(rect, plugin.townPlotRect(plot)), false,
+      `plaza band ${band.id} paves under ${plot.id}`)
+  }
+  assert.equal(plugin.rectsOverlap(rect, plugin.TOWN_ROUTER_RECT), false, `${band.id} clears Router Hall`)
+  assert.equal(plugin.rectsOverlap(rect, plugin.TOWN_FOUNTAIN_RECT), false, `${band.id} clears the fountain`)
+  plazaMinX = Math.min(plazaMinX, rect.x)
+  plazaMinY = Math.min(plazaMinY, rect.y)
+  plazaMaxX = Math.max(plazaMaxX, rect.x + rect.w)
+  plazaMaxY = Math.max(plazaMaxY, rect.y + rect.h)
+}
+assert.ok(plazaMaxX - plazaMinX >= 380 && plazaMaxY - plazaMinY >= 340,
+  `the plaza must stay a square, got ${plazaMaxX - plazaMinX}x${plazaMaxY - plazaMinY}`)
+const plazaBox = { x: plazaMinX, y: plazaMinY, w: plazaMaxX - plazaMinX, h: plazaMaxY - plazaMinY }
+assert.equal(plugin.rectsOverlap(plazaBox, plugin.TOWN_ROUTER_RECT), true, 'the Router stands inside the plaza footprint')
+assert.equal(plugin.rectsOverlap(plazaBox, plugin.TOWN_FOUNTAIN_RECT), true, 'the fountain stands inside the plaza footprint')
+assert.ok(plazaMinY <= plugin.TOWN_FOUNTAIN_RECT.y && plazaMaxY >= plugin.TOWN_FOUNTAIN_RECT.y + plugin.TOWN_FOUNTAIN_RECT.h,
+  'the fountain sits in the southern half of the plaza')
+
+// Meadow tiles: built once, deterministic, and dominated by base grass.
+assert.equal(plugin.TOWN_MEADOW_TILES.length, 19 * 22, '19x22 sixty-four by thirty-two cells cover the stage')
+assert.equal(new Set(plugin.TOWN_MEADOW_TILES.map((tile) => tile.key)).size, 19 * 22, 'no duplicate meadow cells')
+const meadowCounts = plugin.TOWN_MEADOW_TILES.reduce((acc, tile) => {
+  acc[tile.sprite] = (acc[tile.sprite] || 0) + 1
+  return acc
+}, {})
+assert.deepEqual(Object.keys(meadowCounts).sort(), ['grass-b.png', 'grass-c.png', 'grass.png'],
+  'all three meadow variants are used')
+const grassShare = meadowCounts['grass.png'] / plugin.TOWN_MEADOW_TILES.length
+assert.ok(grassShare > 0.7 && grassShare < 0.88, `base grass must dominate, got ${grassShare.toFixed(3)}`)
+assert.equal(plugin.townMeadowSprite(3, 4), plugin.townMeadowSprite(3, 4), 'the meadow hash is deterministic')
+assert.equal(plugin.townMeadowSprite(3, 4), 'grass.png', 'a known cell keeps its authored variant')
+assert.equal(plugin.townMeadowSprite(8, 3), 'grass-b.png', 'the second variant is reachable from a fixed cell')
+assert.equal(plugin.townMeadowSprite(6, 3), 'grass-c.png', 'the third variant is reachable from a fixed cell')
+const lastMeadow = plugin.TOWN_MEADOW_TILES[plugin.TOWN_MEADOW_TILES.length - 1]
+assert.ok(lastMeadow.left + 64 >= plugin.TOWN_STAGE.width && lastMeadow.top + 32 >= plugin.TOWN_STAGE.height,
+  'the meadow covers the whole stage')
+
+// Trees and planting stand in declared garden zones. Nothing is planted in a
+// parcel box or the pond.
+const scenery = [...plugin.TOWN_TREES, ...plugin.TOWN_GARDEN_PROPS]
+assert.ok(plugin.TOWN_TREES.length >= 6, 'the large trees live in the greenbelt')
+for (const item of scenery) {
+  const point = { x: item.left - 1, y: item.top - 1, w: 2, h: 2 }
+  const zone = plugin.TOWN_GARDEN_ZONES.find((candidate) => (
+    item.left >= candidate.x && item.left <= candidate.x + candidate.w
+    && item.top >= candidate.y && item.top <= candidate.y + candidate.h
+  ))
+  assert.ok(zone, `${item.key} stands in a declared garden zone`)
+  assert.equal(plugin.rectsOverlap(point, plugin.TOWN_POND_RECT), false, `${item.key} is not in the pond`)
+  for (const plot of plugin.TOWN_PLOTS) {
+    assert.equal(plugin.rectsOverlap(point, plugin.townPlotRect(plot)), false,
+      `${item.key} stands inside ${plot.id}`)
+  }
+}
+// Civic props are bottom-anchored at their authored anchor and never drift into
+// a parcel or the water.
+for (const item of plugin.TOWN_CIVIC_PROPS) {
+  const point = { x: item.left - 1, y: item.top - 1, w: 2, h: 2 }
+  assert.equal(plugin.rectsOverlap(point, plugin.TOWN_POND_RECT), false, `${item.key} is not in the pond`)
+  for (const plot of plugin.TOWN_PLOTS) {
+    assert.equal(plugin.rectsOverlap(point, plugin.townPlotRect(plot)), false, `${item.key} stands inside ${plot.id}`)
+  }
+}
+// The old scattered percentage map is gone: the stage children are positioned
+// in stage pixels (the only percentages left are local 50% centrings inside a
+// single parcel marker).
+assert.doesNotMatch(stageTree, /left:26%/)
 
 // Houses and actors render at stage pixels, not percentages.
 const plotHouse = render(h(plugin.TownHouse, {
