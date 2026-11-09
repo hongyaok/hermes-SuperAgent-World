@@ -4473,6 +4473,43 @@ function townDepth(top, offset = 0) {
   return Math.max(3, Math.min(23, Math.round((y / TOWN_STAGE.height) * 20) + offset))
 }
 
+/** Fit the 1200x700 stage into the pane without shrinking text into dust.
+ *  Below the floor the viewport scrolls; above the ceiling the estate stays
+ *  compact instead of spreading back out on an ultrawide monitor. Unmeasured
+ *  or invalid input falls back to the minimum, never NaN. */
+function townStageScale(width, height) {
+  const w = Math.max(1, Number(width) || 1)
+  const h = Math.max(1, Number(height) || 1)
+  const fit = Math.min(w / TOWN_STAGE.width, h / TOWN_STAGE.height)
+  return Math.max(TOWN_STAGE_MIN_SCALE, Math.min(TOWN_STAGE_MAX_SCALE, fit))
+}
+
+/** Measured size of the scene viewport. The observer only sets state when the
+ *  rounded box actually changes, so scrolling and sprite frames cannot start a
+ *  render loop. Without ResizeObserver it measures once; a non-browser host
+ *  simply keeps the fallback size. */
+function useElementSize(ref) {
+  const [size, setSize] = useState({ width: 0, height: 0 })
+  useEffect(() => {
+    const node = ref && ref.current
+    if (!node || typeof window === 'undefined' || typeof node.getBoundingClientRect !== 'function') {
+      return undefined
+    }
+    const measure = () => {
+      const rect = node.getBoundingClientRect()
+      const width = Math.max(0, Math.round(rect.width))
+      const height = Math.max(0, Math.round(rect.height))
+      setSize((prev) => (prev.width === width && prev.height === height ? prev : { width, height }))
+    }
+    measure()
+    if (typeof window.ResizeObserver !== 'function') return undefined
+    const observer = new window.ResizeObserver(measure)
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [ref])
+  return size
+}
+
 /** Plot for a worker slot: a pure truncate + clamp lookup that returns a copy.
  *  Out-of-range legacy slots clamp to an authored plot instead of inventing an
  *  outer ring, because the backend already prevents new sessions above 12. */
@@ -5154,8 +5191,10 @@ function TownBulletinBoard({ assets, inProgressCount, totalTasksCount, onOpenBul
       'focus-visible:outline focus-visible:outline-2 focus-visible:outline-(--ui-accent)',
     ),
     style: {
-      left: '35%',
-      top: '58%',
+      // Stage pixels, converted from 35% / 58%; the authored civic re-placement
+      // into TOWN_BULLETIN_RECT belongs to the estate-ground task.
+      left: '420px',
+      top: '406px',
       transform: 'translate(-50%, -85%)',
       zIndex: 12,
     },
@@ -5488,57 +5527,145 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
     { id: 'pr', label: `PRs (${prCount})` },
   ]
 
+  // Trees and props keep their existing arrangement, converted 1:1 from the
+  // old percentage map into stage pixels (x% of 1200, y% of 700). The authored
+  // re-placement into garden zones is a later task; this one only unifies the
+  // coordinate system, so `top` is now also the depth key.
   const trees = [
-    { left: 4, top: 72, src: treeA, width: 82 },
-    { left: 95, top: 68, src: treeB, width: 76 },
-    { left: 3, top: 32, src: treeC, width: 58 },
-    { left: 95, top: 29, src: treeA, width: 70 },
-    { left: 20, top: 14, src: treeC, width: 50 },
-    { left: 80, top: 14, src: treeB, width: 56 },
-    { left: 44, top: 18, src: treeB, width: 62 },
-    { left: 57, top: 17, src: treeC, width: 52 },
-    { left: 19, top: 93, src: treeA, width: 68 },
-    { left: 82, top: 93, src: treeB, width: 64 },
+    { left: 48, top: 504, src: treeA, width: 82 },
+    { left: 1140, top: 476, src: treeB, width: 76 },
+    { left: 36, top: 224, src: treeC, width: 58 },
+    { left: 1140, top: 203, src: treeA, width: 70 },
+    { left: 240, top: 98, src: treeC, width: 50 },
+    { left: 960, top: 98, src: treeB, width: 56 },
+    { left: 528, top: 126, src: treeB, width: 62 },
+    { left: 684, top: 119, src: treeC, width: 52 },
+    { left: 228, top: 651, src: treeA, width: 68 },
+    { left: 984, top: 651, src: treeB, width: 64 },
   ].filter((tree) => tree.src)
 
   const decorations = [
-    { key: 'fountain', left: 50, top: 76, src: fountain, width: 84 },
-    { key: 'well', left: 63, top: 63, src: well, width: 42 },
-    { key: 'signpost', left: 37, top: 63, src: signpost, width: 28 },
-    { key: 'bench-l', left: 43, top: 76, src: bench, width: 38 },
-    { key: 'bench-r', left: 57, top: 76, src: bench, width: 38 },
-    { key: 'bench-park', left: 74, top: 73, src: bench, width: 36 },
-    { key: 'bridge-sw', left: 24, top: 74, src: bridge, width: 56 },
-    { key: 'lamp-nw', left: 39, top: 48, src: lamp, width: 22, glow: anyRunning || isDark },
-    { key: 'lamp-ne', left: 61, top: 48, src: lamp, width: 22, glow: anyRunning || isDark },
-    { key: 'lamp-sw', left: 36, top: 68, src: lamp, width: 22, glow: anyRunning || isDark },
-    { key: 'lamp-se', left: 64, top: 68, src: lamp, width: 22, glow: anyRunning || isDark },
-    { key: 'bush-nw', left: 16, top: 32, src: bush, width: 44 },
-    { key: 'bush-ne', left: 84, top: 32, src: bush, width: 44 },
-    { key: 'bush-sw', left: 16, top: 66, src: bush, width: 44 },
-    { key: 'bush-se', left: 84, top: 66, src: bush, width: 44 },
-    { key: 'flowers-1', left: 34, top: 36, src: flowers, width: 32 },
-    { key: 'flowers-2', left: 66, top: 36, src: flowers, width: 32 },
-    { key: 'flowers-3', left: 40, top: 84, src: flowers, width: 32 },
-    { key: 'flowers-4', left: 60, top: 84, src: flowers, width: 32 },
-    { key: 'rock-l', left: 6, top: 89, src: rock, width: 25 },
-    { key: 'rock-r', left: 93, top: 88, src: rock, width: 25 },
+    { key: 'fountain', left: 600, top: 532, src: fountain, width: 84 },
+    { key: 'well', left: 756, top: 441, src: well, width: 42 },
+    { key: 'signpost', left: 444, top: 441, src: signpost, width: 28 },
+    { key: 'bench-l', left: 516, top: 532, src: bench, width: 38 },
+    { key: 'bench-r', left: 684, top: 532, src: bench, width: 38 },
+    { key: 'bench-park', left: 888, top: 511, src: bench, width: 36 },
+    { key: 'bridge-sw', left: 288, top: 518, src: bridge, width: 56 },
+    { key: 'lamp-nw', left: 468, top: 336, src: lamp, width: 22, glow: anyRunning || isDark },
+    { key: 'lamp-ne', left: 732, top: 336, src: lamp, width: 22, glow: anyRunning || isDark },
+    { key: 'lamp-sw', left: 432, top: 476, src: lamp, width: 22, glow: anyRunning || isDark },
+    { key: 'lamp-se', left: 768, top: 476, src: lamp, width: 22, glow: anyRunning || isDark },
+    { key: 'bush-nw', left: 192, top: 224, src: bush, width: 44 },
+    { key: 'bush-ne', left: 1008, top: 224, src: bush, width: 44 },
+    { key: 'bush-sw', left: 192, top: 462, src: bush, width: 44 },
+    { key: 'bush-se', left: 1008, top: 462, src: bush, width: 44 },
+    { key: 'flowers-1', left: 408, top: 252, src: flowers, width: 32 },
+    { key: 'flowers-2', left: 792, top: 252, src: flowers, width: 32 },
+    { key: 'flowers-3', left: 480, top: 588, src: flowers, width: 32 },
+    { key: 'flowers-4', left: 720, top: 588, src: flowers, width: 32 },
+    { key: 'rock-l', left: 72, top: 623, src: rock, width: 25 },
+    { key: 'rock-r', left: 1116, top: 616, src: rock, width: 25 },
   ].filter((item) => item.src)
 
   const petMap = pets || {}
   const routerPet = petMap[town.avatar_slug] || null
 
+  // The estate is one fixed canvas scaled into the pane. Measure the viewport
+  // (not the stage): its box is what has to scroll when the estate is larger.
+  // The 1px frame border is not usable space, so subtract it before fitting -
+  // otherwise an exactly-fitted estate shows a 2px scrollbar.
+  const STAGE_VIEWPORT_BORDER = 2
+  const viewportRef = useRef(null)
+  const viewport = useElementSize(viewportRef)
+  const stageScale = townStageScale(
+    viewport.width ? viewport.width - STAGE_VIEWPORT_BORDER : TOWN_STAGE.width,
+    viewport.height ? viewport.height - STAGE_VIEWPORT_BORDER : TOWN_STAGE.height,
+  )
+  const stageWidth = Math.round(TOWN_STAGE.width * stageScale)
+  const stageHeight = Math.round(TOWN_STAGE.height * stageScale)
+  // Centre each axis only when that axis fits. An axis that has to scroll
+  // keeps a zero margin, so the top-left corner is never pushed out of reach.
+  const fitsWidth = viewport.width - STAGE_VIEWPORT_BORDER >= stageWidth
+  const fitsHeight = viewport.height - STAGE_VIEWPORT_BORDER >= stageHeight
+
   return jsxs('div', {
     className: 'superagent-pixel relative isolate z-0 flex min-h-0 flex-1 flex-col gap-2',
     style: { isolation: 'isolate', zIndex: 0 },
     children: [
+      // Static HUD row: outside the scroll area so it never covers the north
+      // row of houses and never scrolls away with the terrain.
       jsxs('div', {
-        key: 'scene',
+        key: 'hud',
+        'data-town-hud': '1',
+        className: 'flex shrink-0 flex-wrap items-center justify-between gap-1.5 px-0.5',
+        style: { zIndex: 24 },
+        children: [
+          jsxs('div', {
+            key: 'filters',
+            role: 'group',
+            'aria-label': 'Filter town workers',
+            className: cn('inline-flex flex-wrap items-center gap-0.5 rounded-md border',
+              'border-(--ui-stroke-secondary) bg-background/90 p-0.5 shadow-sm backdrop-blur-xs'),
+            children: filterOptions.map((option) => {
+              const active = filter === option.id
+              return jsx('button', {
+                key: option.id,
+                type: 'button',
+                'aria-pressed': active,
+                onClick: () => setFilter(option.id),
+                className: cn(
+                  'rounded px-1.5 py-0.5 text-[0.625rem] leading-tight transition-colors',
+                  active
+                    ? 'bg-primary font-medium text-primary-foreground'
+                    : 'text-(--ui-text-secondary) hover:bg-(--chrome-action-hover)',
+                ),
+                children: option.label,
+              })
+            }),
+          }),
+          jsxs('div', {
+            key: 'right',
+            className: 'inline-flex items-center gap-1.5',
+            children: [
+              jsx('span', {
+                key: 'clock',
+                'data-town-clock': townTime.phase,
+                title: `Town time follows this device (${townTime.phase})`,
+                className: cn('superagent-town-clock superagent-pixel-panel inline-flex items-center gap-1 rounded-md border',
+                  'border-(--ui-stroke-secondary) bg-background/90 px-2 py-0.5',
+                  'text-[0.625rem] leading-tight text-(--ui-text-secondary) shadow-sm'),
+                children: `${townTime.phase === 'night' ? '🌙' : (townTime.phase === 'day' ? '☀️' : '🌤️')} ${townTime.label}`,
+              }),
+              jsx('button', {
+                key: 'pause',
+                type: 'button',
+                'aria-pressed': paused,
+                'aria-label': paused ? 'Resume character movement' : 'Pause character movement',
+                title: paused ? 'Resume autonomous character walking' : 'Pause autonomous character walking',
+                onClick: () => setPaused((prev) => !prev),
+                className: cn(
+                  'rounded-md border border-(--ui-stroke-secondary) bg-background/90',
+                  'px-2 py-0.5 text-[0.625rem] leading-tight text-(--ui-text-secondary) shadow-sm',
+                  'hover:bg-(--chrome-action-hover)',
+                ),
+                children: paused ? '▶ Walk' : '⏸ Pause',
+              }),
+            ],
+          }),
+        ],
+      }),
+      // Scene viewport: the only scroll container. The slot keeps the scaled
+      // footprint so the whole estate is reachable, and margin auto centres it
+      // only when it fits (never a negative offset that clips the top-left).
+      jsx('div', {
+        key: 'viewport',
+        ref: viewportRef,
         role: 'group',
         'aria-label': `${sessionTitle(town)} — town`,
         'data-town-workers': workers.length,
         'data-town-road-network': 'cobblestone',
-        className: cn('relative isolate z-0 min-h-[390px] flex-1 overflow-hidden rounded-lg border',
+        className: cn('superagent-pixel-scroll relative isolate z-0 flex min-h-[390px] flex-1 overflow-auto rounded-lg border',
           'border-(--ui-stroke-secondary)'),
         style: grass
           ? {
@@ -5550,314 +5677,283 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
               imageRendering: 'pixelated',
             }
           : { isolation: 'isolate', zIndex: 0 },
-        children: [
-          // Meadow pond, in its authored southwest rect. It sits at x=70..210,
-          // clear of the west lane (x=240) and every parcel, so no house can
-          // stand in water. Task 5 replaces this ellipse with an SVG bank.
-          water
-            ? jsx('div', {
-                key: 'water-pond',
-                'aria-hidden': 'true',
-                'data-town-landmark': 'stream',
-                className: 'pointer-events-none absolute z-0 rounded-full opacity-90',
-                style: {
-                  left: '70px', top: '510px', width: '140px', height: '90px',
-                  backgroundImage: `url("${water}")`,
-                  backgroundSize: '48px 48px',
-                  backgroundRepeat: 'repeat',
-                  imageRendering: 'pixelated',
-                  boxShadow: 'inset 0 0 8px rgba(20,55,90,0.45)',
-                },
-              })
-            : null,
-          // Cobblestone road network connecting every plot to the Central Plaza
-          jsx('div', {
-            key: 'road-west-ave', 'aria-hidden': 'true',
-            className: 'pointer-events-none absolute z-[1] opacity-90',
+        children: jsx('div', {
+          key: 'stage-slot',
+          className: 'relative',
+          style: {
+            width: `${stageWidth}px`,
+            height: `${stageHeight}px`,
+            flex: '0 0 auto',
+            margin: `${fitsHeight ? 'auto' : 0} ${fitsWidth ? 'auto' : 0}`,
+          },
+          children: jsx('div', {
+            key: 'stage',
+            'data-town-stage': `${TOWN_STAGE.width}x${TOWN_STAGE.height}`,
+            'aria-label': 'Estate stage',
+            className: 'absolute left-0 top-0 isolate overflow-hidden',
             style: {
-              left: '20%', top: '51%', width: '24px', height: '70%',
-              transform: 'translate(-50%, -50%)',
-              backgroundImage: roadV ? `url("${roadV}")` : undefined,
-              backgroundColor: roadV ? undefined : 'rgba(145,132,114,0.65)',
-              backgroundSize: '24px 48px',
-              backgroundRepeat: 'repeat-y',
-              imageRendering: 'pixelated',
-            },
-          }),
-          jsx('div', {
-            key: 'road-east-ave', 'aria-hidden': 'true',
-            className: 'pointer-events-none absolute z-[1] opacity-90',
-            style: {
-              left: '80%', top: '51%', width: '24px', height: '70%',
-              transform: 'translate(-50%, -50%)',
-              backgroundImage: roadV ? `url("${roadV}")` : undefined,
-              backgroundColor: roadV ? undefined : 'rgba(145,132,114,0.65)',
-              backgroundSize: '24px 48px',
-              backgroundRepeat: 'repeat-y',
-              imageRendering: 'pixelated',
-            },
-          }),
-          jsx('div', {
-            key: 'road-north-st', 'aria-hidden': 'true',
-            className: 'pointer-events-none absolute z-[1] opacity-90',
-            style: {
-              left: '50%', top: '24%', width: '82%', height: '22px',
-              transform: 'translate(-50%, -50%)',
-              backgroundImage: roadH ? `url("${roadH}")` : undefined,
-              backgroundColor: roadH ? undefined : 'rgba(145,132,114,0.65)',
-              backgroundSize: '48px 22px',
-              backgroundRepeat: 'repeat-x',
-              imageRendering: 'pixelated',
-            },
-          }),
-          jsx('div', {
-            key: 'road-main-st', 'aria-hidden': 'true',
-            className: 'pointer-events-none absolute z-[1] opacity-95',
-            style: {
-              left: '50%', top: '55%', width: '84%', height: '26px',
-              transform: 'translate(-50%, -50%)',
-              backgroundImage: roadH ? `url("${roadH}")` : undefined,
-              backgroundColor: roadH ? undefined : 'rgba(145,132,114,0.75)',
-              backgroundSize: '48px 26px',
-              backgroundRepeat: 'repeat-x',
-              imageRendering: 'pixelated',
-            },
-          }),
-          jsx('div', {
-            key: 'road-south-st', 'aria-hidden': 'true',
-            className: 'pointer-events-none absolute z-[1] opacity-90',
-            style: {
-              left: '50%', top: '84%', width: '82%', height: '22px',
-              transform: 'translate(-50%, -50%)',
-              backgroundImage: roadH ? `url("${roadH}")` : undefined,
-              backgroundColor: roadH ? undefined : 'rgba(145,132,114,0.65)',
-              backgroundSize: '48px 22px',
-              backgroundRepeat: 'repeat-x',
-              imageRendering: 'pixelated',
-            },
-          }),
-          jsx('div', {
-            key: 'road-center-promenade', 'aria-hidden': 'true',
-            className: 'pointer-events-none absolute z-[1] opacity-95',
-            style: {
-              left: '50%', top: '54%', width: '28px', height: '62%',
-              transform: 'translate(-50%, -50%)',
-              backgroundImage: roadV ? `url("${roadV}")` : undefined,
-              backgroundColor: roadV ? undefined : 'rgba(145,132,114,0.75)',
-              backgroundSize: '28px 48px',
-              backgroundRepeat: 'repeat-y',
-              imageRendering: 'pixelated',
-            },
-          }),
-          // Paved Central Town Square around Router Hall & Fountain
-          jsx('div', {
-            key: 'plaza', 'aria-hidden': 'true',
-            'data-town-landmark': 'plaza',
-            className: 'pointer-events-none absolute z-[2] rounded-2xl border border-black/15 shadow-inner',
-            style: {
-              left: '50%', top: '63%', width: '32%', height: '34%',
-              transform: 'translate(-50%, -50%)',
-              backgroundImage: plazaStone ? `url("${plazaStone}")` : undefined,
-              backgroundColor: plazaStone ? undefined : 'rgba(165,148,126,0.7)',
-              backgroundSize: '48px 48px',
+              width: `${TOWN_STAGE.width}px`,
+              height: `${TOWN_STAGE.height}px`,
+              transform: `scale(${stageScale})`,
+              transformOrigin: '0 0',
+              isolation: 'isolate',
+              zIndex: 0,
+              backgroundImage: grass ? `url("${grass}")` : undefined,
+              backgroundSize: '128px 64px',
               backgroundRepeat: 'repeat',
               imageRendering: 'pixelated',
             },
-          }),
-          // Device-clock sky tint. Sits above roads/plaza (z-2) but below
-          // houses (z-4+) and actors, so it tints the ground, not the UI.
-          jsx('div', {
-            key: 'sky',
-            'aria-hidden': 'true',
-            'data-town-time': townTime.phase,
-            title: `Town time ${townTime.label} (${townTime.phase})`,
-            className: 'superagent-town-sky pointer-events-none absolute inset-0 z-[3]',
-            style: { backgroundColor: townTimeOverlay(townTime.phase) },
-          }),
-          // Router ↔ Worker visual connection paths
-          workers.length > 0
-            ? jsx('svg', {
-                key: 'connections',
-                'aria-hidden': 'true',
-                'data-town-connections': '1',
-                viewBox: '0 0 1200 700',
-                preserveAspectRatio: 'none',
-                className: 'pointer-events-none absolute inset-0 z-[2] h-full w-full',
-                children: workers.map((worker) => {
-                  const pos = townHousePosition(worker.town_slot)
-                  const active = worker.status === 'running' || worker.status === 'queued'
-                  const matches = matchesTownFilter(worker, filter, false)
-                  return jsx('line', {
-                    key: `link:${worker.id}`,
-                    x1: '600',
-                    y1: '329',
-                    x2: String(pos.left),
-                    y2: String(pos.top),
-                    stroke: active ? 'rgba(255, 208, 92, 0.85)' : 'rgba(255, 255, 255, 0.25)',
-                    strokeWidth: active ? '5.4' : '3.4',
-                    strokeDasharray: active ? '14 10' : '11 13',
-                    opacity: matches ? '1' : '0.25',
-                  })
-                }),
-              })
-            : null,
-          ...decorations.map((item) => jsx('img', {
-            key: `deco:${item.key}`,
-            src: item.src,
-            alt: '',
-            'aria-hidden': 'true',
-            draggable: false,
-            className: 'pointer-events-none absolute -translate-x-1/2 -translate-y-full opacity-95',
-            style: {
-              left: `${item.left}%`, top: `${item.top}%`,
-              width: item.width, height: 'auto', imageRendering: 'pixelated',
-              zIndex: Math.max(3, Math.min(22, Math.round(item.top / 5))),
-              filter: item.glow ? (isDark ? 'drop-shadow(0 0 8px rgba(255,214,102,0.95)) drop-shadow(0 0 2px rgba(255,240,180,0.9))' : 'drop-shadow(0 0 6px rgba(255,214,102,0.85))') : undefined,
-            },
-          })),
-          ...trees.map((tree, index) => jsx('img', {
-            key: `tree:${index}`,
-            src: tree.src,
-            alt: '',
-            'aria-hidden': 'true',
-            draggable: false,
-            className: 'pointer-events-none absolute -translate-x-1/2 -translate-y-full opacity-95',
-            style: {
-              left: `${tree.left}%`, top: `${tree.top}%`,
-              width: tree.width, height: 'auto', imageRendering: 'pixelated',
-              zIndex: Math.max(3, Math.min(22, Math.round(tree.top / 5))),
-            },
-          })),
-          jsx(TownBulletinBoard, {
-            key: 'bulletin-board',
-            assets,
-            inProgressCount,
-            totalTasksCount,
-            onOpenBulletin: () => setBulletinOpen(true),
-          }),
-          jsx(TownHouse, {
-            key: town.id,
-            session: town,
-            isRouter: true,
-            slot: 0,
-            onOpen,
-            houseRef: registerHouse(town.id),
-            building: false,
-            reducedMotion,
-            assets,
-            pet: routerPet,
-            dimmed: false,
-          }),
-          ...workers.map((worker) => jsx(TownHouse, {
-            key: worker.id,
-            session: worker,
-            isRouter: false,
-            slot: worker.town_slot,
-            onOpen,
-            houseRef: registerHouse(worker.id),
-            building: !!(buildingIds && buildingIds[worker.id]),
-            reducedMotion,
-            assets,
-            pet: petMap[worker.avatar_slug] || null,
-            dimmed: !matchesTownFilter(worker, filter, false),
-          })),
-          jsx(TownActor, {
-            key: `actor:${town.id}`,
-            session: town,
-            isRouter: true,
-            actorState: actorMap[town.id],
-            pet: routerPet,
-            personArt,
-            reducedMotion: reducedMotion || paused,
-            dimmed: false,
-            onOpen,
-          }),
-          ...workers.map((worker) => jsx(TownActor, {
-            key: `actor:${worker.id}`,
-            session: worker,
-            isRouter: false,
-            actorState: actorMap[worker.id],
-            pet: petMap[worker.avatar_slug] || null,
-            personArt,
-            reducedMotion: reducedMotion || paused,
-            dimmed: !matchesTownFilter(worker, filter, false),
-            onOpen,
-          })),
-          // Compact Town HUD overlay (stayed strictly inside TownScene's isolated z-0 stacking context)
-          jsxs('div', {
-            key: 'hud',
-            'data-town-hud': '1',
-            className: 'pointer-events-none absolute inset-x-2.5 top-2 z-20 flex flex-wrap items-center justify-between gap-1.5',
-            style: { zIndex: 24 },
             children: [
-              jsxs('div', {
-                key: 'filters',
-                role: 'group',
-                'aria-label': 'Filter town workers',
-                className: cn('pointer-events-auto inline-flex flex-wrap items-center gap-0.5 rounded-md border',
-                  'border-(--ui-stroke-secondary) bg-background/90 p-0.5 shadow-sm backdrop-blur-xs'),
-                children: filterOptions.map((option) => {
-                  const active = filter === option.id
-                  return jsx('button', {
-                    key: option.id,
-                    type: 'button',
-                    'aria-pressed': active,
-                    onClick: () => setFilter(option.id),
-                    className: cn(
-                      'rounded px-1.5 py-0.5 text-[0.625rem] leading-tight transition-colors',
-                      active
-                        ? 'bg-primary font-medium text-primary-foreground'
-                        : 'text-(--ui-text-secondary) hover:bg-(--chrome-action-hover)',
-                    ),
-                    children: option.label,
+              // Meadow pond, in its authored southwest rect. It sits at x=70..210,
+              // clear of the west lane (x=240) and every parcel, so no house can
+              // stand in water. Task 5 replaces this ellipse with an SVG bank.
+              water
+                ? jsx('div', {
+                    key: 'water-pond',
+                    'aria-hidden': 'true',
+                    'data-town-landmark': 'stream',
+                    className: 'pointer-events-none absolute z-0 rounded-full opacity-90',
+                    style: {
+                      left: '70px', top: '510px', width: '140px', height: '90px',
+                      backgroundImage: `url("${water}")`,
+                      backgroundSize: '48px 48px',
+                      backgroundRepeat: 'repeat',
+                      imageRendering: 'pixelated',
+                      boxShadow: 'inset 0 0 8px rgba(20,55,90,0.45)',
+                    },
                   })
-                }),
+                : null,
+              // Cobblestone road network connecting every plot to the Central Plaza
+              jsx('div', {
+                key: 'road-west-ave', 'aria-hidden': 'true',
+                className: 'pointer-events-none absolute z-[1] opacity-90',
+                style: {
+                  left: '240px', top: '357px', width: '24px', height: '490px',
+                  transform: 'translate(-50%, -50%)',
+                  backgroundImage: roadV ? `url("${roadV}")` : undefined,
+                  backgroundColor: roadV ? undefined : 'rgba(145,132,114,0.65)',
+                  backgroundSize: '24px 48px',
+                  backgroundRepeat: 'repeat-y',
+                  imageRendering: 'pixelated',
+                },
               }),
-              jsxs('div', {
-                key: 'right',
-                className: 'pointer-events-auto inline-flex items-center gap-1.5',
-                children: [
-                  jsx('span', {
-                    key: 'clock',
-                    'data-town-clock': townTime.phase,
-                    title: `Town time follows this device (${townTime.phase})`,
-                    className: cn('superagent-town-clock superagent-pixel-panel inline-flex items-center gap-1 rounded-md border',
-                      'border-(--ui-stroke-secondary) bg-background/90 px-2 py-0.5',
-                      'text-[0.625rem] leading-tight text-(--ui-text-secondary) shadow-sm'),
-                    children: `${townTime.phase === 'night' ? '🌙' : (townTime.phase === 'day' ? '☀️' : '🌤️')} ${townTime.label}`,
-                  }),
-                  jsx('button', {
-                    key: 'pause',
-                    type: 'button',
-                    'aria-pressed': paused,
-                    'aria-label': paused ? 'Resume character movement' : 'Pause character movement',
-                    title: paused ? 'Resume autonomous character walking' : 'Pause autonomous character walking',
-                    onClick: () => setPaused((prev) => !prev),
-                    className: cn(
-                      'pointer-events-auto rounded-md border border-(--ui-stroke-secondary) bg-background/90',
-                      'px-2 py-0.5 text-[0.625rem] leading-tight text-(--ui-text-secondary) shadow-sm',
-                      'hover:bg-(--chrome-action-hover)',
-                    ),
-                    children: paused ? '▶ Walk' : '⏸ Pause',
-                  }),
-                ],
+              jsx('div', {
+                key: 'road-east-ave', 'aria-hidden': 'true',
+                className: 'pointer-events-none absolute z-[1] opacity-90',
+                style: {
+                  left: '960px', top: '357px', width: '24px', height: '490px',
+                  transform: 'translate(-50%, -50%)',
+                  backgroundImage: roadV ? `url("${roadV}")` : undefined,
+                  backgroundColor: roadV ? undefined : 'rgba(145,132,114,0.65)',
+                  backgroundSize: '24px 48px',
+                  backgroundRepeat: 'repeat-y',
+                  imageRendering: 'pixelated',
+                },
               }),
+              jsx('div', {
+                key: 'road-north-st', 'aria-hidden': 'true',
+                className: 'pointer-events-none absolute z-[1] opacity-90',
+                style: {
+                  left: '600px', top: '168px', width: '984px', height: '22px',
+                  transform: 'translate(-50%, -50%)',
+                  backgroundImage: roadH ? `url("${roadH}")` : undefined,
+                  backgroundColor: roadH ? undefined : 'rgba(145,132,114,0.65)',
+                  backgroundSize: '48px 22px',
+                  backgroundRepeat: 'repeat-x',
+                  imageRendering: 'pixelated',
+                },
+              }),
+              jsx('div', {
+                key: 'road-main-st', 'aria-hidden': 'true',
+                className: 'pointer-events-none absolute z-[1] opacity-95',
+                style: {
+                  left: '600px', top: '385px', width: '1008px', height: '26px',
+                  transform: 'translate(-50%, -50%)',
+                  backgroundImage: roadH ? `url("${roadH}")` : undefined,
+                  backgroundColor: roadH ? undefined : 'rgba(145,132,114,0.75)',
+                  backgroundSize: '48px 26px',
+                  backgroundRepeat: 'repeat-x',
+                  imageRendering: 'pixelated',
+                },
+              }),
+              jsx('div', {
+                key: 'road-south-st', 'aria-hidden': 'true',
+                className: 'pointer-events-none absolute z-[1] opacity-90',
+                style: {
+                  left: '600px', top: '588px', width: '984px', height: '22px',
+                  transform: 'translate(-50%, -50%)',
+                  backgroundImage: roadH ? `url("${roadH}")` : undefined,
+                  backgroundColor: roadH ? undefined : 'rgba(145,132,114,0.65)',
+                  backgroundSize: '48px 22px',
+                  backgroundRepeat: 'repeat-x',
+                  imageRendering: 'pixelated',
+                },
+              }),
+              jsx('div', {
+                key: 'road-center-promenade', 'aria-hidden': 'true',
+                className: 'pointer-events-none absolute z-[1] opacity-95',
+                style: {
+                  left: '600px', top: '378px', width: '28px', height: '434px',
+                  transform: 'translate(-50%, -50%)',
+                  backgroundImage: roadV ? `url("${roadV}")` : undefined,
+                  backgroundColor: roadV ? undefined : 'rgba(145,132,114,0.75)',
+                  backgroundSize: '28px 48px',
+                  backgroundRepeat: 'repeat-y',
+                  imageRendering: 'pixelated',
+                },
+              }),
+              // Paved Central Town Square around Router Hall & Fountain
+              jsx('div', {
+                key: 'plaza', 'aria-hidden': 'true',
+                'data-town-landmark': 'plaza',
+                className: 'pointer-events-none absolute z-[2] rounded-2xl border border-black/15 shadow-inner',
+                style: {
+                  left: '600px', top: '441px', width: '384px', height: '238px',
+                  transform: 'translate(-50%, -50%)',
+                  backgroundImage: plazaStone ? `url("${plazaStone}")` : undefined,
+                  backgroundColor: plazaStone ? undefined : 'rgba(165,148,126,0.7)',
+                  backgroundSize: '48px 48px',
+                  backgroundRepeat: 'repeat',
+                  imageRendering: 'pixelated',
+                },
+              }),
+              // Device-clock sky tint. Sits above roads/plaza (z-2) but below
+              // houses (z-4+) and actors, so it tints the ground, not the UI.
+              jsx('div', {
+                key: 'sky',
+                'aria-hidden': 'true',
+                'data-town-time': townTime.phase,
+                title: `Town time ${townTime.label} (${townTime.phase})`,
+                className: 'superagent-town-sky pointer-events-none absolute inset-0 z-[3]',
+                style: { backgroundColor: townTimeOverlay(townTime.phase) },
+              }),
+              // Router ↔ Worker visual connection paths
+              workers.length > 0
+                ? jsx('svg', {
+                    key: 'connections',
+                    'aria-hidden': 'true',
+                    'data-town-connections': '1',
+                    viewBox: '0 0 1200 700',
+                    preserveAspectRatio: 'none',
+                    className: 'pointer-events-none absolute inset-0 z-[2] h-full w-full',
+                    children: workers.map((worker) => {
+                      const pos = townHousePosition(worker.town_slot)
+                      const active = worker.status === 'running' || worker.status === 'queued'
+                      const matches = matchesTownFilter(worker, filter, false)
+                      return jsx('line', {
+                        key: `link:${worker.id}`,
+                        x1: '600',
+                        y1: '329',
+                        x2: String(pos.left),
+                        y2: String(pos.top),
+                        stroke: active ? 'rgba(255, 208, 92, 0.85)' : 'rgba(255, 255, 255, 0.25)',
+                        strokeWidth: active ? '5.4' : '3.4',
+                        strokeDasharray: active ? '14 10' : '11 13',
+                        opacity: matches ? '1' : '0.25',
+                      })
+                    }),
+                  })
+                : null,
+              ...decorations.map((item) => jsx('img', {
+                key: `deco:${item.key}`,
+                src: item.src,
+                alt: '',
+                'aria-hidden': 'true',
+                draggable: false,
+                className: 'pointer-events-none absolute -translate-x-1/2 -translate-y-full opacity-95',
+                style: {
+                  left: `${item.left}px`, top: `${item.top}px`,
+                  width: item.width, height: 'auto', imageRendering: 'pixelated',
+                  zIndex: townDepth(item.top),
+                  filter: item.glow ? (isDark ? 'drop-shadow(0 0 8px rgba(255,214,102,0.95)) drop-shadow(0 0 2px rgba(255,240,180,0.9))' : 'drop-shadow(0 0 6px rgba(255,214,102,0.85))') : undefined,
+                },
+              })),
+              ...trees.map((tree, index) => jsx('img', {
+                key: `tree:${index}`,
+                src: tree.src,
+                alt: '',
+                'aria-hidden': 'true',
+                draggable: false,
+                className: 'pointer-events-none absolute -translate-x-1/2 -translate-y-full opacity-95',
+                style: {
+                  left: `${tree.left}px`, top: `${tree.top}px`,
+                  width: tree.width, height: 'auto', imageRendering: 'pixelated',
+                  zIndex: townDepth(tree.top),
+                },
+              })),
+              jsx(TownBulletinBoard, {
+                key: 'bulletin-board',
+                assets,
+                inProgressCount,
+                totalTasksCount,
+                onOpenBulletin: () => setBulletinOpen(true),
+              }),
+              jsx(TownHouse, {
+                key: town.id,
+                session: town,
+                isRouter: true,
+                slot: 0,
+                onOpen,
+                houseRef: registerHouse(town.id),
+                building: false,
+                reducedMotion,
+                assets,
+                pet: routerPet,
+                dimmed: false,
+              }),
+              ...workers.map((worker) => jsx(TownHouse, {
+                key: worker.id,
+                session: worker,
+                isRouter: false,
+                slot: worker.town_slot,
+                onOpen,
+                houseRef: registerHouse(worker.id),
+                building: !!(buildingIds && buildingIds[worker.id]),
+                reducedMotion,
+                assets,
+                pet: petMap[worker.avatar_slug] || null,
+                dimmed: !matchesTownFilter(worker, filter, false),
+              })),
+              jsx(TownActor, {
+                key: `actor:${town.id}`,
+                session: town,
+                isRouter: true,
+                actorState: actorMap[town.id],
+                pet: routerPet,
+                personArt,
+                reducedMotion: reducedMotion || paused,
+                dimmed: false,
+                onOpen,
+              }),
+              ...workers.map((worker) => jsx(TownActor, {
+                key: `actor:${worker.id}`,
+                session: worker,
+                isRouter: false,
+                actorState: actorMap[worker.id],
+                pet: petMap[worker.avatar_slug] || null,
+                personArt,
+                reducedMotion: reducedMotion || paused,
+                dimmed: !matchesTownFilter(worker, filter, false),
+                onOpen,
+              })),
             ],
           }),
-          bulletinOpen
-            ? jsx(TownBulletinModal, {
-                key: 'bulletin-modal',
-                town,
-                pets: petMap,
-                onClose: () => setBulletinOpen(false),
-                onSelectTask: (id) => {
-                  setBulletinOpen(false)
-                  onOpen(id)
-                },
-              })
-            : null,
-        ],
+        }),
       }),
+      // The bulletin dialog is a full-pane overlay, so it lives outside the
+      // scaled stage; inside it would inherit the scale and be clipped.
+      bulletinOpen
+        ? jsx(TownBulletinModal, {
+            key: 'bulletin-modal',
+            town,
+            pets: petMap,
+            onClose: () => setBulletinOpen(false),
+            onSelectTask: (id) => {
+              setBulletinOpen(false)
+              onOpen(id)
+            },
+          })
+        : null,
       jsx('p', {
         key: 'status',
         role: 'status',
@@ -7554,7 +7650,7 @@ export {
   TOWN_BENCH_WEST_RECT, TOWN_BENCH_EAST_RECT,
   TOWN_LAMP_NW_RECT, TOWN_LAMP_NE_RECT, TOWN_LAMP_SW_RECT, TOWN_LAMP_SE_RECT,
   TOWN_POND_RECT, TOWN_RESERVED_RECTS,
-  rectsOverlap, townPlotRect, townDepth,
+  rectsOverlap, townPlotRect, townDepth, townStageScale,
 }
 
 export default {

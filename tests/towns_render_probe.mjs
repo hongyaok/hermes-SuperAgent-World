@@ -131,7 +131,7 @@ function render(node) {
     'data-town-picker', 'data-town-option', 'data-town-id',
     'data-town-house', 'data-town-actor', 'data-town-speech',
     'data-petdex-slug', 'data-petdex-state', 'data-town-road-network',
-    'data-town-landmark', 'data-town-hud', 'data-town-connections',
+    'data-town-stage', 'data-town-landmark', 'data-town-hud', 'data-town-connections',
     'data-town-time', 'data-town-clock',
     'data-town-bulletin', 'data-town-bulletin-modal', 'data-town-bulletin-task',
     'data-transcript-scroll',
@@ -151,12 +151,32 @@ function render(node) {
   // percentages is visible to the assertions below.
   if (props.style && props.style.left) bits.push(`left:${props.style.left}`)
   if (props.style && props.style.top) bits.push(`top:${props.style.top}`)
+  if (props.style && props.style.transform) bits.push(`transform:${props.style.transform}`)
   const children = props.children
   if (children != null) bits.push(Array.isArray(children) ? children.map(render).join(' ') : render(children))
   return bits.join(' ')
 }
 
 const h = (type, props) => ({ type, props: props || {} })
+
+/** First rendered element carrying `key === value`, expanding function
+ *  components the same way render() does. Lets the probe prove containment
+ *  (the HUD is outside the scaled stage), not just string presence. */
+function findElement(node, key, value) {
+  if (node == null || typeof node !== 'object') return null
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const hit = findElement(child, key, value)
+      if (hit) return hit
+    }
+    return null
+  }
+  if (typeof node.type === 'function') return findElement(node.type(node.props || {}), key, value)
+  if (!node.type) return null
+  const props = node.props || {}
+  if (props[key] === value) return node
+  return findElement(props.children, key, value)
+}
 
 const pets = {
   'hermes-kody': {
@@ -184,7 +204,7 @@ root.avatar_slug = 'hermes-kody'
 workerOne.avatar_slug = 'coding-cat-pet'
 workerOne.recent_events = [{ kind: 'tool', detail: 'pytest -q' }]
 
-const scene = render(h(plugin.TownScene, {
+const sceneNode = h(plugin.TownScene, {
   town: root,
   assets: {
     ...assets,
@@ -198,7 +218,8 @@ const scene = render(h(plugin.TownScene, {
   onOpen: () => undefined,
   registerHouse: () => () => undefined,
   reducedMotion: false,
-}))
+})
+const scene = render(sceneNode)
 assert.match(scene, /Router house S-0001/)
 assert.match(scene, /Worker house S-0002/)
 assert.match(scene, /Worker house S-0003/)
@@ -230,6 +251,42 @@ assert.match(scene, /isolation:isolate z-index:0/)
 for (const match of scene.matchAll(/z-index:(\d+)/g)) {
   assert.ok(Number(match[1]) <= 25, `TownScene internal z-index ${match[1]} must stay <= 25`)
 }
+
+// -- responsive stage ------------------------------------------------------
+// One 1200x700 logical canvas, scaled to fit but clamped at both ends: the
+// floor keeps labels readable (the viewport scrolls instead) and the ceiling
+// stops a wide monitor from spreading the estate out again.
+assert.equal(plugin.townStageScale(992, 460), 0.8)
+assert.equal(plugin.townStageScale(2000, 1000), 1.25)
+assert.equal(plugin.townStageScale(1200, 700), 1)
+assert.ok(Math.abs(plugin.townStageScale(1586, 871) - 871 / 700) < 1e-9)
+assert.equal(plugin.townStageScale(0, 0), 0.8)
+assert.equal(plugin.townStageScale(null, undefined), 0.8)
+assert.equal(plugin.townStageScale('nonsense', {}), 0.8)
+assert.ok(Number.isFinite(plugin.townStageScale(Number.NaN, Number.POSITIVE_INFINITY)))
+
+// The stage carries the logical size; the HUD must stay outside it, or the
+// scale transform would enlarge the filter row and scrolling would drag it
+// off screen with the terrain.
+const stageNode = findElement(sceneNode, 'data-town-stage', '1200x700')
+assert.ok(stageNode, 'the scene renders a 1200x700 logical stage')
+assert.equal((scene.match(/data-town-stage=/g) || []).length, 1)
+const stageTree = render(stageNode)
+assert.match(stageTree, /transform:scale\(/)
+assert.doesNotMatch(stageTree, /data-town-hud="1"/, 'the HUD must not be inside the scaled stage')
+assert.doesNotMatch(stageTree, /role="status"/, 'the status line must not be inside the scaled stage')
+assert.equal((scene.match(/data-town-hud="1"/g) || []).length, 1)
+assert.match(scene, /data-town-hud="1"/)
+assert.match(scene, /overflow-auto/)
+// Entities inside the stage: houses/actors on their plots and the ground
+// layers converted to the same stage-pixel system.
+assert.match(stageTree, /data-town-house="S-0002"/)
+assert.match(stageTree, /data-town-actor="S-0002"/)
+assert.match(stageTree, /data-town-landmark="stream"/)
+assert.match(stageTree, /left:70px top:510px/, 'the pond uses its authored stage rect')
+assert.match(stageTree, /left:600px top:441px/, 'the plaza is anchored in stage pixels')
+assert.match(stageTree, /left:240px top:357px/, 'the west lane is anchored in stage pixels')
+assert.doesNotMatch(stageTree, /left:24%/, 'the old percentage pond position is gone')
 
 const quiet = render(h(plugin.TownScene, {
   town: root,
