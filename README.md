@@ -344,7 +344,7 @@ and `/chats`, so the scene cannot invent activity that has no session row.
   refresh does not replay every build. `prefers-reduced-motion` skips the
   animation and its timer.
 - **Pixel chrome (font, scrollbars, windows)** — the town canvas, HUD clock, speech bubbles and house dialogs use a system pixel-font stack (`VT323`, `Px437 IBM VGA`, `IBM Plex Mono`, monospace fallback — no remote fetch) plus stepped 2px `superagent-pixel-panel` borders and retro `superagent-pixel-scroll` scrollbars (gold thumb on dark track, `scrollbar-color` + `::-webkit-scrollbar`). Bubbles keep their tone borders; dialogs keep host colours.
-- **Town switcher** — a compact select, previous/next buttons, **🎲 Reroll sprites** (`POST /town/pets/reroll`), **↻ Retry failed (N)** (`POST /towns/{root_id}/retry-failed`, shown when any worker in the town failed or was cancelled), **New town** and
+- **Town switcher** — a compact town picker (`data-town-picker="1"`: a button showing the current town and status, opening a themed `Towns (N)` popover panel — `bg-background`, `border-(--ui-stroke-secondary)`, `max-h-72`, `superagent-pixel-scroll` — with one 28px row per town showing its truncated title, status and worker count, the selected row highlighted; roots only, so a worker session can never appear as an option), previous/next buttons, **🎲 Reroll sprites** (`POST /town/pets/reroll`), **↻ Retry failed (N)** (`POST /towns/{root_id}/retry-failed`, shown when any worker in the town failed or was cancelled), **New town** and
   **Sessions**. Switching changes only what is displayed: no session is
   stopped, archived or modified. Arrow-left/right do the same from the page
   when focus is not in a field; the selected town id is persisted.

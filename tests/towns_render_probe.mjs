@@ -127,14 +127,16 @@ function render(node) {
   const props = node.props || {}
   const bits = []
   for (const key of [
-    'aria-label', 'data-town-house', 'data-town-actor', 'data-town-speech',
+    'aria-label', 'aria-haspopup', 'aria-expanded', 'role',
+    'data-town-picker', 'data-town-option', 'data-town-id',
+    'data-town-house', 'data-town-actor', 'data-town-speech',
     'data-petdex-slug', 'data-petdex-state', 'data-town-road-network',
     'data-town-landmark', 'data-town-hud', 'data-town-connections',
     'data-town-time', 'data-town-clock',
     'data-town-bulletin', 'data-town-bulletin-modal', 'data-town-bulletin-task',
     'data-transcript-scroll',
     'data-create-pr-box', 'data-town-dialog',
-    'data-drawer', 'id', 'role',
+    'data-drawer', 'id',
   ]) {
     if (props[key] != null) bits.push(`${key}="${props[key]}"`)
   }
@@ -269,6 +271,77 @@ assert.match(switcher, /Reroll sprites/)
 assert.match(switcher, /Retry failed \(2\)/)
 assert.match(switcher, /2\/12 plots/)
 assert.match(switcher, /Sessions/)
+
+// The native <select> painted a white OS popup that hid the option text, so
+// the picker is a button + themed panel now. The trigger carries the ARIA menu
+// wiring; the rows live in TownPickerList (rendered here directly, because a
+// closed popover has nothing to walk).
+assert.match(switcher, /data-town-picker="1"/)
+assert.match(switcher, /aria-label="Select town"/)
+assert.match(switcher, /aria-haspopup="menu"/)
+assert.match(switcher, /aria-expanded="false"/)
+assert.match(switcher, /Build the town · review/)
+// Closed popover: no rows until it opens, and definitely no worker rows.
+assert.doesNotMatch(switcher, /data-town-option/)
+
+// Only roots are towns: townChoices drops a worker row and never reads
+// town.workers, so a leaked session list cannot become nine picker entries.
+assert.deepEqual(plugin.townChoices([root, workerOne]).map((town) => town.id), ['S-0001'])
+assert.deepEqual(plugin.townChoices(null), [])
+const taintedTown = { ...root, id: 'S-0009', workers: [workerOne, workerTwo] }
+assert.deepEqual(
+  plugin.townChoices([taintedTown, workerTwo]).map((town) => town.id),
+  ['S-0009'],
+)
+
+const picker = render(h(plugin.TownPickerList, {
+  towns: [root, workerOne],
+  value: root.id,
+  onSelect: () => undefined,
+}))
+assert.match(picker, /Towns \(1\)/)
+assert.match(picker, /data-town-option="1"/)
+assert.match(picker, /data-town-id="S-0001"/)
+assert.match(picker, /2 workers/)
+assert.doesNotMatch(picker, /data-town-id="S-0002"/)
+assert.doesNotMatch(picker, /Fix the parser/)
+
+const emptyPicker = render(h(plugin.TownPickerList, {
+  towns: [],
+  value: '',
+  onSelect: () => undefined,
+}))
+assert.match(emptyPicker, /Towns \(0\)/)
+assert.match(emptyPicker, /No towns/)
+
+// Fallback panel chrome: themed surface, explicit border and a height cap so
+// the list can never paint light text on an unstyled white box.
+const popover = render(h(plugin.TownPickerPopover, {
+  towns: [root, workerOne],
+  value: root.id,
+  onSelect: () => undefined,
+}))
+assert.match(popover, /bg-background/)
+assert.match(popover, /border-\(--ui-stroke-secondary\)/)
+assert.match(popover, /max-h-72/)
+assert.match(popover, /min-h-7/)
+assert.match(popover, /data-town-id="S-0001"/)
+assert.doesNotMatch(popover, /data-town-id="S-0002"/)
+
+// A worker id as the selected value must not become a town label.
+const workerSelected = render(h(plugin.TownSwitcher, {
+  towns: [root, workerOne],
+  value: workerOne.id,
+  onChange: () => undefined,
+  onPrev: () => undefined,
+  onNext: () => undefined,
+  onNew: () => undefined,
+  onSessions: () => undefined,
+  canPrev: false,
+  canNext: false,
+}))
+assert.doesNotMatch(workerSelected, /Fix the parser/)
+assert.match(workerSelected, /No towns/)
 
 const dialogBase = {
   sessionId: root.id,
