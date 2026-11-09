@@ -90,6 +90,29 @@ config_schema:
     default: ""
     label: Default thinking level
     description: Default reasoning effort for new chats and worker launches. Empty leaves the model default.
+  worker_model:
+    type: str
+    default: ""
+    label: Worker model
+    description: >-
+      Model spawned workers use. Empty means each worker inherits its router
+      session's model. A superagent_spawn "model" argument still wins.
+  worker_provider:
+    type: str
+    default: ""
+    label: Worker provider
+    description: >-
+      Provider for the worker model (for example opencode-go). Empty means
+      workers inherit the router session's provider.
+  worker_reasoning_effort:
+    type: str
+    choices: ["", none, minimal, low, medium, high, xhigh, max, ultra]
+    default: ""
+    label: Worker thinking level
+    description: >-
+      Reasoning effort for spawned workers. Empty means each worker inherits
+      its router session's level. A superagent_spawn "reasoning_effort"
+      argument still wins.
   model_presets:
     type: list
     default: []

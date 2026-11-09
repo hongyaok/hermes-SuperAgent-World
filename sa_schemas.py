@@ -103,6 +103,30 @@ SPAWN = {
                 "type": "boolean",
                 "description": "Optional override for isolated git worktree creation (defaults to allow_worker_git_worktree setting).",
             },
+            "model": {
+                "type": "string",
+                "description": (
+                    "Optional model for this worker. Defaults to the Superagent worker model setting; "
+                    "when that is empty, the router's model."
+                ),
+            },
+            "provider": {
+                "type": "string",
+                "description": (
+                    "Optional provider for the worker model. Defaults to the worker provider setting; "
+                    "when that is empty, the router's provider."
+                ),
+            },
+            "reasoning_effort": {
+                "type": "string",
+                "enum": [
+                    "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+                ],
+                "description": (
+                    "Optional thinking level for this worker (none…ultra). Defaults to the worker "
+                    "thinking setting; when that is empty, the router's level."
+                ),
+            },
         },
         "required": ["parent_session_id", "prompt"],
     },

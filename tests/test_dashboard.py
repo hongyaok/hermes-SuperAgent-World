@@ -438,6 +438,9 @@ def test_get_settings_returns_the_public_surface(settings_api):
         "repo_path",
         "default_model",
         "default_provider",
+        "worker_model",
+        "worker_provider",
+        "worker_reasoning_effort",
         "model_presets",
         "max_workers",
         "worker_yolo",
@@ -476,6 +479,9 @@ def test_post_settings_saves_every_editable_key(settings_api, tmp_path):
             "repo_path": str(repo),
             "default_model": "qwen/qwen3.8-27b",
             "default_provider": "opencode-go",
+            "worker_model": "deepseek-v4.1-flash",
+            "worker_provider": "cheap-provider",
+            "worker_reasoning_effort": "low",
             "model_presets": [
                 "fast=opencode-go:qwen/qwen3.8-27b",
                 {"name": "strong", "model": "z-ai/glm-5.3-flash", "provider": "opencode-go"},
@@ -491,6 +497,9 @@ def test_post_settings_saves_every_editable_key(settings_api, tmp_path):
     assert settings["repo_path"] == str(repo.resolve())
     assert settings["default_model"] == "qwen/qwen3.8-27b"
     assert settings["default_provider"] == "opencode-go"
+    assert settings["worker_model"] == "deepseek-v4.1-flash"
+    assert settings["worker_provider"] == "cheap-provider"
+    assert settings["worker_reasoning_effort"] == "low"
     assert settings["model_presets"] == [
         {"name": "fast", "model": "qwen/qwen3.8-27b", "provider": "opencode-go"},
         {"name": "strong", "model": "z-ai/glm-5.3-flash", "provider": "opencode-go"},
@@ -513,6 +522,58 @@ def test_post_settings_accepts_a_partial_patch(settings_api):
     assert body["chat_max_turns"] == 12
 
 
+def test_create_chat_worker_uses_the_worker_model_settings(settings_api):
+    api, runner = settings_api
+    api.update_settings(
+        {
+            "worker_model": "cheap/worker-model",
+            "worker_provider": "cheap-provider",
+            "worker_reasoning_effort": "low",
+        }
+    )
+    root = api.create_chat(
+        {
+            "prompt": "router",
+            "model": "router-model",
+            "provider": "router-provider",
+            "reasoning_effort": "high",
+        }
+    )["session"]
+
+    child = api.create_chat(
+        {"prompt": "worker", "parent_session_id": root["id"]}
+    )["session"]
+    assert child["model"] == "cheap/worker-model"
+    assert child["provider"] == "cheap-provider"
+    assert child["reasoning_effort"] == "low"
+    assert runner.launches[-1]["model"] == "cheap/worker-model"
+    assert runner.launches[-1]["provider"] == "cheap-provider"
+
+    # An explicit request always wins over the worker setting.
+    explicit = api.create_chat(
+        {
+            "prompt": "worker with a one-off model",
+            "parent_session_id": root["id"],
+            "model": "one-off-model",
+            "provider": "one-off-provider",
+            "reasoning_effort": "max",
+        }
+    )["session"]
+    assert explicit["model"] == "one-off-model"
+    assert explicit["provider"] == "one-off-provider"
+    assert explicit["reasoning_effort"] == "max"
+
+    # Empty worker settings restore the pre-feature inheritance.
+    api.update_settings(
+        {"worker_model": "", "worker_provider": "", "worker_reasoning_effort": ""}
+    )
+    inherited = api.create_chat(
+        {"prompt": "worker inherits", "parent_session_id": root["id"]}
+    )["session"]
+    assert inherited["model"] == "router-model"
+    assert inherited["provider"] == "router-provider"
+
+
 def test_post_settings_resets_the_runner_singleton(settings_api):
     api, _ = settings_api
     key = str(api._db_path())
@@ -527,6 +588,9 @@ def test_post_settings_resets_the_runner_singleton(settings_api):
         {"mode": "later"},
         {"default_model": "x" * 201},
         {"default_provider": 12},
+        {"worker_model": "x" * 201},
+        {"worker_provider": 12},
+        {"worker_reasoning_effort": "infinite"},
         {"model_presets": "fast=one"},
         {"model_presets": ["fast=one", "FAST=two"]},
         {"model_presets": [{"name": "empty"}]},

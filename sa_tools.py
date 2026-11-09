@@ -113,6 +113,9 @@ def superagent_spawn(args: dict, ctx: Any = None, **kwargs: Any) -> str:
         title = str((args or {}).get("title") or "").strip()
         raw_pr_number = (args or {}).get("pr_number")
         use_worktree_arg = (args or {}).get("use_worktree")
+        model_arg = str((args or {}).get("model") or "").strip()
+        provider_arg = str((args or {}).get("provider") or "").strip()
+        effort_arg = str((args or {}).get("reasoning_effort") or "").strip()
         if not parent_id:
             return json.dumps({"error": "parent_session_id is required"})
         if not sa_chats.is_session_id(parent_id):
@@ -123,6 +126,12 @@ def superagent_spawn(args: dict, ctx: Any = None, **kwargs: Any) -> str:
             return json.dumps(
                 {"error": f"prompt is too long (max {sa_runner.MAX_PROMPT_CHARS} chars)"}
             )
+        if len(model_arg) > 200 or len(provider_arg) > 200:
+            return json.dumps({"error": "model/provider is too long (max 200 chars)"})
+        try:
+            effort_arg = sa_settings.normalize_reasoning_effort(effort_arg, strict=True)
+        except ValueError as exc:
+            return json.dumps({"error": str(exc)})
         pr_number: int | None = None
         if raw_pr_number is not None and str(raw_pr_number).strip() != "":
             try:
@@ -140,6 +149,24 @@ def superagent_spawn(args: dict, ctx: Any = None, **kwargs: Any) -> str:
             return json.dumps({"error": f"parent session {parent_id} is archived"})
 
         settings = sa_settings.load_settings()
+        # Precedence per field: explicit tool argument > worker setting >
+        # parent/router session value. Workers are often cheaper and faster
+        # than the router, and a single spawn may still need a one-off model.
+        model = (
+            model_arg
+            or str(settings.get("worker_model") or "").strip()
+            or str(parent.get("model") or "").strip()
+        )
+        provider = (
+            provider_arg
+            or str(settings.get("worker_provider") or "").strip()
+            or str(parent.get("provider") or "").strip()
+        )
+        effort = (
+            effort_arg
+            or sa_settings.normalize_reasoning_effort(settings.get("worker_reasoning_effort"))
+            or sa_settings.normalize_reasoning_effort(parent.get("reasoning_effort"))
+        )
         parent_repo = str(parent.get("repo") or "").strip()
         base_repo = parent_repo or str(settings.get("repo_path") or "").strip()
         gh_repo = str(parent.get("github_repo") or settings.get("github_repo") or "").strip() or None
@@ -151,18 +178,19 @@ def superagent_spawn(args: dict, ctx: Any = None, **kwargs: Any) -> str:
 
         # A worker runs headless, so a data-training tier is refused before the
         # row exists; the router relays the reason instead of spawning a house
-        # that can never start.
+        # that can never start. Check the resolved model, not the parent's:
+        # the worker setting or a per-spawn override may name the tier.
         try:
-            sa_model_policy.check_model(str(parent.get("model") or ""))
+            sa_model_policy.check_model(model)
         except ValueError as exc:
             return json.dumps({"error": str(exc)})
 
         child = store.create_session(
             prompt,
             title=title,
-            model=str(parent.get("model") or ""),
-            provider=str(parent.get("provider") or ""),
-            reasoning_effort=str(parent.get("reasoning_effort") or ""),
+            model=model,
+            provider=provider,
+            reasoning_effort=effort,
             repo=parent_repo,
             source="worker",
             github_repo=gh_repo,
@@ -228,9 +256,9 @@ def superagent_spawn(args: dict, ctx: Any = None, **kwargs: Any) -> str:
             runner.launch_turn(
                 child_id,
                 prompt,
-                model=str(parent.get("model") or ""),
-                provider=str(parent.get("provider") or ""),
-                reasoning_effort=str(parent.get("reasoning_effort") or ""),
+                model=model,
+                provider=provider,
+                reasoning_effort=effort,
                 repo=worker_repo,
             )
         except Exception as exc:

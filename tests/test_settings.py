@@ -49,6 +49,28 @@ def test_defaults_are_complete(home):
     assert settings["github_pr_base_branch"] == ""
     assert settings["github_pr_draft_by_default"] is False
     assert settings["petdex_enabled"] is True
+    assert settings["worker_model"] == ""
+    assert settings["worker_provider"] == ""
+    assert settings["worker_reasoning_effort"] == ""
+
+
+def test_worker_model_env_overrides_are_normalised(home, monkeypatch):
+    monkeypatch.setenv("SUPERAGENT_WORKER_MODEL", " qwen/qwen3.8-27b ")
+    monkeypatch.setenv("SUPERAGENT_WORKER_PROVIDER", "opencode-go")
+    monkeypatch.setenv("SUPERAGENT_WORKER_REASONING_EFFORT", "OFF")
+    settings = sa_settings.load_settings()
+    assert settings["worker_model"] == "qwen/qwen3.8-27b"
+    assert settings["worker_provider"] == "opencode-go"
+    # The shared normaliser canonicalises aliases, exactly like the default.
+    assert settings["worker_reasoning_effort"] == "none"
+
+
+def test_worker_reasoning_effort_degrades_to_inherit(home):
+    write_config(home, {"worker_reasoning_effort": "ULTRA"})
+    assert sa_settings.load_settings()["worker_reasoning_effort"] == "ultra"
+    # A hand-edited unknown level is "inherit", not a fatal settings load.
+    write_config(home, {"worker_reasoning_effort": "infinite"})
+    assert sa_settings.load_settings()["worker_reasoning_effort"] == ""
 
 
 def test_pr_and_worktree_env_overrides(home, monkeypatch):

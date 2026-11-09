@@ -121,6 +121,9 @@ SETTINGS_KEYS = (
     "default_model",
     "default_provider",
     "default_reasoning_effort",
+    "worker_model",
+    "worker_provider",
+    "worker_reasoning_effort",
     "model_presets",
     "max_workers",
     "worker_yolo",
@@ -144,6 +147,9 @@ SETTINGS_EDITABLE = (
     "default_model",
     "default_provider",
     "default_reasoning_effort",
+    "worker_model",
+    "worker_provider",
+    "worker_reasoning_effort",
     "model_presets",
     "max_workers",
     "worker_yolo",
@@ -798,7 +804,13 @@ def _settings_patch(data: Any) -> dict[str, Any]:
         if mode not in SETTINGS_MODES:
             raise HTTPException(status_code=400, detail="mode must be 'off', 'observe' or 'auto'")
         patch["mode"] = mode
-    for key in ("default_model", "default_provider", "github_pr_base_branch"):
+    for key in (
+        "default_model",
+        "default_provider",
+        "worker_model",
+        "worker_provider",
+        "github_pr_base_branch",
+    ):
         if key not in data:
             continue
         value = data.get(key)
@@ -814,6 +826,10 @@ def _settings_patch(data: Any) -> dict[str, Any]:
     if "default_reasoning_effort" in data:
         patch["default_reasoning_effort"] = _reasoning_effort(
             data.get("default_reasoning_effort"), "default_reasoning_effort"
+        )
+    if "worker_reasoning_effort" in data:
+        patch["worker_reasoning_effort"] = _reasoning_effort(
+            data.get("worker_reasoning_effort"), "worker_reasoning_effort"
         )
     if "model_presets" in data:
         raw = data.get("model_presets")
@@ -1433,7 +1449,9 @@ def create_chat(body: dict) -> dict[str, Any]:
             )
     explicit_model = str(data.get("model") or "").strip()
     explicit_provider = str(data.get("provider") or "").strip()
-    # Resolution order per field: explicit request > named preset > settings.
+    # Resolution order per field: explicit request > named preset > settings
+    # default. A worker then prefers the worker-specific setting over its
+    # router's value (see the parent block below).
     model = _scrub(
         explicit_model
         or str((preset or {}).get("model") or "")
@@ -1445,11 +1463,11 @@ def create_chat(body: dict) -> dict[str, Any]:
         or str(settings.get("default_provider") or "")
     ).strip()
     # Explicit thinking level > default level. Presets deliberately stay a
-    # model/provider pair; a worker inherits its router's level below.
+    # model/provider pair; workers may override the level through the worker
+    # setting before falling back to their router's level.
     raw_effort = data.get("reasoning_effort")
-    effort = _reasoning_effort(raw_effort) if raw_effort is not None else ""
-    if not effort:
-        effort = _reasoning_effort(settings.get("default_reasoning_effort"))
+    explicit_effort = _reasoning_effort(raw_effort) if raw_effort is not None else ""
+    effort = explicit_effort or _reasoning_effort(settings.get("default_reasoning_effort"))
     repo = _validated_repo(str(data.get("repo") or os.environ.get("SUPERAGENT_REPO", "") or "").strip())
     title = _scrub(str(data.get("title") or "").strip())
     source = str(data.get("source") or "desktop").strip() or "desktop"
@@ -1469,7 +1487,7 @@ def create_chat(body: dict) -> dict[str, Any]:
     if parent and preset_name:
         raise HTTPException(
             status_code=400,
-            detail="a worker inherits its router's model; do not pass a preset",
+            detail="a worker uses the worker model setting; do not pass a preset",
         )
 
     store = _chat_store()
@@ -1491,12 +1509,32 @@ def create_chat(body: dict) -> dict[str, Any]:
                 detail="a worker inherits its router's repository; do not pass a different repo",
             )
         repo = parent_repo
+        # A worker's own setting beats the router session, which beats the
+        # default chat model already resolved above. An explicit request value
+        # still wins over all three.
+        worker_model = _scrub(str(settings.get("worker_model") or "")).strip()
+        worker_provider = _scrub(str(settings.get("worker_provider") or "")).strip()
+        worker_effort = sa_settings.normalize_reasoning_effort(
+            settings.get("worker_reasoning_effort")
+        )
         if not explicit_model:
-            model = _scrub(str(parent_session.get("model") or "")).strip() or model
+            model = (
+                worker_model
+                or _scrub(str(parent_session.get("model") or "")).strip()
+                or model
+            )
         if not explicit_provider:
-            provider = _scrub(str(parent_session.get("provider") or "")).strip() or provider
-        if not effort:
-            effort = _reasoning_effort(parent_session.get("reasoning_effort"))
+            provider = (
+                worker_provider
+                or _scrub(str(parent_session.get("provider") or "")).strip()
+                or provider
+            )
+        if not explicit_effort:
+            effort = (
+                worker_effort
+                or _reasoning_effort(parent_session.get("reasoning_effort"))
+                or effort
+            )
         source = "worker"
 
     # Refuse a data-training ("contributor") tier before the row exists: a

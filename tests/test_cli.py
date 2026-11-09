@@ -263,6 +263,19 @@ def test_render_models_and_settings_show_default_thinking(sa):
     assert "default thinking     xhigh" in settings_text
 
 
+def test_render_settings_shows_the_worker_model_or_inherit(sa):
+    text = sa.sa_cli.render_settings({
+        "worker_model": "cheap/model",
+        "worker_provider": "cheap-provider",
+        "worker_reasoning_effort": "low",
+    })
+    assert "worker model         cheap/model · cheap-provider · low" in text
+    assert "worker model         inherit router" in sa.sa_cli.render_settings({})
+    # A partial override keeps the inherited parts explicit.
+    partial = sa.sa_cli.render_settings({"worker_reasoning_effort": "max"})
+    assert "worker model         router model · router provider · max" in partial
+
+
 def test_chat_creates_session_and_launches_turn(
     sa, store, fake_executor, monkeypatch, capsys
 ):
@@ -934,6 +947,22 @@ def test_settings_json_never_includes_the_token(sa, capsys, cli_settings_home):
     assert "github_token" not in data
     assert "ghp_secret_value" not in out
     assert data["max_workers"] == 2
+    assert data["worker_model"] == ""
+
+
+def test_settings_json_includes_the_worker_model_keys(sa, capsys, cli_settings_home):
+    sa.sa_settings.save_settings({
+        "worker_model": "cheap/model",
+        "worker_provider": "cheap-provider",
+        "worker_reasoning_effort": "low",
+    })
+
+    rc = sa.sa_cli.run(_args(superagent_command="settings", json=True), object())
+    data = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert data["worker_model"] == "cheap/model"
+    assert data["worker_provider"] == "cheap-provider"
+    assert data["worker_reasoning_effort"] == "low"
 
 
 def test_settings_command_needs_no_engine(sa, monkeypatch, capsys, cli_settings_home):

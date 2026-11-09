@@ -79,7 +79,7 @@ GitHub connection.
    path, and describe the work. The first turn creates `S-0001` and launches a
    headless worker.
 3. When the Router needs parallel work it calls `superagent_spawn` with
-   `parent_session_id=S-0001`; each child gets one house (`house-a` through `house-g`) at a random free plot (`0…11`), a Petdex character sprite, and (when `allow_worker_git_worktree=true`) an isolated git worktree under `<data_dir>/workspaces/worker-<id>`. Ask for
+   `parent_session_id=S-0001`; each child gets one house (`house-a` through `house-g`) at a random free plot (`0…11`), a Petdex character sprite, and (when `allow_worker_git_worktree=true`) an isolated git worktree under `<data_dir>/workspaces/worker-<id>`. It may pass `model`, `provider` and `reasoning_effort` for that one worker; otherwise the `worker_*` settings apply, and with those empty the child inherits the Router's model and level. Ask for
    the split explicitly if the Router does not do it, e.g. "spawn two workers:
    one fixes the parser, one adds a test".
 4. The Router can inspect its workers via `superagent_town_status` and send
@@ -122,11 +122,22 @@ hermes superagent stop S-0001
 
 - **Default model** (`default_model` / `default_provider`) applies to new chats
   when a request or preset does not pick one. Empty means the CLI chooses.
-- **Thinking level** (`default_reasoning_effort`) applies to new chats and is
-  inherited by spawned workers. The ladder is `none`, `minimal`, `low`,
+- **Worker model** (`worker_model` / `worker_provider`) applies to spawned
+  workers only, so a town can run a cheap/fast worker model under an expensive
+  router. Empty means each worker inherits its router session's model and
+  provider, which is the pre-existing behaviour. Env:
+  `SUPERAGENT_WORKER_MODEL` / `SUPERAGENT_WORKER_PROVIDER`.
+- **Thinking level** (`default_reasoning_effort`) applies to new chats;
+  `worker_reasoning_effort` overrides it for spawned workers. Empty on either
+  means the model/CLI default, and an empty worker level inherits the router's
+  session level. The ladder is `none`, `minimal`, `low`,
   `medium`, `high`, `xhigh`, `max`, `ultra`; `xhigh`/`max`/`ultra` are above
-  high. Empty means the model/CLI default. The model picker edits the same
+  high. The model picker edits the same
   level, and the Runner passes it as `--reasoning`.
+- **Per-spawn overrides.** `superagent_spawn` accepts optional `model`,
+  `provider` and `reasoning_effort`. Precedence per field is explicit argument
+  > `worker_*` setting > the router session's value. Use it for a one-off
+  worker without changing the town default.
 - **Presets** are named `(model, provider)` pairs. Accepted spellings are
   `name=provider:model`, `strong=model`, plain `model`, or
   `{name, model, provider}` objects. At most 12; names unique; every preset
@@ -290,6 +301,8 @@ error, `2` usage.
 | `repo_path` | `""` | Repository every worker runs inside. |
 | `default_model` / `default_provider` | `""` | New-chat default; empty = CLI choice. |
 | `default_reasoning_effort` | `""` | New-chat thinking level (`none…ultra`); empty = model/CLI default. |
+| `worker_model` / `worker_provider` | `""` | Spawned-worker model/provider; empty = inherit the router session. |
+| `worker_reasoning_effort` | `""` | Spawned-worker thinking level (`none…ultra`); empty = inherit the router session. |
 | `model_presets` | `[]` | Composer chips; empty = no chips. |
 | `max_workers` | `2` | Parallel chat/ticket workers. |
 | `chat_max_turns` | `120` | Agent turns per headless chat worker. |
