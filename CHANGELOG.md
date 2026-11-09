@@ -3,6 +3,69 @@
 All notable changes to the `superagent` Hermes plugin. Plain bullets, newest
 first.
 
+## 0.8.0 — 2026-11-09
+
+Workers become configurable and cheaper to run: a separate model/provider/thinking
+level, a bash-only mini-swe-agent style harness by default, and a read-only
+`doctor` command. The town switcher becomes a readable themed picker that lists
+towns only, and contributor-tier models are refused before a headless launch.
+
+### Added
+
+- **Worker model configuration (`sa_settings.py`, `dashboard/plugin_api.py`,
+  `sa_tools.py`, `desktop/plugin.js`).** `worker_model`, `worker_provider` and
+  `worker_reasoning_effort` apply to spawned workers only; empty means inherit
+  the router. `superagent_spawn` also accepts per-spawn `model`, `provider` and
+  `reasoning_effort` overrides. The Settings panel has a **Worker model** block
+  with **Inherit router**.
+- **Worker harness (`sa_chats.py`, `sa_runner.py`, `sa_settings.py`,
+  `plugin.yaml`).** Spawned workers default to `worker_harness: mini`, the
+  mini-swe-agent architecture adapted to Hermes: `-t terminal` only, one command
+  per step, a linear transcript, an explicit
+  `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT` marker (recorded as a `submitted`
+  event) and the ordinary `--max-turns` cap. No extra package or model client.
+  `worker_harness: hermes` restores the full file + terminal toolset; roots
+  always keep it. The harness is stored per session so a settings change does
+  not rewrite a running worker.
+- **`hermes superagent doctor [--json]` (`sa_cli.py`).** Read-only diagnosis of
+  the plugin/API version, database totals, `hermes` binary, repository branch
+  and dirty count, stale worktrees, model/harness settings and the data-tier
+  gate. Never starts an engine, a worker or a network call; exit `1` on FAIL.
+- **Town picker (`desktop/plugin.js`).** The native select is replaced by a
+  themed button + `Towns (N)` panel with one row per town (title, status,
+  worker count), the selected row highlighted, keyboard/ARIA wiring and a
+  height cap. `townChoices()` drops any non-root row, so a worker session can
+  never appear as a town.
+- **Data-training tier preflight (`sa_model_policy.py`).** A `…-contributor`
+  model is refused before a session or queue slot exists, on every surface
+  (API, `superagent_spawn`, CLI, runner retry/resume). The Settings panel
+  reports the host opt-in and can flip it through `hermes config set`.
+
+### Changed
+
+- Spawned workers default to the `mini` harness; `worker_harness: hermes` is
+  the opt-out. The Runner reads the harness from the session row, so REST, tool,
+  CLI and retry launches agree.
+- `GET/POST /settings` and `hermes superagent settings` carry the worker model
+  and harness fields; the CLI prints a `worker model` and `worker harness` line.
+- `superagent_spawn` records the resolved model/provider/level instead of
+  copying the router's values blindly.
+- The town switcher and its README/operator-guide descriptions now say "towns
+  only".
+
+### Fixed
+
+- **Native town dropdown was unreadable.** A `bg-transparent` select opened a
+  white OS popup with light-gray text; the themed picker keeps contrast on
+  every shell and does not depend on OS chrome.
+- **Contributor-tier workers died two seconds after launch.** Hermes refuses
+  that `-m` override in every non-interactive run without the host opt-in; the
+  failure now names the key, the command and the trade-off before the row is
+  created.
+- **Windows workers believed they had a terminal.** A `DEVNULL` stdin reports
+  `isatty() == true` on the NUL device, so a consent prompt cancelled the turn;
+  every child now gets a closed pipe.
+
 ## 0.7.0 — 2026-11-08
 
 Town time follows the device, bubbles turn opaque and scrollable, houses move
