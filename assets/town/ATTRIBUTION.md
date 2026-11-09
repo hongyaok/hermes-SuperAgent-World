@@ -1,6 +1,6 @@
 # Superagent Towns — Asset Attribution
 
-`assets/town/` vendors twenty-seven environment PNGs and eight downsampled
+`assets/town/` vendors thirty environment PNGs and eight downsampled
 character/creature spritesheets under `assets/town/pets/`. They come from
 upstream sources under the licences listed below, together with their exact
 provenance.
@@ -39,11 +39,19 @@ The tileset is itself based on two earlier packs, which must be credited too:
 | File | Source | Crop box | Size |
 | --- | --- | --- | --- |
 | `grass.png` | `rpg-tileset.png` | `(16, 32, 80, 64)` | 64×32 |
+| `grass-b.png` | `grass.png` (derived) | full tile, recoloured | 64×32 |
+| `grass-c.png` | `grass.png` (derived) | full tile, recoloured | 64×32 |
 
 This file is distributed under **CC-BY-SA 3.0**. If you reuse or modify it, you
 must credit hilau (and George Bailey and bluecarrot16), link to the licence,
 indicate that changes were made — it is a crop — and license your derivative
 under CC-BY-SA 3.0 as well.
+
+`grass-b.png` and `grass-c.png` are derivative variants produced by
+`scripts/generate_town_and_pet_assets.py`: a fixed palette shift plus a few
+low-contrast tufts (seeds 4202 and 4203) on the same 64×32 tile. They carry the
+**same CC-BY-SA 3.0** terms and the same attribution obligations as `grass.png`;
+their changes (recolour and tufts) must be indicated when they are reused.
 
 ---
 
@@ -106,10 +114,11 @@ Each extracted file below is a crop of one authored rectangle from the named
 atlas. The extraction scripts (`scripts/extract_hermes_town_assets.py` and
 `scripts/generate_town_and_pet_assets.py`) remove the reserved magenta chroma
 key, trim fully transparent margins, downsample with Lanczos to the scene's
-display size, and snap partial alpha to a hard pixel edge. The tileable terrain, well, and bulletin board sprites (`road-h.png`, `road-v.png`,
-`plaza-stone.png`, `water.png`, `well.png`, `bulletin-board.png`) are generated
-deterministically by `scripts/generate_town_and_pet_assets.py` under the MIT
-License. The source atlases are not vendored.
+display size, and snap partial alpha to a hard pixel edge. The tileable terrain, well, bulletin board sprites (`road-h.png`, `road-v.png`,
+`plaza-stone.png`, `water.png`, `well.png`, `bulletin-board.png`), and the
+empty-parcel marker (`plot-empty.png`) are generated deterministically by
+`scripts/generate_town_and_pet_assets.py` under the MIT License. The source
+atlases are not vendored.
 
 | File | Source atlas / generator | Source rectangle | Output |
 | --- | --- | --- | --- |
@@ -138,8 +147,9 @@ License. The source atlases are not vendored.
 | `road-v.png` | `generate_town_and_pet_assets.py` | procedural MIT tile | 32×64 |
 | `plaza-stone.png` | `generate_town_and_pet_assets.py` | procedural MIT tile | 64×64 |
 | `water.png` | `generate_town_and_pet_assets.py` | procedural MIT tile | 64×64 |
+| `plot-empty.png` | `generate_town_and_pet_assets.py` | procedural MIT pixel art | 96×56 |
 
-The Hermes Town MIT notice above covers these twenty-five files.
+The Hermes Town MIT notice above covers these twenty-six files.
 
 ---
 
@@ -167,8 +177,10 @@ public [Petdex](https://petdex.dev) community manifest
 
 - `grass.png` is **CC-BY-SA 3.0** and carries the attribution and share-alike
   obligations in section 1.
+- `grass-b.png` and `grass-c.png` are **CC-BY-SA 3.0** derivatives of
+  `grass.png`, under the same obligations in section 1.
 - `person.png` is **CC0 1.0**.
-- The twenty-five files listed in section 3 are **MIT**, under the notice in
+- The twenty-six files listed in section 3 are **MIT**, under the notice in
   that section.
 - The community pet spritesheets in `assets/town/pets/` are credited to their
   respective creators in section 4 and `assets/town/pets/catalog.json`.

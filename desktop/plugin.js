@@ -88,24 +88,278 @@ const LIVE_STATUSES = ['running', 'queued', 'review', 'failed']
 const MAX_WORKERS = 8
 
 // -- towns -----------------------------------------------------------------
-// One plot per worker slot. The list is deliberately static: a slot is
-// allocated once by the backend and never recomputed from the current array,
-// so a poll or a town switch cannot move a house. Slots past the list fall
-// into a deterministic outer ring. Plots cluster around the plaza so the
-// town reads as one community, not far-flung outposts.
+// One fixed estate in logical stage pixels. The stage is always 1200x700 and
+// scaled to fit the pane, so these numbers mean the same thing at every
+// window size. A slot is allocated once by the backend and looked up here;
+// a poll, a reload or a different session id cannot move the house.
+const TOWN_STAGE = { width: 1200, height: 700 }
+// Below 0.8 labels stop being readable, above 1.25 the estate spreads again;
+// the scene viewport scrolls instead of shrinking past the floor.
+const TOWN_STAGE_MIN_SCALE = 0.8
+const TOWN_STAGE_MAX_SCALE = 1.25
+// Router Hall anchors the northern half of the central plaza.
+const TOWN_ROUTER = { left: 600, top: 325, scale: 0.9 }
+// Twelve authored parcels: four north, two west, two east, four south. Each
+// anchor is the centre of a 112x130 reserved box (see townPlotRect).
 const TOWN_PLOTS = [
-  { left: 26, top: 22, scale: 0.72 },
-  { left: 74, top: 22, scale: 0.72 },
-  { left: 22, top: 50, scale: 0.72 },
-  { left: 78, top: 50, scale: 0.72 },
-  { left: 26, top: 78, scale: 0.72 },
-  { left: 74, top: 78, scale: 0.72 },
-  { left: 38, top: 22, scale: 0.72 },
-  { left: 62, top: 22, scale: 0.72 },
-  { left: 38, top: 56, scale: 0.72 },
-  { left: 62, top: 56, scale: 0.72 },
-  { left: 38, top: 80, scale: 0.72 },
-  { left: 62, top: 80, scale: 0.72 },
+  { id: 'north-1', region: 'north', left: 330, top: 125, scale: 0.62 },
+  { id: 'north-2', region: 'north', left: 480, top: 125, scale: 0.62 },
+  { id: 'north-3', region: 'north', left: 720, top: 125, scale: 0.62 },
+  { id: 'north-4', region: 'north', left: 870, top: 125, scale: 0.62 },
+  { id: 'west-1', region: 'middle', left: 300, top: 350, scale: 0.62 },
+  { id: 'west-2', region: 'middle', left: 420, top: 350, scale: 0.62 },
+  { id: 'east-1', region: 'middle', left: 780, top: 350, scale: 0.62 },
+  { id: 'east-2', region: 'middle', left: 900, top: 350, scale: 0.62 },
+  { id: 'south-1', region: 'south', left: 330, top: 575, scale: 0.62 },
+  { id: 'south-2', region: 'south', left: 480, top: 575, scale: 0.62 },
+  { id: 'south-3', region: 'south', left: 720, top: 575, scale: 0.62 },
+  { id: 'south-4', region: 'south', left: 870, top: 575, scale: 0.62 },
+]
+// Reserved ground, in stage pixels, for the Router, the civic props and the
+// pond. Houses and these boxes may touch but never overlap; the probe checks
+// every pair so a copied coordinate cannot quietly park a house in water.
+const TOWN_ROUTER_RECT = { x: 510, y: 215, w: 180, h: 220 }
+const TOWN_FOUNTAIN_RECT = { x: 550, y: 470, w: 100, h: 100 }
+const TOWN_BULLETIN_RECT = { x: 420, y: 435, w: 60, h: 70 }
+const TOWN_WELL_RECT = { x: 720, y: 435, w: 60, h: 70 }
+const TOWN_BENCH_WEST_RECT = { x: 540, y: 580, w: 40, h: 30 }
+const TOWN_BENCH_EAST_RECT = { x: 620, y: 580, w: 40, h: 30 }
+const TOWN_LAMP_NW_RECT = { x: 389, y: 190, w: 22, h: 94 }
+const TOWN_LAMP_NE_RECT = { x: 789, y: 190, w: 22, h: 94 }
+const TOWN_LAMP_SW_RECT = { x: 389, y: 485, w: 22, h: 94 }
+const TOWN_LAMP_SE_RECT = { x: 789, y: 485, w: 22, h: 94 }
+const TOWN_POND_RECT = { x: 70, y: 510, w: 140, h: 90 }
+const TOWN_RESERVED_RECTS = [
+  TOWN_ROUTER_RECT, TOWN_FOUNTAIN_RECT, TOWN_BULLETIN_RECT, TOWN_WELL_RECT,
+  TOWN_BENCH_WEST_RECT, TOWN_BENCH_EAST_RECT,
+  TOWN_LAMP_NW_RECT, TOWN_LAMP_NE_RECT, TOWN_LAMP_SW_RECT, TOWN_LAMP_SE_RECT,
+  TOWN_POND_RECT,
+]
+
+// -- estate ground ---------------------------------------------------------
+// Lane and drive coordinates in stage pixels. The ground SVG draws them, and
+// the actor routes (a later task) must read the same numbers, so this is the
+// one place the estate's paths are authored. Nothing here may be an inline
+// literal at a call site.
+const TOWN_LANE_NORTH_Y = 205
+const TOWN_LANE_SOUTH_Y = 640
+const TOWN_LANE_WEST_X = 240
+const TOWN_LANE_EAST_X = 960
+const TOWN_AVENUE_Y = 440
+const TOWN_LANE_WIDTH = 26
+// The moss under-stroke is wider than the stone so every joint shows a border.
+const TOWN_LANE_UNDER_WIDTH = 34
+const TOWN_DRIVE_WIDTH = 14
+const TOWN_DRIVE_UNDER_WIDTH = 20
+const TOWN_LANE_CORNER = 30
+// Doorsteps, per row, and the lane each drive meets.
+const TOWN_DOORSTEP_Y = { north: 190, middle: 415, south: 630 }
+const TOWN_GATE_Y = {
+  north: TOWN_LANE_NORTH_Y,
+  middle: TOWN_AVENUE_Y,
+  south: TOWN_LANE_SOUTH_Y,
+}
+// One private drive per authored parcel, drawn whether or not a worker owns
+// the lot: the estate is planned first and occupied second.
+const TOWN_DRIVES = TOWN_PLOTS.map((plot) => ({
+  id: plot.id,
+  x: plot.left,
+  doorY: TOWN_DOORSTEP_Y[plot.region],
+  gateY: TOWN_GATE_Y[plot.region],
+}))
+// The loop: up the west lane, across the north lane, down the east lane, back
+// along the south lane, with quadratic corners so the four sides read as one
+// continuous path instead of abutting rectangles.
+const TOWN_ESTATE_LOOP_PATH = [
+  `M ${TOWN_LANE_WEST_X} ${TOWN_LANE_NORTH_Y + TOWN_LANE_CORNER}`,
+  `L ${TOWN_LANE_WEST_X} ${TOWN_LANE_SOUTH_Y - TOWN_LANE_CORNER}`,
+  `Q ${TOWN_LANE_WEST_X} ${TOWN_LANE_SOUTH_Y} ${TOWN_LANE_WEST_X + TOWN_LANE_CORNER} ${TOWN_LANE_SOUTH_Y}`,
+  `L ${TOWN_LANE_EAST_X - TOWN_LANE_CORNER} ${TOWN_LANE_SOUTH_Y}`,
+  `Q ${TOWN_LANE_EAST_X} ${TOWN_LANE_SOUTH_Y} ${TOWN_LANE_EAST_X} ${TOWN_LANE_SOUTH_Y - TOWN_LANE_CORNER}`,
+  `L ${TOWN_LANE_EAST_X} ${TOWN_LANE_NORTH_Y + TOWN_LANE_CORNER}`,
+  `Q ${TOWN_LANE_EAST_X} ${TOWN_LANE_NORTH_Y} ${TOWN_LANE_EAST_X - TOWN_LANE_CORNER} ${TOWN_LANE_NORTH_Y}`,
+  `L ${TOWN_LANE_WEST_X + TOWN_LANE_CORNER} ${TOWN_LANE_NORTH_Y}`,
+  `Q ${TOWN_LANE_WEST_X} ${TOWN_LANE_NORTH_Y} ${TOWN_LANE_WEST_X} ${TOWN_LANE_NORTH_Y + TOWN_LANE_CORNER}`,
+  'Z',
+].join(' ')
+
+// The plaza is a stepped octagon built from axis-aligned bands, not one big
+// rectangle: a rectangle at x=400..800 / y=250..610 would pave under west-2
+// (x 364..476) and east-1 (x 724..836). Every band below clears those parcel
+// boxes, Router Hall's reserved box and the fountain; touching edges are
+// intentional. The waist is the only free ground between the middle parcels
+// and the Router, and the fountain stays an island in the southern half.
+const TOWN_PLAZA_BANDS = [
+  { id: 'north-west', x: 400, y: 250, w: 110, h: 35 },
+  { id: 'north-east', x: 690, y: 250, w: 110, h: 35 },
+  { id: 'waist-west', x: 476, y: 285, w: 34, h: 130 },
+  { id: 'waist-east', x: 690, y: 285, w: 34, h: 130 },
+  { id: 'avenue-west', x: 400, y: 415, w: 110, h: 45 },
+  { id: 'avenue-east', x: 690, y: 415, w: 110, h: 45 },
+  { id: 'avenue-hub', x: 510, y: 435, w: 180, h: 25 },
+  { id: 'fountain-west', x: 480, y: 460, w: 70, h: 45 },
+  { id: 'fountain-east', x: 650, y: 460, w: 70, h: 45 },
+  // Two 14 px corridors run down each side of the fountain: the only ground
+  // between it and the south-inner parcels.
+  { id: 'fountain-link-west', x: 536, y: 505, w: 14, h: 65 },
+  { id: 'fountain-link-east', x: 650, y: 505, w: 14, h: 65 },
+  // The southern court between south-2 and south-3, with the two benches on
+  // it, opening onto the south lane.
+  { id: 'south-court', x: 536, y: 570, w: 128, h: 70 },
+]
+
+// -- walking graph ---------------------------------------------------------
+// One coordinate per node, in stage pixels. Actor routes are polylines over
+// these ids, so the walked line and the drawn estate share one source of
+// truth: every gate node is the far end of a TOWN_DRIVES path, every corner is
+// a loop corner, and the plaza nodes sit on the authored plaza bands.
+const TOWN_ROUTER_DOOR_Y = 420
+// Centre line of each fountain corridor (fountain-link-west/east). Walking
+// around the fountain keeps these x values, so no route can cross it.
+const TOWN_PLAZA_WEST_X = 543
+const TOWN_PLAZA_EAST_X = 657
+const TOWN_FOUNTAIN_SOUTH_Y = TOWN_FOUNTAIN_RECT.y + TOWN_FOUNTAIN_RECT.h
+
+const TOWN_NODES = {
+  // Civic landmarks: the doorstep or forecourt point an actor stands on.
+  'plaza-hub': { x: 600, y: TOWN_AVENUE_Y },
+  router: { x: TOWN_ROUTER.left, y: TOWN_ROUTER_DOOR_Y },
+  noticeboard: { x: TOWN_BULLETIN_RECT.x + TOWN_BULLETIN_RECT.w / 2, y: TOWN_BULLETIN_RECT.y - 15 },
+  well: { x: TOWN_WELL_RECT.x + TOWN_WELL_RECT.w / 2, y: TOWN_WELL_RECT.y - 15 },
+  // The plaza junctions: the hub band's two ends, and the fountain corridor
+  // mouths. A bench or fountain trip passes through these, never the fountain.
+  'plaza-west': { x: TOWN_PLAZA_WEST_X, y: TOWN_AVENUE_Y },
+  'plaza-east': { x: TOWN_PLAZA_EAST_X, y: TOWN_AVENUE_Y },
+  'fountain-west': { x: TOWN_PLAZA_WEST_X, y: TOWN_FOUNTAIN_SOUTH_Y },
+  'fountain-east': { x: TOWN_PLAZA_EAST_X, y: TOWN_FOUNTAIN_SOUTH_Y },
+  // South court, in front of the two benches (bench boxes are 580..610).
+  'bench-west': { x: 560, y: 600 },
+  'bench-east': { x: 640, y: 600 },
+  // The estate loop's four corners, where a side lane meets a cross lane.
+  'corner-north-west': { x: TOWN_LANE_WEST_X, y: TOWN_LANE_NORTH_Y },
+  'corner-north-east': { x: TOWN_LANE_EAST_X, y: TOWN_LANE_NORTH_Y },
+  'corner-south-west': { x: TOWN_LANE_WEST_X, y: TOWN_LANE_SOUTH_Y },
+  'corner-south-east': { x: TOWN_LANE_EAST_X, y: TOWN_LANE_SOUTH_Y },
+  // Where each side lane crosses Main Avenue.
+  'lane-west-avenue': { x: TOWN_LANE_WEST_X, y: TOWN_AVENUE_Y },
+  'lane-east-avenue': { x: TOWN_LANE_EAST_X, y: TOWN_AVENUE_Y },
+}
+for (const plot of TOWN_PLOTS) {
+  // Home is the doorstep the actor waits on; the gate is the far end of the
+  // private drive the ground SVG already paints for this parcel.
+  TOWN_NODES[plot.id] = { x: plot.left, y: TOWN_DOORSTEP_Y[plot.region] }
+  TOWN_NODES[`${plot.id}-gate`] = { x: plot.left, y: TOWN_GATE_Y[plot.region] }
+}
+
+// One polyline per place, always ending at the plaza hub. A trip is "out from
+// here, then back down the other place's path in reverse"; this is a hub
+// model, not a pathfinding engine, and it is small enough to read.
+const TOWN_ROUTES_TO_HUB = {
+  'plaza-hub': ['plaza-hub'],
+  router: ['router', 'plaza-hub'],
+  noticeboard: ['noticeboard', 'plaza-hub'],
+  well: ['well', 'plaza-hub'],
+  'plaza-west': ['plaza-west', 'plaza-hub'],
+  'plaza-east': ['plaza-east', 'plaza-hub'],
+  // Around the fountain: down its west/east corridor to the south court.
+  'fountain-west': ['fountain-west', 'plaza-west', 'plaza-hub'],
+  'fountain-east': ['fountain-east', 'plaza-east', 'plaza-hub'],
+  'bench-west': ['bench-west', 'fountain-west', 'plaza-west', 'plaza-hub'],
+  'bench-east': ['bench-east', 'fountain-east', 'plaza-east', 'plaza-hub'],
+}
+for (const plot of TOWN_PLOTS) {
+  const gate = `${plot.id}-gate`
+  const west = plot.left < 600
+  if (plot.region === 'middle') {
+    TOWN_ROUTES_TO_HUB[plot.id] = [plot.id, gate, 'plaza-hub']
+  } else {
+    const corner = `${plot.region === 'north' ? 'corner-north' : 'corner-south'}-${west ? 'west' : 'east'}`
+    TOWN_ROUTES_TO_HUB[plot.id] = [
+      plot.id, gate, corner, west ? 'lane-west-avenue' : 'lane-east-avenue', 'plaza-hub',
+    ]
+  }
+}
+
+// Places an idle or running character may wander to. Junction nodes are
+// deliberately absent: you pass through a junction, you do not visit it.
+const TOWN_CIVIC_DESTINATIONS = [
+  'noticeboard', 'well', 'bench-west', 'bench-east', 'fountain-west', 'fountain-east',
+]
+
+/** Route between two nodes: our path to the hub plus the destination's path
+ *  reversed, with the shared hub node written once. Unknown ids return an
+ *  empty route instead of throwing, so a bad destination parks the actor. */
+function townRoute(fromId, toId) {
+  if (fromId === toId) return [fromId]
+  const from = TOWN_ROUTES_TO_HUB[fromId]
+  const to = TOWN_ROUTES_TO_HUB[toId]
+  if (!from || !to) return []
+  return from.concat(to.slice(0, -1).reverse())
+}
+
+// Pond bank: an irregular closed curve that stays inside TOWN_POND_RECT
+// (70,510,140,90), so it is clear of the west lane (x=240) and every parcel.
+const TOWN_POND_PATH = [
+  'M 84 552',
+  'C 78 538 90 524 110 520',
+  'C 134 515 158 518 176 526',
+  'C 196 534 204 550 196 566',
+  'C 188 583 166 594 142 594',
+  'C 118 594 92 580 84 562',
+  'Z',
+].join(' ')
+
+// -- meadow and garden layout ---------------------------------------------
+// 64x32 meadow cells; 19 x 22 covers the 1200x700 stage with a little overhang
+// so no seam appears at the right or bottom edge. The sprite mix is 80% base
+// grass, 12% grass-b, 8% grass-c, chosen from a spatial hash: identical on
+// every render, never a checkerboard, and no Math.random() during a frame.
+const TOWN_MEADOW_TILE = { width: 64, height: 32 }
+const TOWN_MEADOW_COLS = Math.ceil(TOWN_STAGE.width / TOWN_MEADOW_TILE.width)
+const TOWN_MEADOW_ROWS = Math.ceil(TOWN_STAGE.height / TOWN_MEADOW_TILE.height)
+// Only the outer greenbelt and the south verge are planted. Large trees need
+// room for their full canopy, so they never stand inside a parcel box.
+const TOWN_GARDEN_ZONES = [
+  { id: 'greenbelt-west', x: 0, y: 0, w: 240, h: 700 },
+  { id: 'greenbelt-east', x: 960, y: 0, w: 240, h: 700 },
+  { id: 'verge-south', x: 0, y: 640, w: 1200, h: 60 },
+]
+const TOWN_TREES = [
+  { key: 'tree-w-north', left: 90, top: 240, width: 56, sprite: 'tree-c.png' },
+  { key: 'tree-w-mid', left: 60, top: 420, width: 84, sprite: 'tree-a.png' },
+  { key: 'tree-w-south', left: 120, top: 700, width: 54, sprite: 'tree-a.png' },
+  { key: 'tree-e-north', left: 1110, top: 240, width: 70, sprite: 'tree-b.png' },
+  { key: 'tree-e-mid', left: 1150, top: 470, width: 76, sprite: 'tree-b.png' },
+  { key: 'tree-e-south', left: 1080, top: 700, width: 60, sprite: 'tree-a.png' },
+  { key: 'tree-s-west', left: 320, top: 700, width: 60, sprite: 'tree-a.png' },
+  { key: 'tree-s-east', left: 880, top: 700, width: 60, sprite: 'tree-b.png' },
+]
+// Bushes, flowers and rocks stay small: greenbelt edges and the south verge.
+const TOWN_GARDEN_PROPS = [
+  { key: 'bush-w', left: 180, top: 300, width: 40, sprite: 'bush.png' },
+  { key: 'bush-e', left: 1020, top: 300, width: 40, sprite: 'bush.png' },
+  { key: 'bush-w-south', left: 180, top: 640, width: 40, sprite: 'bush.png' },
+  { key: 'bush-e-south', left: 1020, top: 640, width: 40, sprite: 'bush.png' },
+  { key: 'bush-s-west', left: 420, top: 700, width: 36, sprite: 'bush.png' },
+  { key: 'bush-s-east', left: 780, top: 700, width: 36, sprite: 'bush.png' },
+  { key: 'flowers-w', left: 80, top: 330, width: 28, sprite: 'flowers.png' },
+  { key: 'flowers-e', left: 1120, top: 330, width: 28, sprite: 'flowers.png' },
+  { key: 'flowers-s-west', left: 520, top: 700, width: 28, sprite: 'flowers.png' },
+  { key: 'flowers-s-east', left: 680, top: 700, width: 28, sprite: 'flowers.png' },
+  { key: 'rock-w', left: 60, top: 620, width: 25, sprite: 'rock.png' },
+  { key: 'rock-e', left: 1140, top: 620, width: 25, sprite: 'rock.png' },
+]
+// Civic props, placed from the authored contract (section 3 of the plan).
+// `top` is the bottom-centre anchor used by the img layer.
+const TOWN_CIVIC_PROPS = [
+  { key: 'fountain', left: 600, top: 568, width: 82, sprite: 'fountain.png' },
+  { key: 'well', left: 750, top: 503, width: 44, sprite: 'well.png' },
+  { key: 'bench-w', left: 560, top: 608, width: 40, sprite: 'bench.png' },
+  { key: 'bench-e', left: 640, top: 608, width: 40, sprite: 'bench.png' },
+  { key: 'lamp-nw', left: 400, top: 282, width: 22, sprite: 'lamp.png', glow: true },
+  { key: 'lamp-ne', left: 800, top: 282, width: 22, sprite: 'lamp.png', glow: true },
+  { key: 'lamp-sw', left: 400, top: 577, width: 22, sprite: 'lamp.png', glow: true },
+  { key: 'lamp-se', left: 800, top: 577, width: 22, sprite: 'lamp.png', glow: true },
 ]
 const TOWN_MAX_WORKERS = TOWN_PLOTS.length
 const TOWN_HOUSE_SPRITES = [
@@ -4412,6 +4666,66 @@ function townHash(value) {
   return hash >>> 0
 }
 
+/** Sprite for one 64x32 meadow cell: 80% base grass, 12% grass-b, 8% grass-c.
+ *  A spatial hash keeps the pattern identical on every render, so a 120 ms
+ *  actor tick can never reshuffle the ground, and no smooth gradient or
+ *  checkerboard is possible. */
+function townMeadowSprite(column, row) {
+  const pick = townHash(`meadow:${column}:${row}`) % 100
+  if (pick < 80) return 'grass.png'
+  if (pick < 92) return 'grass-b.png'
+  return 'grass-c.png'
+}
+
+// Built exactly once at module load: 19 x 22 = 418 cells.
+const TOWN_MEADOW_TILES = (() => {
+  const tiles = []
+  for (let row = 0; row < TOWN_MEADOW_ROWS; row += 1) {
+    for (let column = 0; column < TOWN_MEADOW_COLS; column += 1) {
+      tiles.push({
+        key: `${column}:${row}`,
+        left: column * TOWN_MEADOW_TILE.width,
+        top: row * TOWN_MEADOW_TILE.height,
+        sprite: townMeadowSprite(column, row),
+      })
+    }
+  }
+  return tiles
+})()
+
+/** The static meadow layer. Memoized because the scene re-renders on every
+ *  simulation tick: 418 ground nodes must never be rebuilt while actors walk. */
+const TownGround = memo(function TownGround({ assets }) {
+  const base = assets && assets['grass.png'] && assets['grass.png'].data_url
+  return jsx('div', {
+    'data-town-meadow': '1',
+    'aria-hidden': 'true',
+    className: 'pointer-events-none absolute inset-0',
+    style: { zIndex: 0 },
+    children: TOWN_MEADOW_TILES.map((tile) => {
+      const art = assets && assets[tile.sprite] && assets[tile.sprite].data_url
+      const src = art || base
+      if (!src) return null
+      return jsx('img', {
+        key: tile.key,
+        src,
+        alt: '',
+        draggable: false,
+        width: TOWN_MEADOW_TILE.width,
+        height: TOWN_MEADOW_TILE.height,
+        className: 'absolute',
+        style: {
+          left: `${tile.left}px`,
+          top: `${tile.top}px`,
+          width: `${TOWN_MEADOW_TILE.width}px`,
+          height: `${TOWN_MEADOW_TILE.height}px`,
+          imageRendering: 'pixelated',
+        },
+      })
+    }),
+  })
+})
+
 function townHouseSprite(sessionId) {
   return TOWN_HOUSE_SPRITES[townHash(sessionId) % TOWN_HOUSE_SPRITES.length]
 }
@@ -4422,34 +4736,99 @@ function townPersonFilter(sessionId, isRouter) {
   return `hue-rotate(${degrees}deg) saturate(1.08)`
 }
 
-/** Plot for a worker slot: static for the first twelve, a stable ring after.
- *  When `sessionId` is supplied, adds subtle deterministic micro-jitter so
- *  houses feel organically placed along the town lanes. */
-function townHousePosition(slot, sessionId) {
-  const index = Math.max(0, Number(slot) || 0)
-  let base
-  if (index < TOWN_PLOTS.length) {
-    base = TOWN_PLOTS[index]
-  } else {
-    const extra = index - TOWN_PLOTS.length
-    const ring = Math.floor(extra / 8) + 1
-    const angle = (extra % 8) * (Math.PI * 2 / 8)
-    const radius = Math.max(28, 38 - ring * 4)
-    base = {
-      left: 50 + Math.cos(angle) * radius,
-      top: 54 + Math.sin(angle) * radius * 0.62,
-      scale: Math.max(0.62, 0.86 - ring * 0.08),
+/** Strict positive-area intersection. Touching edges are deliberately legal:
+ *  a private drive meets a lane, a lamp box touches a parcel, and neither is
+ *  a collision. Used by the probe to validate the authored estate. */
+function rectsOverlap(a, b) {
+  if (!a || !b) return false
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
+}
+
+/** The full parcel a plot reserves: the 112x130 box around its anchor, sized
+ *  for the largest worker sprite, its label and click clearance. */
+function townPlotRect(plot) {
+  return { x: plot.left - 56, y: plot.top - 65, w: 112, h: 130 }
+}
+
+/** Depth order inside the stage: entities lower on screen paint in front.
+ *  Kept in one helper so the old `top / 5` percentage formula cannot creep
+ *  back in after the move to stage pixels. Always below the HUD (24) and the
+ *  town's dialog layer. */
+function townDepth(top, offset = 0) {
+  const y = Math.max(0, Math.min(TOWN_STAGE.height, Number(top) || 0))
+  return Math.max(3, Math.min(23, Math.round((y / TOWN_STAGE.height) * 20) + offset))
+}
+
+/** Fit the 1200x700 stage into the pane without shrinking text into dust.
+ *  Below the floor the viewport scrolls; above the ceiling the estate stays
+ *  compact instead of spreading back out on an ultrawide monitor. Unmeasured
+ *  or invalid input falls back to the minimum, never NaN. */
+function townStageScale(width, height) {
+  const w = Math.max(1, Number(width) || 1)
+  const h = Math.max(1, Number(height) || 1)
+  const fit = Math.min(w / TOWN_STAGE.width, h / TOWN_STAGE.height)
+  return Math.max(TOWN_STAGE_MIN_SCALE, Math.min(TOWN_STAGE_MAX_SCALE, fit))
+}
+
+/** Measured size of the scene viewport. The observer only sets state when the
+ *  rounded box actually changes, so scrolling and sprite frames cannot start a
+ *  render loop. Without ResizeObserver it measures once; a non-browser host
+ *  simply keeps the fallback size. */
+function useElementSize(ref) {
+  const [size, setSize] = useState({ width: 0, height: 0 })
+  useEffect(() => {
+    const node = ref && ref.current
+    if (!node || typeof window === 'undefined' || typeof node.getBoundingClientRect !== 'function') {
+      return undefined
     }
+    const measure = () => {
+      const rect = node.getBoundingClientRect()
+      const width = Math.max(0, Math.round(rect.width))
+      const height = Math.max(0, Math.round(rect.height))
+      setSize((prev) => (prev.width === width && prev.height === height ? prev : { width, height }))
+    }
+    measure()
+    if (typeof window.ResizeObserver !== 'function') return undefined
+    const observer = new window.ResizeObserver(measure)
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [ref])
+  return size
+}
+
+/** Authored parcel index for a worker slot. The clamp lives in one place so
+ *  the house, the vacancy check and the doorstep anchors can never disagree
+ *  about which parcel a legacy or missing slot belongs to. */
+function townSlotIndex(slot) {
+  const numeric = Math.trunc(Number(slot) || 0)
+  return Math.max(0, Math.min(TOWN_PLOTS.length - 1, numeric))
+}
+
+/** Plot for a worker slot: a pure truncate + clamp lookup that returns a copy.
+ *  Out-of-range legacy slots clamp to an authored plot instead of inventing an
+ *  outer ring, because the backend already prevents new sessions above 12. */
+function townHousePosition(slot) {
+  return { ...TOWN_PLOTS[townSlotIndex(slot)] }
+}
+
+/** Parcel indexes owned by real workers. Uses each worker's own town_slot —
+ *  never its position in the array — because a filtered or reordered array
+ *  must not shuffle the houses. A worker with no id is not a session and gets
+ *  no house, so it reserves no parcel either. */
+function townOccupiedSlots(workers) {
+  const taken = new Set()
+  for (const worker of Array.isArray(workers) ? workers : []) {
+    if (!worker || worker.id == null || worker.id === '') continue
+    taken.add(townSlotIndex(worker.town_slot))
   }
-  if (!sessionId) return base
-  const h = townHash(sessionId)
-  const dx = (((h & 0xff) / 255) - 0.5) * 2.8
-  const dy = ((((h >>> 8) & 0xff) / 255) - 0.5) * 2.2
-  return {
-    left: Math.round((base.left + dx) * 10) / 10,
-    top: Math.round((base.top + dy) * 10) / 10,
-    scale: base.scale,
-  }
+  return taken
+}
+
+/** The parcels nobody owns, in authored plot order. Rendered as deliberate
+ *  vacant lots so an under-populated town still reads as a planned estate. */
+function townVacantPlots(workers) {
+  const taken = townOccupiedSlots(workers)
+  return TOWN_PLOTS.filter((plot, index) => !taken.has(index))
 }
 
 function townStatusLabel(status) {
@@ -4508,23 +4887,13 @@ const TOWN_CSS = `
   55% { opacity: 1; transform: translateY(-5px) scale(1.06); }
   100% { opacity: 1; transform: translateY(0) scale(1); }
 }
-@keyframes superagent-town-walk {
-  0% { background-position-x: 0; }
-  33.33% { background-position-x: calc(var(--town-person-step, 36px) * -1); }
-  66.66% { background-position-x: calc(var(--town-person-step, 36px) * -2); }
-  100% { background-position-x: 0; }
-}
-@keyframes superagent-petdex-anim {
-  from { background-position-x: 0px; }
-  to { background-position-x: calc(var(--pet-frame-w, 48px) * -8); }
-}
 @keyframes superagent-speech-float {
   0%, 100% { transform: translate(-50%, 0px); }
   50% { transform: translate(-50%, -2px); }
 }
 .superagent-town-build { animation: superagent-town-build 900ms cubic-bezier(.2,.8,.2,1) both; }
-.superagent-town-person { animation: superagent-town-walk 900ms steps(1,end) infinite; }
-.superagent-petdex-sprite { animation: superagent-petdex-anim 850ms steps(8, end) infinite; }
+/* Character frames are chosen by the simulation and painted with a
+ * background-position, never a keyframe: a re-render must not restart them. */
 .superagent-speech-bubble { animation: superagent-speech-float 2200ms ease-in-out infinite; }
 .superagent-town-sky { transition: background-color 800ms linear; }
 .superagent-town-clock { font-variant-numeric: tabular-nums; }
@@ -4552,7 +4921,7 @@ const TOWN_CSS = `
   box-shadow: 0 2px 0 #1a1a2e, inset -2px -2px 0 rgba(0,0,0,0.18), inset 2px 2px 0 rgba(255,255,255,0.22);
 }
 @media (prefers-reduced-motion: reduce) {
-  .superagent-town-build, .superagent-town-person, .superagent-petdex-sprite, .superagent-speech-bubble { animation: none !important; }
+  .superagent-town-build, .superagent-speech-bubble { animation: none !important; }
 }
 `
 
@@ -4598,30 +4967,62 @@ function deriveSpeechBubble(session, isRouter, socialText) {
   return ''
 }
 
-function PetdexSprite({ session, isRouter, pet, personArt, animState, facingLeft, scale, reducedMotion }) {
+/** Which cell of a Petdex sheet an animation state paints. Clamps the row to
+ *  the sheet and wraps the column with a negative-safe modulo, so no state and
+ *  no frame index can ask for the blank column an 8-column sheet does not
+ *  have. Missing metadata falls back to the standard 8x9 layout. */
+function petdexFrameCell(pet, animState, frameIndex) {
+  const cols = Math.max(1, Math.trunc(Number(pet && pet.cols) || 8))
+  const rows = Math.max(1, Math.trunc(Number(pet && pet.rows) || 9))
+  const rowsMap = (pet && pet.rows_map) || {}
+  const mapped = typeof rowsMap[animState] === 'number'
+    ? rowsMap[animState]
+    : Math.max(0, PETDEX_ROW_STATES.indexOf(animState || 'idle'))
+  const row = Math.max(0, Math.min(rows - 1, Math.trunc(mapped)))
+  const tick = Math.trunc(Number(frameIndex) || 0)
+  const col = ((tick % cols) + cols) % cols
+  return { col, row }
+}
+
+// Petdex sheets step about nine frames a second while walking or working; a
+// resting character breathes slower. The simulation owns animTime, so pause
+// freezes the frame and reduced motion stays on 0.
+const TOWN_FRAME_SECONDS = 0.11
+const TOWN_IDLE_FRAME_SECONDS = 0.28
+
+function townFrameIndex(actor, reducedMotion) {
+  if (reducedMotion) return 0
+  const time = Number(actor && actor.animTime) || 0
+  const state = (actor && actor.animState) || 'idle'
+  const slow = state === 'idle' || state === 'waiting' || state === 'failed'
+  return Math.floor(time / (slow ? TOWN_IDLE_FRAME_SECONDS : TOWN_FRAME_SECONDS))
+}
+
+function PetdexSprite({ session, isRouter, pet, personArt, animState, facingLeft, scale, reducedMotion, frameIndex }) {
   const s = Math.max(0.6, Number(scale) || 1)
+  // One clock, one frame: reduced motion pins the sheet to its first cell.
+  const index = reducedMotion ? 0 : (Number(frameIndex) || 0)
   if (pet && pet.data_url) {
     const fw = Math.round((Number(pet.frame_width) || 48) * s)
     const fh = Math.round((Number(pet.frame_height) || 52) * s)
-    const cols = Number(pet.cols) || 8
-    const rows = Number(pet.rows) || 9
-    const rowsMap = pet.rows_map || {}
-    const rowIdx = typeof rowsMap[animState] === 'number'
-      ? rowsMap[animState]
-      : Math.max(0, PETDEX_ROW_STATES.indexOf(animState || 'idle'))
+    const cols = Math.max(1, Math.trunc(Number(pet.cols) || 8))
+    const rows = Math.max(1, Math.trunc(Number(pet.rows) || 9))
+    const { col, row } = petdexFrameCell(pet, animState, index)
     const flip = facingLeft && animState !== 'running-left' && animState !== 'running-right'
     return jsx('span', {
       'data-petdex-slug': pet.slug,
       'data-petdex-state': animState || 'idle',
+      'data-petdex-frame': `${col}:${row}`,
       'aria-hidden': 'true',
-      className: cn('block select-none', !reducedMotion && 'superagent-petdex-sprite'),
+      // No animation class: the frame is chosen here, so React updates the
+      // background position in place instead of restarting a keyframe.
+      className: 'block select-none',
       style: {
         width: `${fw}px`,
         height: `${fh}px`,
         backgroundImage: `url("${pet.data_url}")`,
         backgroundSize: `${fw * cols}px ${fh * rows}px`,
-        backgroundPositionY: `${-rowIdx * fh}px`,
-        '--pet-frame-w': `${fw}px`,
+        backgroundPosition: `${-col * fw}px ${-row * fh}px`,
         imageRendering: 'pixelated',
         transform: flip ? 'scaleX(-1)' : undefined,
       },
@@ -4630,17 +5031,19 @@ function PetdexSprite({ session, isRouter, pet, personArt, animState, facingLeft
   if (!personArt) return null
   const personSize = Math.round((isRouter ? 42 : 36) * s)
   const dirRow = animState === 'running-left' ? 1 : (animState === 'running-right' ? 2 : (animState === 'jumping' ? 3 : 0))
+  const personFrame = ((index % 3) + 3) % 3
   return jsx('span', {
     'data-petdex-fallback': 'person.png',
+    'data-petdex-frame': `${personFrame}:${dirRow}`,
     'aria-hidden': 'true',
-    className: cn('block select-none', !reducedMotion && 'superagent-town-person'),
+    className: 'block select-none',
     style: {
       width: `${personSize}px`,
       height: `${personSize}px`,
       backgroundImage: `url("${personArt}")`,
       backgroundSize: `${personSize * 3}px ${personSize * 4}px`,
-      backgroundPosition: `0 ${-dirRow * personSize}px`,
-      '--town-person-step': `${personSize}px`,
+      // Three walk columns on the row for the current direction.
+      backgroundPosition: `${-personFrame * personSize}px ${-dirRow * personSize}px`,
       imageRendering: 'pixelated',
       filter: townPersonFilter(session.id, isRouter),
     },
@@ -4690,26 +5093,256 @@ function TownSpeechBubble({ text, status, visible = true }) {
   })
 }
 
-const TOWN_WAYPOINTS = [
-  { left: 50, top: 64 }, // Central Plaza North
-  { left: 50, top: 75 }, // Central Fountain
-  { left: 37, top: 63 }, // Noticeboard / West Plaza
-  { left: 63, top: 63 }, // Wishing Well / East Plaza
-  { left: 22, top: 52 }, // West Avenue Crossroad
-  { left: 78, top: 52 }, // East Avenue Crossroad
-  { left: 26, top: 76 }, // Southwest Stream Bridge
-  { left: 74, top: 74 }, // Southeast Park Bench
-  { left: 38, top: 34 }, // North Promenade West
-  { left: 62, top: 34 }, // North Promenade East
-]
+// Where each row of parcels opens onto the estate is authored once in
+// TOWN_DOORSTEP_Y at the top of the file; an actor waits on its own doorstep,
+// so it never stands in a doorway.
 
 function actorHomePosition(session, isRouter) {
-  if (isRouter) return { left: 50, top: 57 }
-  const pos = townHousePosition(session.town_slot, session.id)
-  const towardCenter = pos.left < 50 ? 4.5 : -4.5
+  if (isRouter) return { left: TOWN_ROUTER.left, top: TOWN_ROUTER_DOOR_Y } // Router door
+  const pos = townHousePosition(session.town_slot)
+  const doorstep = TOWN_DOORSTEP_Y[pos.region]
   return {
-    left: Math.max(8, Math.min(92, pos.left + towardCenter)),
-    top: Math.max(18, Math.min(90, pos.top + 6.5)),
+    left: pos.left,
+    top: doorstep != null ? doorstep : pos.top + 65,
+  }
+}
+
+// Walking speeds in stage px per second. The old simulation moved 0.8-1.35
+// percent of the pane per 120 ms tick, which on the 1200 px stage is 80 / 105 /
+// 135 px per second. Writing the pace per second means any clock (the 120 ms
+// tick for now, rAF next) produces the same walk.
+const TOWN_WALK_PX_PER_SEC = 80
+const TOWN_REVIEW_PX_PER_SEC = 105
+const TOWN_RUN_PX_PER_SEC = 135
+// One old tick, in seconds. Speech and pause durations were tuned in ticks, so
+// they are authored in ticks and converted once, here.
+const TOWN_TICK_SECONDS = 0.12
+// Two characters greet at about one and a half body widths and stop noticing
+// each other past eight.
+const TOWN_GREET_NEAR_PX = 18
+const TOWN_GREET_FAR_PX = 102
+// A frame that lands inside this many px of a waypoint snaps onto it exactly.
+// It is a floating-point guard, not an arrival radius: the old 0.9 px snap is
+// gone, and a slow walker keeps its last fraction of a pixel for the next frame.
+const TOWN_EPSILON_PX = 0.0001
+// A stalled or hidden tab reports a huge elapsed time. Capping one frame keeps
+// the town from teleporting when the pane comes back.
+const TOWN_MAX_FRAME_SECONDS = 0.1
+// Only a horizontal segment wider than this changes facing, so a vertical path
+// cannot oscillate around dx = 0 and flip the sprite every frame.
+const TOWN_FACING_DX_PX = 1
+
+function townActorSpeed(status) {
+  if (status === 'running') return TOWN_RUN_PX_PER_SEC
+  if (status === 'review') return TOWN_REVIEW_PX_PER_SEC
+  return TOWN_WALK_PX_PER_SEC
+}
+
+/** How long an actor stands at a waypoint before the next trip, in seconds.
+ *  Same intent as the old tick counts: failures sulk, queues wait, running
+ *  workers hop from errand to errand, idle characters stroll. */
+function townTripPause(status, h) {
+  if (status === 'failed' || status === 'cancelled') return 25 * TOWN_TICK_SECONDS
+  if (status === 'queued' || status === 'observed') return 18 * TOWN_TICK_SECONDS
+  if (status === 'review') return 22 * TOWN_TICK_SECONDS
+  if (status === 'running') return (12 + (h % 10)) * TOWN_TICK_SECONDS
+  return (18 + (h % 16)) * TOWN_TICK_SECONDS
+}
+
+/** Where an actor heads next. Pure and deterministic: the callers pass the
+ *  same hash a poll would pass again, so refreshing the town object can never
+ *  send a character somewhere new halfway through a walk. */
+function townNextDestination(actor, status, h) {
+  const homeId = actor.homeId || 'plaza-hub'
+  const civic = TOWN_CIVIC_DESTINATIONS[h % TOWN_CIVIC_DESTINATIONS.length]
+  let destination
+  if (status === 'failed' || status === 'cancelled') {
+    destination = homeId
+  } else if (status === 'queued' || status === 'observed') {
+    // Wait near the noticeboard, where the Router pins work.
+    destination = 'noticeboard'
+  } else if (status === 'review') {
+    // Celebrate by the fountain, then walk the celebration home.
+    destination = (actor.stepCount % 2) === 0
+      ? (h % 2 === 0 ? 'fountain-west' : 'fountain-east')
+      : homeId
+  } else if (status === 'running') {
+    // Commute: home, a civic errand, then Router Hall to report back.
+    const leg = actor.stepCount % 3
+    destination = leg === 0 ? homeId : (leg === 1 ? civic : 'router')
+  } else {
+    // Idle / Router: a leisurely circuit of the estate.
+    destination = (actor.stepCount % 3) === 0 ? homeId : civic
+  }
+  // A trip to where you already stand has no path; step off the node instead.
+  if (destination === actor.nodeId) {
+    destination = actor.nodeId === 'plaza-hub' ? homeId : 'plaza-hub'
+  }
+  return destination
+}
+
+/** One frame of walking, pure: returns the patch to apply, never mutates.
+ *  A frame crosses at most one waypoint — it lands exactly on it and the next
+ *  frame continues along the following segment — so a slow frame cannot cut a
+ *  corner and a fast one cannot overshoot. A completed route keeps its exact
+ *  final coordinate. */
+function townWalkFrame(actor, dtSeconds) {
+  const dt = Math.min(TOWN_MAX_FRAME_SECONDS, Math.max(0, Number(dtSeconds) || 0))
+  const patch = {
+    left: Number(actor && actor.left) || 0,
+    top: Number(actor && actor.top) || 0,
+    pathIndex: Math.max(0, Math.trunc(Number(actor && actor.pathIndex) || 0)),
+    facingLeft: !!(actor && actor.facingLeft),
+    arrived: false,
+    moved: false,
+  }
+  const path = actor && Array.isArray(actor.path) ? actor.path : null
+  if (!path || patch.pathIndex >= path.length) {
+    patch.arrived = true
+    return patch
+  }
+  const target = path[patch.pathIndex]
+  if (!target) {
+    patch.arrived = true
+    return patch
+  }
+  const dx = target.x - patch.left
+  const dy = target.y - patch.top
+  const distance = Math.hypot(dx, dy)
+  const step = (Number(actor && actor.speed) || 0) * dt
+  if (distance <= TOWN_EPSILON_PX || step >= distance - TOWN_EPSILON_PX) {
+    // Land on the node exactly, never a fraction past it, and queue the next
+    // segment for the next frame.
+    patch.left = target.x
+    patch.top = target.y
+    patch.pathIndex += 1
+    patch.moved = true
+    patch.arrived = patch.pathIndex >= path.length
+  } else if (step > 0) {
+    patch.left = patch.left + (dx / distance) * step
+    patch.top = patch.top + (dy / distance) * step
+    patch.moved = true
+  }
+  // Facing comes from the whole segment, not this frame's dx, so a vertical
+  // stretch keeps the last horizontal direction instead of flickering.
+  if (Math.abs(dx) > TOWN_FACING_DX_PX) patch.facingLeft = dx < 0
+  return patch
+}
+
+/** One simulation frame for every actor: walk the stored polyline, count down
+ *  the pause, and choose the next trip only once the previous one is complete.
+ *  Mutates the caller's map and reads the latest sessions, so a poll may change
+ *  speed and speech but never a route that is already in progress. */
+function advanceTownSimulation(map, members, dtSeconds) {
+  if (!map || !Array.isArray(members)) return
+  const dt = Math.min(TOWN_MAX_FRAME_SECONDS, Math.max(0, Number(dtSeconds) || 0))
+  for (const member of members) {
+    const session = member && member.session
+    if (!session || session.id == null) continue
+    const actor = map[session.id]
+    if (!actor) continue
+    const status = session.status
+    const hActor = townHash(`${session.id}:${actor.stepCount || 0}`)
+
+    // Frame time advances only while the clock runs. Pause stops the clock,
+    // so the sheet freezes on its current cell; reduced motion never starts it.
+    actor.animTime = (Number(actor.animTime) || 0) + dt
+
+    if (actor.socialCooldown > 0) actor.socialCooldown = Math.max(0, actor.socialCooldown - dt)
+    if (actor.speechLeft > 0) {
+      actor.speechLeft -= dt
+      if (actor.speechLeft <= 0) {
+        actor.speechLeft = 0
+        actor.socialText = ''
+        actor.speechCooldown = (status === 'running' || status === 'queued')
+          ? (55 + (hActor % 35)) * TOWN_TICK_SECONDS
+          : (95 + (hActor % 65)) * TOWN_TICK_SECONDS
+      }
+    } else {
+      actor.speechCooldown = Math.max(0, actor.speechCooldown - dt)
+      if (actor.speechCooldown <= 0) {
+        if (status === 'running' || status === 'queued') {
+          actor.speechLeft = 18 * TOWN_TICK_SECONDS
+          actor.speechCooldown = (60 + (hActor % 40)) * TOWN_TICK_SECONDS
+        } else if (status === 'review') {
+          actor.speechLeft = 14 * TOWN_TICK_SECONDS
+          actor.speechCooldown = (120 + (hActor % 80)) * TOWN_TICK_SECONDS
+        } else {
+          actor.speechLeft = 0
+          actor.speechCooldown = 100 * TOWN_TICK_SECONDS
+        }
+      }
+    }
+
+    // Walk first: a trip in progress always gets its frame, whatever the
+    // status now says. Speed follows the status, direction follows the path.
+    actor.speed = townActorSpeed(status)
+    const complete = !Array.isArray(actor.path) || actor.pathIndex >= actor.path.length
+    if (!complete) {
+      const frame = townWalkFrame(actor, dt)
+      actor.left = frame.left
+      actor.top = frame.top
+      actor.pathIndex = frame.pathIndex
+      actor.facingLeft = frame.facingLeft
+      if (frame.arrived) {
+        actor.nodeId = actor.destinationId || actor.nodeId
+        actor.pauseLeft = townTripPause(status, hActor)
+        actor.animState = actor.socialText ? 'waving' : defaultAnimForStatus(status)
+      } else if (frame.moved) {
+        actor.animState = actor.facingLeft ? 'running-left' : 'running-right'
+      }
+    }
+
+    // Waiting at a waypoint — or at the doorstep on the very first frame:
+    // count the pause in real seconds, then pick the next destination from the
+    // node we are actually standing on.
+    const routeDone = !actor.path || actor.pathIndex >= actor.path.length
+    if (routeDone) {
+      if (actor.pauseLeft > 0) {
+        actor.pauseLeft = Math.max(0, actor.pauseLeft - dt)
+        actor.animState = actor.socialText ? 'waving' : defaultAnimForStatus(status)
+        continue
+      }
+      actor.stepCount = (actor.stepCount || 0) + 1
+      actor.socialText = ''
+      const h = townHash(`${session.id}:${actor.stepCount}`)
+      const destinationId = townNextDestination(actor, status, h)
+      const route = townRoute(actor.nodeId, destinationId)
+        .map((id) => TOWN_NODES[id])
+        .filter(Boolean)
+      if (route.length > 1) {
+        actor.path = route
+        actor.pathIndex = 1
+        actor.destinationId = destinationId
+      }
+    }
+  }
+
+  // Occasional friendly banter when two characters pass each other. Same
+  // cooldowns as before, now in seconds, and the same priority: a session's own
+  // event bubble already won because socialText only fills the empty case.
+  const ids = members.map((member) => member && member.session && member.session.id).filter((id) => id != null)
+  for (let i = 0; i < ids.length; i += 1) {
+    for (let j = i + 1; j < ids.length; j += 1) {
+      const a = map[ids[i]]
+      const b = map[ids[j]]
+      if (!a || !b) continue
+      if ((a.speechLeft || 0) > 0 || (b.speechLeft || 0) > 0) continue
+      if ((a.socialCooldown || 0) > 0 || (b.socialCooldown || 0) > 0) continue
+      const distance = Math.hypot(a.left - b.left, a.top - b.top)
+      if (distance > TOWN_GREET_NEAR_PX && distance < TOWN_GREET_FAR_PX && !a.socialText && !b.socialText) {
+        const pick = TOWN_BANTER[(townHash(ids[i]) + (a.stepCount || 0)) % TOWN_BANTER.length]
+        a.socialText = pick
+        a.speechLeft = 15 * TOWN_TICK_SECONDS
+        a.speechCooldown = 90 * TOWN_TICK_SECONDS
+        a.socialCooldown = 140 * TOWN_TICK_SECONDS
+        b.socialText = '👋'
+        b.speechLeft = 12 * TOWN_TICK_SECONDS
+        b.speechCooldown = 90 * TOWN_TICK_SECONDS
+        b.socialCooldown = 140 * TOWN_TICK_SECONDS
+        break
+      }
+    }
   }
 }
 
@@ -4721,7 +5354,7 @@ function defaultAnimForStatus(status) {
   return 'idle'
 }
 
-function useTownSimulation(town, buildingIds, reducedMotion) {
+function useTownSimulation(town, buildingIds, reducedMotion, paused) {
   const simRef = useRef({})
   const [, setTick] = useState(0)
 
@@ -4734,12 +5367,19 @@ function useTownSimulation(town, buildingIds, reducedMotion) {
     return list
   }, [town])
 
+  // The frame loop must never depend on the poll-derived members array: a new
+  // town object every 2s would tear the clock down and restart every walk.
+  // Keep the newest members in a ref the running loop can read instead.
+  const membersRef = useRef(members)
+  membersRef.current = members
+
   // Sync actors with current sessions synchronously so initial render & render probe have positions immediately.
   const stateMap = simRef.current
   const seenIds = new Set()
   for (const { session, isRouter } of members) {
     seenIds.add(session.id)
     const home = actorHomePosition(session, isRouter)
+    const homeId = isRouter ? 'router' : townHousePosition(session.town_slot).id
     const isBuilding = !!(buildingIds && buildingIds[session.id])
     const events = Array.isArray(session.recent_events) ? session.recent_events.filter(Boolean) : []
     const latest = events.length ? events[0] : null
@@ -4747,40 +5387,67 @@ function useTownSimulation(town, buildingIds, reducedMotion) {
     const existing = stateMap[session.id]
     if (!existing) {
       const h = townHash(session.id)
-      const startLeft = isBuilding && !reducedMotion ? 50 : home.left
-      const startTop = isBuilding && !reducedMotion ? 57 : home.top
-      const startSpeaking = session.status === 'running' || session.status === 'queued' || isBuilding
-      stateMap[session.id] = {
-        left: startLeft,
-        top: startTop,
-        targetLeft: home.left,
-        targetTop: home.top,
-        animState: isBuilding && !reducedMotion ? 'jumping' : defaultAnimForStatus(session.status),
-        facingLeft: home.left < 50,
+      // A brand-new house: its worker walks from Router Hall to the doorstep
+      // along the estate paths, instead of starting on the grass.
+      const startBuilding = isBuilding && !reducedMotion
+      const startNode = startBuilding ? 'router' : homeId
+      const start = TOWN_NODES[startNode]
+      const startSpeaking = session.status === 'running' || session.status === 'queued' || startBuilding
+      const actor = {
+        left: start ? start.x : home.left,
+        top: start ? start.y : home.top,
+        path: null,
+        pathIndex: 0,
+        destinationId: null,
+        nodeId: startNode,
+        homeId,
+        speed: townActorSpeed(session.status),
+        animState: startBuilding ? 'jumping' : defaultAnimForStatus(session.status),
+        animTime: 0,
+        facingLeft: home.left < TOWN_ROUTER.left,
         socialText: '',
-        speechTicks: startSpeaking ? 20 : 0,
-        speechCooldown: startSpeaking ? (55 + (h % 35)) : (50 + (h % 60)),
-        socialCooldown: 30 + (h % 50),
+        speechLeft: startSpeaking ? 20 * TOWN_TICK_SECONDS : 0,
+        speechCooldown: startSpeaking
+          ? (55 + (h % 35)) * TOWN_TICK_SECONDS
+          : (50 + (h % 60)) * TOWN_TICK_SECONDS,
+        socialCooldown: (30 + (h % 50)) * TOWN_TICK_SECONDS,
         lastStatus: session.status,
         lastEventKey: currentEventKey,
-        pauseTicks: (h % 14) + 4,
+        pauseLeft: ((h % 14) + 4) * TOWN_TICK_SECONDS,
         stepCount: h % 7,
       }
+      if (startBuilding) {
+        const route = townRoute('router', homeId).map((id) => TOWN_NODES[id]).filter(Boolean)
+        if (route.length > 1) {
+          actor.path = route
+          actor.pathIndex = 1
+          actor.destinationId = homeId
+        }
+      }
+      stateMap[session.id] = actor
     } else {
-      existing.homeLeft = home.left
-      existing.homeTop = home.top
+      // The parcel can never move, but a legacy slot may clamp differently
+      // after a reload; keep the route target in sync with the house.
+      existing.homeId = homeId
       if (session.status !== existing.lastStatus || currentEventKey !== existing.lastEventKey) {
         existing.lastStatus = session.status
         existing.lastEventKey = currentEventKey
         if (currentEventKey || session.status === 'running' || session.status === 'review' || session.status === 'failed') {
-          existing.speechTicks = 24
-          existing.speechCooldown = 60
+          // A real event outranks banter: re-arm the bubble for about three
+          // seconds, exactly like the old 24-tick notice.
+          existing.speechLeft = 24 * TOWN_TICK_SECONDS
+          existing.speechCooldown = 60 * TOWN_TICK_SECONDS
         }
       }
       if (reducedMotion) {
         existing.left = home.left
         existing.top = home.top
+        existing.path = null
+        existing.pathIndex = 0
+        existing.destinationId = null
+        existing.nodeId = homeId
         existing.animState = defaultAnimForStatus(session.status)
+        existing.animTime = 0
         existing.socialText = ''
       }
     }
@@ -4790,139 +5457,87 @@ function useTownSimulation(town, buildingIds, reducedMotion) {
   }
 
   useEffect(() => {
-    if (reducedMotion || !members.length || typeof window === 'undefined') return undefined
-    const timer = window.setInterval(() => {
-      const map = simRef.current
-      const ids = members.map((m) => m.session.id)
-      for (const { session, isRouter } of members) {
-        const actor = map[session.id]
-        if (!actor) continue
-        const home = actorHomePosition(session, isRouter)
-        const status = session.status
-        const hActor = townHash(`${session.id}:${actor.stepCount || 0}`)
+    if (paused || reducedMotion) return undefined
+    if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
+      return undefined
+    }
+    const doc = typeof document === 'undefined' ? null : document
+    let raf = 0
+    // null means "no previous frame": the first tick after a start or a tab
+    // resume begins a fresh 40 ms window instead of replaying the gap.
+    let lastUpdate = null
 
-        if (actor.socialCooldown > 0) actor.socialCooldown -= 1
-        if (actor.speechTicks > 0) {
-          actor.speechTicks -= 1
-          if (actor.speechTicks === 0) {
-            actor.socialText = ''
-            actor.speechCooldown = (status === 'running' || status === 'queued')
-              ? 55 + (hActor % 35)
-              : 95 + (hActor % 65)
-          }
-        } else {
-          if (actor.speechCooldown > 0) actor.speechCooldown -= 1
-          if (actor.speechCooldown <= 0) {
-            if (status === 'running' || status === 'queued') {
-              actor.speechTicks = 18
-              actor.speechCooldown = 60 + (hActor % 40)
-            } else if (status === 'review') {
-              actor.speechTicks = 14
-              actor.speechCooldown = 120 + (hActor % 80)
-            } else {
-              actor.speechTicks = 0
-              actor.speechCooldown = 100
-            }
-          }
-        }
-
-        const dx = actor.targetLeft - actor.left
-        const dy = actor.targetTop - actor.top
-        const dist = Math.hypot(dx, dy)
-
-        if (dist > 0.9) {
-          const speed = status === 'running' ? 1.35 : (status === 'review' ? 1.05 : 0.8)
-          const step = Math.min(dist, speed)
-          actor.left = Math.round((actor.left + (dx / dist) * step) * 100) / 100
-          actor.top = Math.round((actor.top + (dy / dist) * step) * 100) / 100
-          actor.facingLeft = dx < -0.05
-          actor.animState = dx < -0.15 ? 'running-left' : (dx > 0.15 ? 'running-right' : 'running')
-        } else {
-          actor.left = actor.targetLeft
-          actor.top = actor.targetTop
-          if (actor.pauseTicks > 0) {
-            actor.pauseTicks -= 1
-            actor.animState = actor.socialText ? 'waving' : defaultAnimForStatus(status)
-          } else {
-            actor.stepCount = (actor.stepCount || 0) + 1
-            actor.socialText = ''
-            const h = townHash(`${session.id}:${actor.stepCount}`)
-            if (status === 'failed' || status === 'cancelled') {
-              actor.targetLeft = home.left
-              actor.targetTop = home.top
-              actor.pauseTicks = 25
-            } else if (status === 'queued' || status === 'observed') {
-              // Pace near the town signpost / noticeboard
-              actor.targetLeft = 37 + ((h % 5) - 2)
-              actor.targetTop = 63 + (((h >>> 4) % 5) - 2)
-              actor.pauseTicks = 18
-            } else if (status === 'review') {
-              // Celebrate at the central plaza fountain or home
-              const goPlaza = (actor.stepCount % 2) === 0
-              actor.targetLeft = goPlaza ? 46 + (h % 9) : home.left
-              actor.targetTop = goPlaza ? 71 + ((h >>> 3) % 6) : home.top
-              actor.pauseTicks = 22
-            } else if (status === 'running') {
-              // Commute between workshop and plaza / Router hall
-              const leg = actor.stepCount % 3
-              if (leg === 0) {
-                actor.targetLeft = home.left
-                actor.targetTop = home.top
-              } else if (leg === 1) {
-                const wp = TOWN_WAYPOINTS[h % TOWN_WAYPOINTS.length]
-                actor.targetLeft = wp.left
-                actor.targetTop = wp.top
-              } else {
-                actor.targetLeft = 50 + ((h % 9) - 4)
-                actor.targetTop = 61 + (((h >>> 4) % 7) - 3)
-              }
-              actor.pauseTicks = 12 + (h % 10)
-            } else {
-              // Idle / Router: stroll around town landmarks and greet neighbors
-              const goHome = (actor.stepCount % 3) === 0
-              if (goHome) {
-                actor.targetLeft = home.left
-                actor.targetTop = home.top
-              } else {
-                const wp = TOWN_WAYPOINTS[h % TOWN_WAYPOINTS.length]
-                actor.targetLeft = wp.left + ((h % 5) - 2)
-                actor.targetTop = wp.top + (((h >>> 5) % 5) - 2)
-              }
-              actor.pauseTicks = 18 + (h % 16)
-            }
-          }
-        }
+    const tick = (now) => {
+      if (lastUpdate === null) lastUpdate = now - 40
+      const elapsed = now - lastUpdate
+      // 25 fps is plenty for a 12 px walk step and keeps the town cheap.
+      if (elapsed >= 40) {
+        const dt = Math.min(0.1, Math.max(0, elapsed / 1000))
+        lastUpdate = now
+        advanceTownSimulation(simRef.current, membersRef.current, dt)
+        setTick((value) => (value + 1) % 1000000)
       }
+      raf = window.requestAnimationFrame(tick)
+    }
 
-      // Check proximity between actors for occasional friendly town banter & waving
-      for (let i = 0; i < ids.length; i += 1) {
-        for (let j = i + 1; j < ids.length; j += 1) {
-          const a = map[ids[i]]
-          const b = map[ids[j]]
-          if (!a || !b) continue
-          if ((a.speechTicks || 0) > 0 || (b.speechTicks || 0) > 0) continue
-          if ((a.socialCooldown || 0) > 0 || (b.socialCooldown || 0) > 0) continue
-          const d = Math.hypot(a.left - b.left, a.top - b.top)
-          if (d > 1.5 && d < 8.5 && !a.socialText && !b.socialText) {
-            const pick = TOWN_BANTER[(townHash(ids[i]) + (a.stepCount || 0)) % TOWN_BANTER.length]
-            a.socialText = pick
-            a.speechTicks = 15
-            a.speechCooldown = 90
-            a.socialCooldown = 140
-            b.socialText = '👋'
-            b.speechTicks = 12
-            b.speechCooldown = 90
-            b.socialCooldown = 140
-            break
-          }
-        }
+    // Called on pause, unmount and every visibility change; safe to repeat.
+    const stop = () => {
+      if (raf) window.cancelAnimationFrame(raf)
+      raf = 0
+      lastUpdate = null
+    }
+    const visibility = () => {
+      stop()
+      if (!doc || !doc.hidden) raf = window.requestAnimationFrame(tick)
+    }
+
+    if (doc && typeof doc.addEventListener === 'function') {
+      doc.addEventListener('visibilitychange', visibility)
+    }
+    if (!doc || !doc.hidden) raf = window.requestAnimationFrame(tick)
+    return () => {
+      stop()
+      if (doc && typeof doc.removeEventListener === 'function') {
+        doc.removeEventListener('visibilitychange', visibility)
       }
-      setTick((t) => (t + 1) % 1000000)
-    }, 120)
-    return () => window.clearInterval(timer)
-  }, [members, reducedMotion])
+    }
+  }, [paused, reducedMotion])
 
   return simRef.current
+}
+
+/** The animated population: the only part of the town that re-renders on a
+ *  frame. Keeping the simulation hook here means the meadow, the paving, the
+ *  houses and the HUD are not rebuilt 25 times a second. */
+function TownPopulation({ town, buildingIds, pets, personArt, reducedMotion, paused, filter, onOpen }) {
+  const actorMap = useTownSimulation(town, buildingIds, reducedMotion, paused)
+  const petMap = pets || {}
+  const routerPet = petMap[town.avatar_slug] || null
+  const workers = Array.isArray(town.workers) ? town.workers : []
+  return [
+    jsx(TownActor, {
+      key: `actor:${town.id}`,
+      session: town,
+      isRouter: true,
+      actorState: actorMap[town.id],
+      pet: routerPet,
+      personArt,
+      reducedMotion,
+      dimmed: false,
+      onOpen,
+    }),
+    ...workers.map((worker) => jsx(TownActor, {
+      key: `actor:${worker.id}`,
+      session: worker,
+      isRouter: false,
+      actorState: actorMap[worker.id],
+      pet: petMap[worker.avatar_slug] || null,
+      personArt,
+      reducedMotion,
+      dimmed: !matchesTownFilter(worker, filter, false),
+      onOpen,
+    })),
+  ]
 }
 
 function matchesTownFilter(session, filter, isRouter) {
@@ -4941,10 +5556,11 @@ function TownActor({ session, isRouter, actorState, pet, personArt, reducedMotio
   const pos = actorState || actorHomePosition(session, isRouter)
   const animState = (actorState && actorState.animState) || defaultAnimForStatus(session.status)
   const facingLeft = !!(actorState && actorState.facingLeft)
+  const frameIndex = townFrameIndex(actorState, reducedMotion)
   const speech = deriveSpeechBubble(session, isRouter, actorState && actorState.socialText)
-  const speechVisible = hovered || (actorState ? (actorState.speechTicks > 0 || !!actorState.socialText) : true)
+  const speechVisible = hovered || (actorState ? (actorState.speechLeft > 0 || !!actorState.socialText) : true)
   const petName = (pet && pet.display_name) || session.avatar_slug || (isRouter ? 'Router' : 'Worker')
-  const zIndex = Math.max(5, Math.min(25, Math.round((Number(pos.top) || 50) / 5) + 2))
+  const zIndex = townDepth(pos.top, 2)
 
   return jsxs('button', {
     type: 'button',
@@ -4958,12 +5574,12 @@ function TownActor({ session, isRouter, actorState, pet, personArt, reducedMotio
     title: `${sessionTitle(session)} · ${petName} (${townStatusLabel(session.status)})`,
     className: cn(
       'superagent-actor-btn group absolute flex flex-col items-center focus:outline-none',
-      'transition-[left,top,opacity] duration-150 ease-linear',
+      'transition-opacity duration-150 ease-linear',
       dimmed && 'opacity-35',
     ),
     style: {
-      left: `${pos.left}%`,
-      top: `${pos.top}%`,
+      left: `${pos.left}px`,
+      top: `${pos.top}px`,
       transform: 'translate(-50%, -85%)',
       zIndex,
     },
@@ -4977,6 +5593,7 @@ function TownActor({ session, isRouter, actorState, pet, personArt, reducedMotio
         personArt,
         animState,
         facingLeft,
+        frameIndex,
         scale: isRouter ? 0.96 : 0.86,
         reducedMotion,
       }),
@@ -4989,22 +5606,94 @@ function TownActor({ session, isRouter, actorState, pet, personArt, reducedMotio
   })
 }
 
+/** A vacant parcel: flat lot marker, one garden tuft and a blank wooden sign.
+ *  Deliberately not a button and not in the tab order — there is no session
+ *  behind it, and aria-hidden keeps screen readers out of the scenery. */
+const TownEmptyPlot = memo(function TownEmptyPlot({ plot, assets }) {
+  const lot = assets && assets['plot-empty.png'] && assets['plot-empty.png'].data_url
+  const garden = assets && assets['bush.png'] && assets['bush.png'].data_url
+  return jsxs('div', {
+    'data-town-plot': plot.id,
+    'data-town-empty-plot': plot.id,
+    'aria-hidden': 'true',
+    className: 'pointer-events-none absolute',
+    style: {
+      left: `${plot.left}px`,
+      top: `${plot.top}px`,
+      width: '112px',
+      height: '130px',
+      transform: 'translate(-50%, -50%)',
+      // Below the sky tint (3) and every house (4+): a vacant lot is ground,
+      // not an entity, so it must never cover an arriving house or actor.
+      zIndex: 2,
+    },
+    children: [
+      lot
+        ? jsx('img', {
+            key: 'lot',
+            src: lot,
+            alt: '',
+            draggable: false,
+            width: 96,
+            style: {
+              position: 'absolute', left: '50%', top: '58%',
+              transform: 'translate(-50%, -50%)', imageRendering: 'pixelated', height: 'auto',
+            },
+          })
+        : null,
+      garden
+        ? jsx('img', {
+            key: 'garden',
+            src: garden,
+            alt: '',
+            draggable: false,
+            width: 20,
+            style: {
+              position: 'absolute', left: '12px', top: '72%',
+              imageRendering: 'pixelated', height: 'auto', opacity: 0.85,
+            },
+          })
+        : null,
+      // Blank lot sign: a wooden post and an unpainted board. No text on
+      // purpose — an empty parcel is not an unnamed session.
+      jsx('span', {
+        key: 'post',
+        style: {
+          position: 'absolute', right: '12px', top: '66%',
+          width: '3px', height: '18px', backgroundColor: '#7a5231',
+        },
+      }),
+      jsx('span', {
+        key: 'board',
+        style: {
+          position: 'absolute', right: '6px', top: '61%',
+          width: '16px', height: '9px', backgroundColor: '#a97b4b',
+          border: '1px solid #6b4626', borderRadius: '1px',
+        },
+      }),
+    ],
+  })
+})
+
 function TownHouse({ session, isRouter, slot, onOpen, houseRef, building, reducedMotion, assets, pet, dimmed }) {
   const sprite = isRouter ? 'house-router.png' : townHouseSprite(session.id)
   const art = assets && assets[sprite] && assets[sprite].data_url
-  const position = isRouter ? { left: 50, top: 47, scale: 1.06 } : townHousePosition(slot, session.id)
+  const position = isRouter ? TOWN_ROUTER : townHousePosition(slot)
   const scale = Math.max(0.5, Number(position.scale) || 1)
   const width = Math.round((isRouter ? 178 : 136) * scale)
   const fallbackHeight = Math.round((isRouter ? 194 : 140) * scale)
   const label = townStatusLabel(session.status)
   const petLabel = (pet && pet.display_name) || session.avatar_slug || ''
-  const zIndex = Math.max(4, Math.min(23, Math.round((Number(position.top) || 50) / 5)))
+  const zIndex = townDepth(position.top)
   return jsxs('div', {
     'data-town-house': session.id,
+    // The parcel marker travels with the house so the probe can count all
+    // twelve plots without knowing which ones happen to be occupied.
+    'data-town-plot': isRouter ? null : position.id,
     className: cn('absolute flex flex-col items-center transition-opacity duration-150', dimmed && 'opacity-35'),
     style: {
-      left: `${position.left}%`,
-      top: `${position.top}%`,
+      left: `${position.left}px`,
+      top: `${position.top}px`,
       transform: 'translate(-50%, -50%)',
       transformOrigin: '50% 100%',
       width: `${width + 22}px`,
@@ -5106,8 +5795,10 @@ function TownBulletinBoard({ assets, inProgressCount, totalTasksCount, onOpenBul
       'focus-visible:outline focus-visible:outline-2 focus-visible:outline-(--ui-accent)',
     ),
     style: {
-      left: '35%',
-      top: '58%',
+      // Stage pixels, anchored in TOWN_BULLETIN_RECT (420,435,60,70). The art
+      // is bottom-anchored: `top` is the bottom of the reserved box.
+      left: '450px',
+      top: '499px',
       transform: 'translate(-50%, -85%)',
       zIndex: 12,
     },
@@ -5391,24 +6082,15 @@ function TownBulletinModal({ town, pets, onClose, onSelectTask }) {
 
 function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, reducedMotion }) {
   const grass = assets && assets['grass.png'] && assets['grass.png'].data_url
-  const roadH = assets && assets['road-h.png'] && assets['road-h.png'].data_url
-  const roadV = assets && assets['road-v.png'] && assets['road-v.png'].data_url
   const plazaStone = assets && assets['plaza-stone.png'] && assets['plaza-stone.png'].data_url
   const water = assets && assets['water.png'] && assets['water.png'].data_url
-  const bridge = assets && assets['bridge.png'] && assets['bridge.png'].data_url
-  const bench = assets && assets['bench.png'] && assets['bench.png'].data_url
-  const well = assets && assets['well.png'] && assets['well.png'].data_url
-  const flowers = assets && assets['flowers.png'] && assets['flowers.png'].data_url
-  const signpost = assets && assets['signpost.png'] && assets['signpost.png'].data_url
-  const treeA = assets && assets['tree-a.png'] && assets['tree-a.png'].data_url
-  const treeB = assets && assets['tree-b.png'] && assets['tree-b.png'].data_url
-  const treeC = assets && assets['tree-c.png'] && assets['tree-c.png'].data_url
-  const bush = assets && assets['bush.png'] && assets['bush.png'].data_url
-  const fountain = assets && assets['fountain.png'] && assets['fountain.png'].data_url
-  const lamp = assets && assets['lamp.png'] && assets['lamp.png'].data_url
-  const rock = assets && assets['rock.png'] && assets['rock.png'].data_url
   const personArt = assets && assets['person.png'] && assets['person.png'].data_url
+  const artFor = (name) => (assets && assets[name] && assets[name].data_url) || null
   const workers = Array.isArray(town.workers) ? town.workers : []
+  // Vacant parcels come from each worker's own slot, never from the array
+  // index, so a worker that appears later only fills its own lot marker and
+  // never shifts the lots around it.
+  const vacantPlots = townVacantPlots(workers)
   const [filter, setFilter] = useState('all')
   const [paused, setPaused] = useState(false)
   const [bulletinOpen, setBulletinOpen] = useState(false)
@@ -5417,7 +6099,6 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
   }, [town.id])
   const townTime = useTownTime()
   const isDark = townTime.phase === 'night' || townTime.phase === 'dusk'
-  const actorMap = useTownSimulation(town, buildingIds, reducedMotion || paused)
   const counts = workers.reduce((acc, worker) => {
     const key = townStatusLabel(worker.status)
     acc[key] = (acc[key] || 0) + 1
@@ -5440,375 +6121,403 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
     { id: 'pr', label: `PRs (${prCount})` },
   ]
 
-  const trees = [
-    { left: 4, top: 72, src: treeA, width: 82 },
-    { left: 95, top: 68, src: treeB, width: 76 },
-    { left: 3, top: 32, src: treeC, width: 58 },
-    { left: 95, top: 29, src: treeA, width: 70 },
-    { left: 20, top: 14, src: treeC, width: 50 },
-    { left: 80, top: 14, src: treeB, width: 56 },
-    { left: 44, top: 18, src: treeB, width: 62 },
-    { left: 57, top: 17, src: treeC, width: 52 },
-    { left: 19, top: 93, src: treeA, width: 68 },
-    { left: 82, top: 93, src: treeB, width: 64 },
-  ].filter((tree) => tree.src)
+  // Props and planting read authored stage coordinates instead of the old
+  // scattered percentages. Civic props come from the reserved-box table;
+  // garden props only from the greenbelt and the south verge.
+  const decorations = [...TOWN_CIVIC_PROPS, ...TOWN_GARDEN_PROPS]
 
-  const decorations = [
-    { key: 'fountain', left: 50, top: 76, src: fountain, width: 84 },
-    { key: 'well', left: 63, top: 63, src: well, width: 42 },
-    { key: 'signpost', left: 37, top: 63, src: signpost, width: 28 },
-    { key: 'bench-l', left: 43, top: 76, src: bench, width: 38 },
-    { key: 'bench-r', left: 57, top: 76, src: bench, width: 38 },
-    { key: 'bench-park', left: 74, top: 73, src: bench, width: 36 },
-    { key: 'bridge-sw', left: 24, top: 74, src: bridge, width: 56 },
-    { key: 'lamp-nw', left: 39, top: 48, src: lamp, width: 22, glow: anyRunning || isDark },
-    { key: 'lamp-ne', left: 61, top: 48, src: lamp, width: 22, glow: anyRunning || isDark },
-    { key: 'lamp-sw', left: 36, top: 68, src: lamp, width: 22, glow: anyRunning || isDark },
-    { key: 'lamp-se', left: 64, top: 68, src: lamp, width: 22, glow: anyRunning || isDark },
-    { key: 'bush-nw', left: 16, top: 32, src: bush, width: 44 },
-    { key: 'bush-ne', left: 84, top: 32, src: bush, width: 44 },
-    { key: 'bush-sw', left: 16, top: 66, src: bush, width: 44 },
-    { key: 'bush-se', left: 84, top: 66, src: bush, width: 44 },
-    { key: 'flowers-1', left: 34, top: 36, src: flowers, width: 32 },
-    { key: 'flowers-2', left: 66, top: 36, src: flowers, width: 32 },
-    { key: 'flowers-3', left: 40, top: 84, src: flowers, width: 32 },
-    { key: 'flowers-4', left: 60, top: 84, src: flowers, width: 32 },
-    { key: 'rock-l', left: 6, top: 89, src: rock, width: 25 },
-    { key: 'rock-r', left: 93, top: 88, src: rock, width: 25 },
-  ].filter((item) => item.src)
+  // Estate paving, one SVG. The pattern id is derived from the town id so two
+  // mounted scenes can never share (or collide on) one pattern definition.
+  const patternKey = `town-${townHash(town.id).toString(36)}`
+  const stonePatternId = `${patternKey}-stone`
+  const waterPatternId = `${patternKey}-water`
+  const stoneFill = plazaStone ? `url(#${stonePatternId})` : 'rgba(165,148,126,0.72)'
+  const waterFill = water ? `url(#${waterPatternId})` : 'rgba(70,120,150,0.85)'
+  const paved = [
+    { key: 'loop', d: TOWN_ESTATE_LOOP_PATH, width: TOWN_LANE_WIDTH, lane: 'loop' },
+    {
+      key: 'avenue',
+      d: `M ${TOWN_LANE_WEST_X} ${TOWN_AVENUE_Y} L ${TOWN_LANE_EAST_X} ${TOWN_AVENUE_Y}`,
+      width: TOWN_LANE_WIDTH,
+      lane: 'avenue',
+    },
+    ...TOWN_DRIVES.map((drive) => ({
+      key: `drive:${drive.id}`,
+      d: `M ${drive.x} ${drive.doorY} L ${drive.x} ${drive.gateY}`,
+      width: TOWN_DRIVE_WIDTH,
+      drive: drive.id,
+    })),
+  ]
+  const ground = jsxs('svg', {
+    'aria-hidden': 'true',
+    'data-town-ground': '1',
+    viewBox: `0 0 ${TOWN_STAGE.width} ${TOWN_STAGE.height}`,
+    preserveAspectRatio: 'none',
+    className: 'pointer-events-none absolute inset-0 h-full w-full',
+    style: { zIndex: 0 },
+    children: [
+      jsx('defs', {
+        key: 'defs',
+        children: [
+          plazaStone
+            ? jsx('pattern', {
+                key: 'stone',
+                id: stonePatternId,
+                patternUnits: 'userSpaceOnUse',
+                width: 64,
+                height: 64,
+                children: jsx('image', {
+                  key: 'tile', href: plazaStone, width: 64, height: 64, preserveAspectRatio: 'none',
+                }),
+              })
+            : null,
+          water
+            ? jsx('pattern', {
+                key: 'water',
+                id: waterPatternId,
+                patternUnits: 'userSpaceOnUse',
+                width: 64,
+                height: 64,
+                children: jsx('image', {
+                  key: 'tile', href: water, width: 64, height: 64, preserveAspectRatio: 'none',
+                }),
+              })
+            : null,
+        ],
+      }),
+      // Moss first, stone on top. The wider under-stroke is what makes a lane
+      // look edged rather than painted straight onto the meadow.
+      jsx('g', {
+        key: 'lane-banks',
+        children: paved.map((path) => jsx('path', {
+          key: `bank:${path.key}`,
+          d: path.d,
+          fill: 'none',
+          stroke: '#4a5d33',
+          strokeWidth: path.width === TOWN_LANE_WIDTH ? TOWN_LANE_UNDER_WIDTH : TOWN_DRIVE_UNDER_WIDTH,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          opacity: '0.9',
+        })),
+      }),
+      jsx('g', {
+        key: 'paving',
+        children: paved.map((path) => jsx('path', {
+          key: `stone:${path.key}`,
+          d: path.d,
+          'data-town-lane': path.lane || null,
+          'data-town-drive': path.drive || null,
+          fill: 'none',
+          stroke: stoneFill,
+          strokeWidth: path.width,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+        })),
+      }),
+      // Plaza: a moss halo around the stepped bands, then the bands themselves.
+      jsx('g', {
+        key: 'plaza-halo',
+        children: TOWN_PLAZA_BANDS.map((band) => jsx('rect', {
+          key: `halo:${band.id}`,
+          x: band.x - 4,
+          y: band.y - 4,
+          width: band.w + 8,
+          height: band.h + 8,
+          rx: 8,
+          fill: '#4a5d33',
+          opacity: '0.9',
+        })),
+      }),
+      jsx('g', {
+        key: 'plaza',
+        'data-town-landmark': 'plaza',
+        children: TOWN_PLAZA_BANDS.map((band) => jsx('rect', {
+          key: `band:${band.id}`,
+          'data-town-plaza-band': band.id,
+          x: band.x,
+          y: band.y,
+          width: band.w,
+          height: band.h,
+          fill: stoneFill,
+        })),
+      }),
+      // The pond: one irregular closed bank and a patterned water fill, both
+      // inside TOWN_POND_RECT.
+      jsx('path', {
+        key: 'pond-water',
+        'data-town-landmark': 'stream',
+        d: TOWN_POND_PATH,
+        fill: waterFill,
+      }),
+      jsx('path', {
+        key: 'pond-bank',
+        d: TOWN_POND_PATH,
+        fill: 'none',
+        stroke: '#5c6b3c',
+        strokeWidth: 6,
+        strokeLinejoin: 'round',
+        opacity: '0.95',
+      }),
+    ],
+  })
 
   const petMap = pets || {}
   const routerPet = petMap[town.avatar_slug] || null
+
+  // The estate is one fixed canvas scaled into the pane. Measure the viewport
+  // (not the stage): its box is what has to scroll when the estate is larger.
+  // The 1px frame border is not usable space, so subtract it before fitting -
+  // otherwise an exactly-fitted estate shows a 2px scrollbar.
+  const STAGE_VIEWPORT_BORDER = 2
+  const viewportRef = useRef(null)
+  const viewport = useElementSize(viewportRef)
+  const stageScale = townStageScale(
+    viewport.width ? viewport.width - STAGE_VIEWPORT_BORDER : TOWN_STAGE.width,
+    viewport.height ? viewport.height - STAGE_VIEWPORT_BORDER : TOWN_STAGE.height,
+  )
+  const stageWidth = Math.round(TOWN_STAGE.width * stageScale)
+  const stageHeight = Math.round(TOWN_STAGE.height * stageScale)
+  // Centre each axis only when that axis fits. An axis that has to scroll
+  // keeps a zero margin, so the top-left corner is never pushed out of reach.
+  const fitsWidth = viewport.width - STAGE_VIEWPORT_BORDER >= stageWidth
+  const fitsHeight = viewport.height - STAGE_VIEWPORT_BORDER >= stageHeight
 
   return jsxs('div', {
     className: 'superagent-pixel relative isolate z-0 flex min-h-0 flex-1 flex-col gap-2',
     style: { isolation: 'isolate', zIndex: 0 },
     children: [
+      // Static HUD row: outside the scroll area so it never covers the north
+      // row of houses and never scrolls away with the terrain.
       jsxs('div', {
-        key: 'scene',
+        key: 'hud',
+        'data-town-hud': '1',
+        className: 'flex shrink-0 flex-wrap items-center justify-between gap-1.5 px-0.5',
+        style: { zIndex: 24 },
+        children: [
+          jsxs('div', {
+            key: 'filters',
+            role: 'group',
+            'aria-label': 'Filter town workers',
+            className: cn('inline-flex flex-wrap items-center gap-0.5 rounded-md border',
+              'border-(--ui-stroke-secondary) bg-background/90 p-0.5 shadow-sm backdrop-blur-xs'),
+            children: filterOptions.map((option) => {
+              const active = filter === option.id
+              return jsx('button', {
+                key: option.id,
+                type: 'button',
+                'aria-pressed': active,
+                onClick: () => setFilter(option.id),
+                className: cn(
+                  'rounded px-1.5 py-0.5 text-[0.625rem] leading-tight transition-colors',
+                  active
+                    ? 'bg-primary font-medium text-primary-foreground'
+                    : 'text-(--ui-text-secondary) hover:bg-(--chrome-action-hover)',
+                ),
+                children: option.label,
+              })
+            }),
+          }),
+          jsxs('div', {
+            key: 'right',
+            className: 'inline-flex items-center gap-1.5',
+            children: [
+              jsx('span', {
+                key: 'clock',
+                'data-town-clock': townTime.phase,
+                title: `Town time follows this device (${townTime.phase})`,
+                className: cn('superagent-town-clock superagent-pixel-panel inline-flex items-center gap-1 rounded-md border',
+                  'border-(--ui-stroke-secondary) bg-background/90 px-2 py-0.5',
+                  'text-[0.625rem] leading-tight text-(--ui-text-secondary) shadow-sm'),
+                children: `${townTime.phase === 'night' ? '🌙' : (townTime.phase === 'day' ? '☀️' : '🌤️')} ${townTime.label}`,
+              }),
+              jsx('button', {
+                key: 'pause',
+                type: 'button',
+                'aria-pressed': paused,
+                'aria-label': paused ? 'Resume character movement' : 'Pause character movement',
+                title: paused ? 'Resume autonomous character walking' : 'Pause autonomous character walking',
+                onClick: () => setPaused((prev) => !prev),
+                className: cn(
+                  'rounded-md border border-(--ui-stroke-secondary) bg-background/90',
+                  'px-2 py-0.5 text-[0.625rem] leading-tight text-(--ui-text-secondary) shadow-sm',
+                  'hover:bg-(--chrome-action-hover)',
+                ),
+                children: paused ? '▶ Walk' : '⏸ Pause',
+              }),
+            ],
+          }),
+        ],
+      }),
+      // Scene viewport: the only scroll container. The slot keeps the scaled
+      // footprint so the whole estate is reachable, and margin auto centres it
+      // only when it fits (never a negative offset that clips the top-left).
+      jsx('div', {
+        key: 'viewport',
+        ref: viewportRef,
         role: 'group',
         'aria-label': `${sessionTitle(town)} — town`,
         'data-town-workers': workers.length,
-        'data-town-road-network': 'cobblestone',
-        className: cn('relative isolate z-0 min-h-[390px] flex-1 overflow-hidden rounded-lg border',
+        'data-town-road-network': 'contiguous-estate',
+        className: cn('superagent-pixel-scroll relative isolate z-0 flex min-h-[390px] flex-1 overflow-auto rounded-lg border',
           'border-(--ui-stroke-secondary)'),
         style: grass
           ? {
               isolation: 'isolate',
               zIndex: 0,
+              // Same base grass as the meadow, so the letterbox margin around
+              // a capped stage has no visible hard edge.
               backgroundImage: `url("${grass}")`,
-              backgroundSize: '128px 64px',
+              backgroundSize: '64px 32px',
               backgroundRepeat: 'repeat',
               imageRendering: 'pixelated',
             }
           : { isolation: 'isolate', zIndex: 0 },
-        children: [
-          // Stream & meadow pond in the southwest quarter
-          water
-            ? jsx('div', {
-                key: 'water-pond',
-                'aria-hidden': 'true',
-                'data-town-landmark': 'stream',
-                className: 'pointer-events-none absolute z-0 rounded-full opacity-90',
-                style: {
-                  left: '24%', top: '73%', width: '16%', height: '14%',
-                  transform: 'translate(-50%, -50%)',
-                  backgroundImage: `url("${water}")`,
-                  backgroundSize: '48px 48px',
-                  backgroundRepeat: 'repeat',
-                  imageRendering: 'pixelated',
-                  boxShadow: 'inset 0 0 8px rgba(20,55,90,0.45)',
-                },
-              })
-            : null,
-          // Cobblestone road network connecting every plot to the Central Plaza
-          jsx('div', {
-            key: 'road-west-ave', 'aria-hidden': 'true',
-            className: 'pointer-events-none absolute z-[1] opacity-90',
+        children: jsx('div', {
+          key: 'stage-slot',
+          className: 'relative',
+          style: {
+            width: `${stageWidth}px`,
+            height: `${stageHeight}px`,
+            flex: '0 0 auto',
+            margin: `${fitsHeight ? 'auto' : 0} ${fitsWidth ? 'auto' : 0}`,
+          },
+          children: jsx('div', {
+            key: 'stage',
+            'data-town-stage': `${TOWN_STAGE.width}x${TOWN_STAGE.height}`,
+            'aria-label': 'Estate stage',
+            className: 'absolute left-0 top-0 isolate overflow-hidden',
             style: {
-              left: '20%', top: '51%', width: '24px', height: '70%',
-              transform: 'translate(-50%, -50%)',
-              backgroundImage: roadV ? `url("${roadV}")` : undefined,
-              backgroundColor: roadV ? undefined : 'rgba(145,132,114,0.65)',
-              backgroundSize: '24px 48px',
-              backgroundRepeat: 'repeat-y',
-              imageRendering: 'pixelated',
-            },
-          }),
-          jsx('div', {
-            key: 'road-east-ave', 'aria-hidden': 'true',
-            className: 'pointer-events-none absolute z-[1] opacity-90',
-            style: {
-              left: '80%', top: '51%', width: '24px', height: '70%',
-              transform: 'translate(-50%, -50%)',
-              backgroundImage: roadV ? `url("${roadV}")` : undefined,
-              backgroundColor: roadV ? undefined : 'rgba(145,132,114,0.65)',
-              backgroundSize: '24px 48px',
-              backgroundRepeat: 'repeat-y',
-              imageRendering: 'pixelated',
-            },
-          }),
-          jsx('div', {
-            key: 'road-north-st', 'aria-hidden': 'true',
-            className: 'pointer-events-none absolute z-[1] opacity-90',
-            style: {
-              left: '50%', top: '24%', width: '82%', height: '22px',
-              transform: 'translate(-50%, -50%)',
-              backgroundImage: roadH ? `url("${roadH}")` : undefined,
-              backgroundColor: roadH ? undefined : 'rgba(145,132,114,0.65)',
-              backgroundSize: '48px 22px',
-              backgroundRepeat: 'repeat-x',
-              imageRendering: 'pixelated',
-            },
-          }),
-          jsx('div', {
-            key: 'road-main-st', 'aria-hidden': 'true',
-            className: 'pointer-events-none absolute z-[1] opacity-95',
-            style: {
-              left: '50%', top: '55%', width: '84%', height: '26px',
-              transform: 'translate(-50%, -50%)',
-              backgroundImage: roadH ? `url("${roadH}")` : undefined,
-              backgroundColor: roadH ? undefined : 'rgba(145,132,114,0.75)',
-              backgroundSize: '48px 26px',
-              backgroundRepeat: 'repeat-x',
-              imageRendering: 'pixelated',
-            },
-          }),
-          jsx('div', {
-            key: 'road-south-st', 'aria-hidden': 'true',
-            className: 'pointer-events-none absolute z-[1] opacity-90',
-            style: {
-              left: '50%', top: '84%', width: '82%', height: '22px',
-              transform: 'translate(-50%, -50%)',
-              backgroundImage: roadH ? `url("${roadH}")` : undefined,
-              backgroundColor: roadH ? undefined : 'rgba(145,132,114,0.65)',
-              backgroundSize: '48px 22px',
-              backgroundRepeat: 'repeat-x',
-              imageRendering: 'pixelated',
-            },
-          }),
-          jsx('div', {
-            key: 'road-center-promenade', 'aria-hidden': 'true',
-            className: 'pointer-events-none absolute z-[1] opacity-95',
-            style: {
-              left: '50%', top: '54%', width: '28px', height: '62%',
-              transform: 'translate(-50%, -50%)',
-              backgroundImage: roadV ? `url("${roadV}")` : undefined,
-              backgroundColor: roadV ? undefined : 'rgba(145,132,114,0.75)',
-              backgroundSize: '28px 48px',
-              backgroundRepeat: 'repeat-y',
-              imageRendering: 'pixelated',
-            },
-          }),
-          // Paved Central Town Square around Router Hall & Fountain
-          jsx('div', {
-            key: 'plaza', 'aria-hidden': 'true',
-            'data-town-landmark': 'plaza',
-            className: 'pointer-events-none absolute z-[2] rounded-2xl border border-black/15 shadow-inner',
-            style: {
-              left: '50%', top: '63%', width: '32%', height: '34%',
-              transform: 'translate(-50%, -50%)',
-              backgroundImage: plazaStone ? `url("${plazaStone}")` : undefined,
-              backgroundColor: plazaStone ? undefined : 'rgba(165,148,126,0.7)',
-              backgroundSize: '48px 48px',
+              width: `${TOWN_STAGE.width}px`,
+              height: `${TOWN_STAGE.height}px`,
+              transform: `scale(${stageScale})`,
+              transformOrigin: '0 0',
+              isolation: 'isolate',
+              zIndex: 0,
+              // Fallback only: TownGround paints every cell on top of this.
+              backgroundImage: grass ? `url("${grass}")` : undefined,
+              backgroundSize: '64px 32px',
               backgroundRepeat: 'repeat',
               imageRendering: 'pixelated',
             },
-          }),
-          // Device-clock sky tint. Sits above roads/plaza (z-2) but below
-          // houses (z-4+) and actors, so it tints the ground, not the UI.
-          jsx('div', {
-            key: 'sky',
-            'aria-hidden': 'true',
-            'data-town-time': townTime.phase,
-            title: `Town time ${townTime.label} (${townTime.phase})`,
-            className: 'superagent-town-sky pointer-events-none absolute inset-0 z-[3]',
-            style: { backgroundColor: townTimeOverlay(townTime.phase) },
-          }),
-          // Router ↔ Worker visual connection paths
-          workers.length > 0
-            ? jsx('svg', {
-                key: 'connections',
-                'aria-hidden': 'true',
-                'data-town-connections': '1',
-                viewBox: '0 0 100 100',
-                preserveAspectRatio: 'none',
-                className: 'pointer-events-none absolute inset-0 z-[2] h-full w-full',
-                children: workers.map((worker) => {
-                  const pos = townHousePosition(worker.town_slot, worker.id)
-                  const active = worker.status === 'running' || worker.status === 'queued'
-                  const matches = matchesTownFilter(worker, filter, false)
-                  return jsx('line', {
-                    key: `link:${worker.id}`,
-                    x1: '50',
-                    y1: '47',
-                    x2: String(pos.left),
-                    y2: String(pos.top),
-                    stroke: active ? 'rgba(255, 208, 92, 0.85)' : 'rgba(255, 255, 255, 0.25)',
-                    strokeWidth: active ? '0.45' : '0.28',
-                    strokeDasharray: active ? '1.2 0.8' : '0.9 1.1',
-                    opacity: matches ? '1' : '0.25',
-                  })
-                }),
-              })
-            : null,
-          ...decorations.map((item) => jsx('img', {
-            key: `deco:${item.key}`,
-            src: item.src,
-            alt: '',
-            'aria-hidden': 'true',
-            draggable: false,
-            className: 'pointer-events-none absolute -translate-x-1/2 -translate-y-full opacity-95',
-            style: {
-              left: `${item.left}%`, top: `${item.top}%`,
-              width: item.width, height: 'auto', imageRendering: 'pixelated',
-              zIndex: Math.max(3, Math.min(22, Math.round(item.top / 5))),
-              filter: item.glow ? (isDark ? 'drop-shadow(0 0 8px rgba(255,214,102,0.95)) drop-shadow(0 0 2px rgba(255,240,180,0.9))' : 'drop-shadow(0 0 6px rgba(255,214,102,0.85))') : undefined,
-            },
-          })),
-          ...trees.map((tree, index) => jsx('img', {
-            key: `tree:${index}`,
-            src: tree.src,
-            alt: '',
-            'aria-hidden': 'true',
-            draggable: false,
-            className: 'pointer-events-none absolute -translate-x-1/2 -translate-y-full opacity-95',
-            style: {
-              left: `${tree.left}%`, top: `${tree.top}%`,
-              width: tree.width, height: 'auto', imageRendering: 'pixelated',
-              zIndex: Math.max(3, Math.min(22, Math.round(tree.top / 5))),
-            },
-          })),
-          jsx(TownBulletinBoard, {
-            key: 'bulletin-board',
-            assets,
-            inProgressCount,
-            totalTasksCount,
-            onOpenBulletin: () => setBulletinOpen(true),
-          }),
-          jsx(TownHouse, {
-            key: town.id,
-            session: town,
-            isRouter: true,
-            slot: 0,
-            onOpen,
-            houseRef: registerHouse(town.id),
-            building: false,
-            reducedMotion,
-            assets,
-            pet: routerPet,
-            dimmed: false,
-          }),
-          ...workers.map((worker) => jsx(TownHouse, {
-            key: worker.id,
-            session: worker,
-            isRouter: false,
-            slot: worker.town_slot,
-            onOpen,
-            houseRef: registerHouse(worker.id),
-            building: !!(buildingIds && buildingIds[worker.id]),
-            reducedMotion,
-            assets,
-            pet: petMap[worker.avatar_slug] || null,
-            dimmed: !matchesTownFilter(worker, filter, false),
-          })),
-          jsx(TownActor, {
-            key: `actor:${town.id}`,
-            session: town,
-            isRouter: true,
-            actorState: actorMap[town.id],
-            pet: routerPet,
-            personArt,
-            reducedMotion: reducedMotion || paused,
-            dimmed: false,
-            onOpen,
-          }),
-          ...workers.map((worker) => jsx(TownActor, {
-            key: `actor:${worker.id}`,
-            session: worker,
-            isRouter: false,
-            actorState: actorMap[worker.id],
-            pet: petMap[worker.avatar_slug] || null,
-            personArt,
-            reducedMotion: reducedMotion || paused,
-            dimmed: !matchesTownFilter(worker, filter, false),
-            onOpen,
-          })),
-          // Compact Town HUD overlay (stayed strictly inside TownScene's isolated z-0 stacking context)
-          jsxs('div', {
-            key: 'hud',
-            'data-town-hud': '1',
-            className: 'pointer-events-none absolute inset-x-2.5 top-2 z-20 flex flex-wrap items-center justify-between gap-1.5',
-            style: { zIndex: 24 },
             children: [
-              jsxs('div', {
-                key: 'filters',
-                role: 'group',
-                'aria-label': 'Filter town workers',
-                className: cn('pointer-events-auto inline-flex flex-wrap items-center gap-0.5 rounded-md border',
-                  'border-(--ui-stroke-secondary) bg-background/90 p-0.5 shadow-sm backdrop-blur-xs'),
-                children: filterOptions.map((option) => {
-                  const active = filter === option.id
-                  return jsx('button', {
-                    key: option.id,
-                    type: 'button',
-                    'aria-pressed': active,
-                    onClick: () => setFilter(option.id),
-                    className: cn(
-                      'rounded px-1.5 py-0.5 text-[0.625rem] leading-tight transition-colors',
-                      active
-                        ? 'bg-primary font-medium text-primary-foreground'
-                        : 'text-(--ui-text-secondary) hover:bg-(--chrome-action-hover)',
-                    ),
-                    children: option.label,
-                  })
-                }),
+              // Deterministic meadow first: every other layer paints above it.
+              jsx(TownGround, { key: 'meadow', assets }),
+              // One SVG paints every paved surface (lane banks, stone lanes,
+              // drives, stepped plaza, pond). pointer-events-none and below all
+              // entities, so the map is scenery and never a click target.
+              ground,
+              // Device-clock sky tint: above the ground but below houses (z-4+)
+              // and actors, so it tints the terrain, not the UI.
+              jsx('div', {
+                key: 'sky',
+                'aria-hidden': 'true',
+                'data-town-time': townTime.phase,
+                title: `Town time ${townTime.label} (${townTime.phase})`,
+                className: 'superagent-town-sky pointer-events-none absolute inset-0 z-[3]',
+                style: { backgroundColor: townTimeOverlay(townTime.phase) },
               }),
-              jsxs('div', {
-                key: 'right',
-                className: 'pointer-events-auto inline-flex items-center gap-1.5',
-                children: [
-                  jsx('span', {
-                    key: 'clock',
-                    'data-town-clock': townTime.phase,
-                    title: `Town time follows this device (${townTime.phase})`,
-                    className: cn('superagent-town-clock superagent-pixel-panel inline-flex items-center gap-1 rounded-md border',
-                      'border-(--ui-stroke-secondary) bg-background/90 px-2 py-0.5',
-                      'text-[0.625rem] leading-tight text-(--ui-text-secondary) shadow-sm'),
-                    children: `${townTime.phase === 'night' ? '🌙' : (townTime.phase === 'day' ? '☀️' : '🌤️')} ${townTime.label}`,
-                  }),
-                  jsx('button', {
-                    key: 'pause',
-                    type: 'button',
-                    'aria-pressed': paused,
-                    'aria-label': paused ? 'Resume character movement' : 'Pause character movement',
-                    title: paused ? 'Resume autonomous character walking' : 'Pause autonomous character walking',
-                    onClick: () => setPaused((prev) => !prev),
-                    className: cn(
-                      'pointer-events-auto rounded-md border border-(--ui-stroke-secondary) bg-background/90',
-                      'px-2 py-0.5 text-[0.625rem] leading-tight text-(--ui-text-secondary) shadow-sm',
-                      'hover:bg-(--chrome-action-hover)',
-                    ),
-                    children: paused ? '▶ Walk' : '⏸ Pause',
-                  }),
-                ],
+              ...decorations.map((item) => {
+                const art = artFor(item.sprite)
+                if (!art) return null
+                return jsx('img', {
+                  key: `deco:${item.key}`,
+                  src: art,
+                  alt: '',
+                  'aria-hidden': 'true',
+                  draggable: false,
+                  className: 'pointer-events-none absolute -translate-x-1/2 -translate-y-full opacity-95',
+                  style: {
+                    left: `${item.left}px`, top: `${item.top}px`,
+                    width: item.width, height: 'auto', imageRendering: 'pixelated',
+                    zIndex: townDepth(item.top),
+                    filter: item.glow ? (isDark ? 'drop-shadow(0 0 8px rgba(255,214,102,0.95)) drop-shadow(0 0 2px rgba(255,240,180,0.9))' : 'drop-shadow(0 0 6px rgba(255,214,102,0.85))') : undefined,
+                  },
+                })
+              }),
+              ...TOWN_TREES.map((tree) => {
+                const art = artFor(tree.sprite)
+                if (!art) return null
+                return jsx('img', {
+                  key: `tree:${tree.key}`,
+                  src: art,
+                  alt: '',
+                  'aria-hidden': 'true',
+                  draggable: false,
+                  className: 'pointer-events-none absolute -translate-x-1/2 -translate-y-full opacity-95',
+                  style: {
+                    left: `${tree.left}px`, top: `${tree.top}px`,
+                    width: tree.width, height: 'auto', imageRendering: 'pixelated',
+                    zIndex: townDepth(tree.top),
+                  },
+                })
+              }),
+              ...vacantPlots.map((plot) => jsx(TownEmptyPlot, {
+                key: `empty:${plot.id}`,
+                plot,
+                assets,
+              })),
+              jsx(TownBulletinBoard, {
+                key: 'bulletin-board',
+                assets,
+                inProgressCount,
+                totalTasksCount,
+                onOpenBulletin: () => setBulletinOpen(true),
+              }),
+              jsx(TownHouse, {
+                key: town.id,
+                session: town,
+                isRouter: true,
+                slot: 0,
+                onOpen,
+                houseRef: registerHouse(town.id),
+                building: false,
+                reducedMotion,
+                assets,
+                pet: routerPet,
+                dimmed: false,
+              }),
+              ...workers.map((worker) => jsx(TownHouse, {
+                key: worker.id,
+                session: worker,
+                isRouter: false,
+                slot: worker.town_slot,
+                onOpen,
+                houseRef: registerHouse(worker.id),
+                building: !!(buildingIds && buildingIds[worker.id]),
+                reducedMotion,
+                assets,
+                pet: petMap[worker.avatar_slug] || null,
+                dimmed: !matchesTownFilter(worker, filter, false),
+              })),
+              jsx(TownPopulation, {
+                key: 'population',
+                town,
+                buildingIds,
+                pets: petMap,
+                personArt,
+                reducedMotion,
+                paused,
+                filter,
+                onOpen,
               }),
             ],
           }),
-          bulletinOpen
-            ? jsx(TownBulletinModal, {
-                key: 'bulletin-modal',
-                town,
-                pets: petMap,
-                onClose: () => setBulletinOpen(false),
-                onSelectTask: (id) => {
-                  setBulletinOpen(false)
-                  onOpen(id)
-                },
-              })
-            : null,
-        ],
+        }),
       }),
+      // The bulletin dialog is a full-pane overlay, so it lives outside the
+      // scaled stage; inside it would inherit the scale and be clipped.
+      bulletinOpen
+        ? jsx(TownBulletinModal, {
+            key: 'bulletin-modal',
+            town,
+            pets: petMap,
+            onClose: () => setBulletinOpen(false),
+            onSelectTask: (id) => {
+              setBulletinOpen(false)
+              onOpen(id)
+            },
+          })
+        : null,
       jsx('p', {
         key: 'status',
         role: 'status',
@@ -7496,10 +8205,30 @@ function SuperagentChip() {
 export {
   SuperagentPage, SettingsPanel, OverlayDrawer, ModelPicker, PresetSelect,
   modelWithThinking, reasoningLabel, backendNeedsRestart,
-  TownScene, TownHouse, TownActor, PetdexSprite, TownSpeechBubble,
+  TownScene, TownHouse, TownActor, TownEmptyPlot, PetdexSprite, TownSpeechBubble,
   TownBulletinBoard, TownBulletinModal,
   TownSwitcher, TownPickerList, TownPickerPopover, TownChatDialog, TownEmpty, CommentBox, CreatePrBox,
   townChoices, townHousePosition, townHouseSprite, townStatusLabel, deriveSpeechBubble, TOWN_PLOTS,
+  townOccupiedSlots, townVacantPlots,
+  TOWN_STAGE, TOWN_STAGE_MIN_SCALE, TOWN_STAGE_MAX_SCALE, TOWN_ROUTER,
+  TOWN_ROUTER_RECT, TOWN_FOUNTAIN_RECT, TOWN_BULLETIN_RECT, TOWN_WELL_RECT,
+  TOWN_BENCH_WEST_RECT, TOWN_BENCH_EAST_RECT,
+  TOWN_LAMP_NW_RECT, TOWN_LAMP_NE_RECT, TOWN_LAMP_SW_RECT, TOWN_LAMP_SE_RECT,
+  TOWN_POND_RECT, TOWN_RESERVED_RECTS,
+  rectsOverlap, townPlotRect, townDepth, townStageScale,
+  TownGround, TOWN_PLAZA_BANDS, TOWN_POND_PATH, TOWN_DRIVES,
+  TOWN_LANE_NORTH_Y, TOWN_LANE_SOUTH_Y, TOWN_LANE_WEST_X, TOWN_LANE_EAST_X,
+  TOWN_AVENUE_Y, TOWN_LANE_WIDTH, TOWN_DRIVE_WIDTH, TOWN_LANE_CORNER,
+  TOWN_ESTATE_LOOP_PATH, TOWN_MEADOW_TILES, townMeadowSprite,
+  TOWN_DOORSTEP_Y, TOWN_GATE_Y,
+  TOWN_GARDEN_ZONES, TOWN_TREES, TOWN_GARDEN_PROPS, TOWN_CIVIC_PROPS,
+  TOWN_NODES, TOWN_ROUTES_TO_HUB, TOWN_CIVIC_DESTINATIONS, townRoute,
+  TOWN_ROUTER_DOOR_Y, TOWN_PLAZA_WEST_X, TOWN_PLAZA_EAST_X,
+  TOWN_WALK_PX_PER_SEC, TOWN_REVIEW_PX_PER_SEC, TOWN_RUN_PX_PER_SEC,
+  TOWN_TICK_SECONDS, townActorSpeed, advanceTownSimulation,
+  townNextDestination, townTripPause,
+  townWalkFrame, TOWN_EPSILON_PX, TOWN_MAX_FRAME_SECONDS, TOWN_FACING_DX_PX,
+  petdexFrameCell, TOWN_FRAME_SECONDS, TOWN_IDLE_FRAME_SECONDS,
 }
 
 export default {

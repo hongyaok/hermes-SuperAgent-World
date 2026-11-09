@@ -89,10 +89,15 @@ const probePath = join(dir, 'plugin.mjs')
 await writeFile(probePath, rewritten, 'utf8')
 const plugin = await import(pathToFileURL(probePath).href)
 
+// Unique data URLs per sprite: tests can prove which tile an element paints
+// without fetching anything, and a missing sprite is still distinguishable.
+const assetUrl = (name) => `data:image/png;base64,${Buffer.from(`png:${name}`).toString('base64')}`
 const assets = Object.fromEntries(
-  ['grass.png', 'house-router.png', 'house-a.png', 'house-b.png', 'house-c.png', 'house-d.png',
-    'person.png', 'tree-a.png', 'tree-b.png', 'tree-c.png', 'bush.png', 'fountain.png', 'rock.png', 'lamp.png']
-    .map((name) => [name, { data_url: 'data:image/png;base64,AA==' }]),
+  ['grass.png', 'grass-b.png', 'grass-c.png', 'plot-empty.png',
+    'house-router.png', 'house-a.png', 'house-b.png', 'house-c.png', 'house-d.png',
+    'person.png', 'tree-a.png', 'tree-b.png', 'tree-c.png', 'bush.png', 'fountain.png',
+    'rock.png', 'lamp.png', 'bench.png', 'well.png', 'bulletin-board.png', 'flowers.png']
+    .map((name) => [name, { data_url: assetUrl(name) }]),
 )
 
 const root = {
@@ -130,9 +135,12 @@ function render(node) {
     'aria-label', 'aria-haspopup', 'aria-expanded', 'role',
     'data-town-picker', 'data-town-option', 'data-town-id',
     'data-town-house', 'data-town-actor', 'data-town-speech',
-    'data-petdex-slug', 'data-petdex-state', 'data-town-road-network',
-    'data-town-landmark', 'data-town-hud', 'data-town-connections',
+    'data-petdex-slug', 'data-petdex-state', 'data-petdex-frame', 'data-town-road-network',
+    'data-town-stage', 'data-town-landmark', 'data-town-hud', 'data-town-connections',
     'data-town-time', 'data-town-clock',
+    'data-town-plot', 'data-town-empty-plot',
+    'data-town-ground', 'data-town-meadow', 'data-town-lane', 'data-town-drive',
+    'data-town-plaza-band',
     'data-town-bulletin', 'data-town-bulletin-modal', 'data-town-bulletin-task',
     'data-transcript-scroll',
     'data-create-pr-box', 'data-town-dialog',
@@ -147,12 +155,43 @@ function render(node) {
   if (props.style && props.style.overflowY) bits.push(`overflow-y:${props.style.overflowY}`)
   if (props.style && props.style.isolation) bits.push(`isolation:${props.style.isolation}`)
   if (props.style && props.style.zIndex != null) bits.push(`z-index:${props.style.zIndex}`)
+  // Left/top are serialized so a regression from stage pixels back to
+  // percentages is visible to the assertions below.
+  if (props.style && props.style.left) bits.push(`left:${props.style.left}`)
+  if (props.style && props.style.top) bits.push(`top:${props.style.top}`)
+  if (props.style && props.style.transform) bits.push(`transform:${props.style.transform}`)
+  // Sprite sheets paint by background-position: serialized so the probe can
+  // prove both axes stay inside the sheet.
+  if (props.style && props.style.backgroundPosition) bits.push(`background-position:${props.style.backgroundPosition}`)
+  if (props.viewBox) bits.push(`viewBox="${props.viewBox}"`)
+  // Serialized so the probe can prove the paving is continuous: a dashed
+  // stroke would bring the old telemetry look straight back.
+  if (props.strokeDasharray != null) bits.push(`stroke-dasharray="${props.strokeDasharray}"`)
   const children = props.children
   if (children != null) bits.push(Array.isArray(children) ? children.map(render).join(' ') : render(children))
   return bits.join(' ')
 }
 
 const h = (type, props) => ({ type, props: props || {} })
+
+/** First rendered element carrying `key === value`, expanding function
+ *  components the same way render() does. Lets the probe prove containment
+ *  (the HUD is outside the scaled stage), not just string presence. */
+function findElement(node, key, value) {
+  if (node == null || typeof node !== 'object') return null
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const hit = findElement(child, key, value)
+      if (hit) return hit
+    }
+    return null
+  }
+  if (typeof node.type === 'function') return findElement(node.type(node.props || {}), key, value)
+  if (!node.type) return null
+  const props = node.props || {}
+  if (props[key] === value) return node
+  return findElement(props.children, key, value)
+}
 
 const pets = {
   'hermes-kody': {
@@ -180,21 +219,21 @@ root.avatar_slug = 'hermes-kody'
 workerOne.avatar_slug = 'coding-cat-pet'
 workerOne.recent_events = [{ kind: 'tool', detail: 'pytest -q' }]
 
-const scene = render(h(plugin.TownScene, {
+const sceneAssets = {
+  ...assets,
+  'water.png': { data_url: assetUrl('water.png') },
+  'plaza-stone.png': { data_url: assetUrl('plaza-stone.png') },
+}
+const sceneNode = h(plugin.TownScene, {
   town: root,
-  assets: {
-    ...assets,
-    'water.png': { data_url: 'data:image/png;base64,AA==' },
-    'road-h.png': { data_url: 'data:image/png;base64,AA==' },
-    'road-v.png': { data_url: 'data:image/png;base64,AA==' },
-    'plaza-stone.png': { data_url: 'data:image/png;base64,AA==' },
-  },
+  assets: sceneAssets,
   pets,
   buildingIds: { 'S-0002': true },
   onOpen: () => undefined,
   registerHouse: () => () => undefined,
   reducedMotion: false,
-}))
+})
+const scene = render(sceneNode)
 assert.match(scene, /Router house S-0001/)
 assert.match(scene, /Worker house S-0002/)
 assert.match(scene, /Worker house S-0003/)
@@ -202,7 +241,7 @@ assert.match(scene, /running/)
 assert.match(scene, /review/)
 assert.match(scene, /superagent-town-build/)
 assert.match(scene, /data-town-house="S-0002"/)
-assert.match(scene, /data-town-road-network="cobblestone"/)
+assert.match(scene, /data-town-road-network="contiguous-estate"/)
 assert.match(scene, /data-town-landmark="plaza"/)
 assert.match(scene, /data-town-landmark="stream"/)
 assert.match(scene, /data-town-actor="S-0001"/)
@@ -218,7 +257,7 @@ assert.match(scene, /superagent-pixel/)
 assert.match(scene, /data-town-time="/)
 assert.match(scene, /pytest -q/)
 assert.match(scene, /data-town-hud="1"/)
-assert.match(scene, /data-town-connections="1"/)
+assert.doesNotMatch(scene, /data-town-connections/, 'the Router→worker spokes are deleted, not hidden')
 assert.match(scene, /Filter town workers/)
 assert.match(scene, /Pause character movement/)
 // Stacking context isolation so town houses/sprites never escape over Settings/Drawers/Dialogs
@@ -226,6 +265,42 @@ assert.match(scene, /isolation:isolate z-index:0/)
 for (const match of scene.matchAll(/z-index:(\d+)/g)) {
   assert.ok(Number(match[1]) <= 25, `TownScene internal z-index ${match[1]} must stay <= 25`)
 }
+
+// -- responsive stage ------------------------------------------------------
+// One 1200x700 logical canvas, scaled to fit but clamped at both ends: the
+// floor keeps labels readable (the viewport scrolls instead) and the ceiling
+// stops a wide monitor from spreading the estate out again.
+assert.equal(plugin.townStageScale(992, 460), 0.8)
+assert.equal(plugin.townStageScale(2000, 1000), 1.25)
+assert.equal(plugin.townStageScale(1200, 700), 1)
+assert.ok(Math.abs(plugin.townStageScale(1586, 871) - 871 / 700) < 1e-9)
+assert.equal(plugin.townStageScale(0, 0), 0.8)
+assert.equal(plugin.townStageScale(null, undefined), 0.8)
+assert.equal(plugin.townStageScale('nonsense', {}), 0.8)
+assert.ok(Number.isFinite(plugin.townStageScale(Number.NaN, Number.POSITIVE_INFINITY)))
+
+// The stage carries the logical size; the HUD must stay outside it, or the
+// scale transform would enlarge the filter row and scrolling would drag it
+// off screen with the terrain.
+const stageNode = findElement(sceneNode, 'data-town-stage', '1200x700')
+assert.ok(stageNode, 'the scene renders a 1200x700 logical stage')
+assert.equal((scene.match(/data-town-stage=/g) || []).length, 1)
+const stageTree = render(stageNode)
+assert.match(stageTree, /transform:scale\(/)
+assert.doesNotMatch(stageTree, /data-town-hud="1"/, 'the HUD must not be inside the scaled stage')
+assert.doesNotMatch(stageTree, /role="status"/, 'the status line must not be inside the scaled stage')
+assert.equal((scene.match(/data-town-hud="1"/g) || []).length, 1)
+assert.match(scene, /data-town-hud="1"/)
+assert.match(scene, /overflow-auto/)
+// Entities inside the stage: houses/actors on their plots, and the meadow,
+// paving and pond in the same stage-pixel system.
+assert.match(stageTree, /data-town-house="S-0002"/)
+assert.match(stageTree, /data-town-actor="S-0002"/)
+assert.match(stageTree, /data-town-landmark="stream"/)
+assert.match(stageTree, /data-town-landmark="plaza"/)
+assert.match(stageTree, /data-town-ground="1"/)
+assert.match(stageTree, /data-town-meadow="1"/)
+assert.doesNotMatch(stageTree, /left:24%/, 'the old percentage pond position is gone')
 
 const quiet = render(h(plugin.TownScene, {
   town: root,
@@ -237,16 +312,595 @@ const quiet = render(h(plugin.TownScene, {
 }))
 assert.doesNotMatch(quiet, /superagent-town-build/)
 
-assert.deepEqual(plugin.townHousePosition(0), plugin.townHousePosition(0))
-assert.deepEqual(plugin.townHousePosition(3), { left: 78, top: 50, scale: 0.72 })
+// -- fixed estate geometry -------------------------------------------------
+// Every slot is an authored parcel on a 1200x700 logical stage. These
+// assertions are the contract: a slot's rectangle must never depend on the
+// session id, a poll, or the window size.
+assert.deepEqual(plugin.TOWN_STAGE, { width: 1200, height: 700 })
+assert.equal(plugin.TOWN_STAGE_MIN_SCALE, 0.8)
+assert.equal(plugin.TOWN_STAGE_MAX_SCALE, 1.25)
+assert.deepEqual(plugin.TOWN_ROUTER, { left: 600, top: 325, scale: 0.9 })
 assert.equal(plugin.TOWN_PLOTS.length, 12)
-assert.deepEqual(plugin.townHousePosition(11), { left: 62, top: 80, scale: 0.72 })
-assert.ok(plugin.townHousePosition(12).left >= 0)
-// Community check: all twelve plots sit inside the 20-80% band, not at the far edges.
-for (let slot = 0; slot < 12; slot += 1) {
-  const plot = plugin.townHousePosition(slot)
-  assert.ok(plot.left >= 20 && plot.left <= 80, `plot ${slot} left ${plot.left} inside community band`)
+assert.equal(new Set(plugin.TOWN_PLOTS.map((plot) => plot.id)).size, 12, 'plot ids are unique')
+assert.equal(new Set(plugin.TOWN_PLOTS.map((plot) => `${plot.left}:${plot.top}`)).size, 12, 'plot anchors are unique')
+for (const plot of plugin.TOWN_PLOTS) {
+  assert.ok(plot.id && plot.region, `plot ${plot.id} has an id and a region`)
+  const box = plugin.townPlotRect(plot)
+  assert.deepEqual(box, { x: plot.left - 56, y: plot.top - 65, w: 112, h: 130 })
+  assert.ok(box.x >= 0 && box.x + box.w <= plugin.TOWN_STAGE.width, `${plot.id} fits the stage horizontally`)
+  assert.ok(box.y >= 0 && box.y + box.h <= plugin.TOWN_STAGE.height, `${plot.id} fits the stage vertically`)
 }
+// Same slot, different sessions, identical position. This is the whole point:
+// the old implementation hashed the session id into a sub-percent offset, so
+// every reload moved the house.
+assert.deepEqual(plugin.townHousePosition(4, 'S-0002'), plugin.townHousePosition(4, 'S-9999'))
+assert.deepEqual(plugin.townHousePosition(4), plugin.TOWN_PLOTS[4])
+assert.deepEqual(plugin.townHousePosition(3), plugin.TOWN_PLOTS[3])
+assert.deepEqual(plugin.townHousePosition(11), plugin.TOWN_PLOTS[11])
+assert.deepEqual(plugin.townHousePosition(99), plugin.TOWN_PLOTS[11], 'out-of-range slots clamp to the last plot')
+assert.deepEqual(plugin.townHousePosition(-2), plugin.TOWN_PLOTS[0])
+assert.deepEqual(plugin.townHousePosition('nonsense'), plugin.TOWN_PLOTS[0])
+// The lookup returns a copy, so a caller cannot edit the authored table.
+const plotCopy = plugin.townHousePosition(0)
+plotCopy.left = 9999
+assert.equal(plugin.TOWN_PLOTS[0].left, 330)
+
+// Strict positive-area overlap: a shared edge is legal (a drive meets a
+// lane), a real overlap is not.
+assert.equal(plugin.rectsOverlap({ x: 0, y: 0, w: 10, h: 10 }, { x: 10, y: 0, w: 10, h: 10 }), false)
+assert.equal(plugin.rectsOverlap({ x: 0, y: 0, w: 10, h: 10 }, { x: 9, y: 9, w: 10, h: 10 }), true)
+
+// No parcel may sit on the Router, the pond, or a civic prop, and no two
+// reserved boxes may overlap either.
+const reserved = plugin.TOWN_RESERVED_RECTS
+assert.ok(Array.isArray(reserved) && reserved.length >= 10, 'reserved boxes are exported')
+for (const rect of reserved) {
+  assert.ok(rect.x >= 0 && rect.y >= 0
+    && rect.x + rect.w <= plugin.TOWN_STAGE.width
+    && rect.y + rect.h <= plugin.TOWN_STAGE.height,
+    'a reserved prop box escaped the stage')
+}
+// The major props are part of the pairwise check, not an illustration of it.
+for (const prop of [plugin.TOWN_ROUTER_RECT, plugin.TOWN_FOUNTAIN_RECT,
+  plugin.TOWN_BULLETIN_RECT, plugin.TOWN_WELL_RECT, plugin.TOWN_POND_RECT]) {
+  assert.ok(reserved.includes(prop), 'every major prop has a reserved box')
+}
+for (let i = 0; i < reserved.length; i += 1) {
+  for (let j = i + 1; j < reserved.length; j += 1) {
+    assert.equal(plugin.rectsOverlap(reserved[i], reserved[j]), false,
+      `reserved boxes overlap: ${JSON.stringify(reserved[i])} / ${JSON.stringify(reserved[j])}`)
+  }
+}
+for (const plot of plugin.TOWN_PLOTS) {
+  for (const rect of reserved) {
+    assert.equal(plugin.rectsOverlap(plugin.townPlotRect(plot), rect), false,
+      `${plot.id} overlaps ${JSON.stringify(rect)}`)
+  }
+}
+// The screenshot bug: slot 4 used to stand in the pond.
+assert.equal(
+  plugin.rectsOverlap(plugin.townPlotRect(plugin.townHousePosition(4)), plugin.TOWN_POND_RECT),
+  false,
+)
+
+// -- contiguous estate ground ----------------------------------------------
+// One SVG draws every paved surface from the same authored lane/drive data
+// the actor routes will read. The rectangle road grid and the dashed
+// Router→worker spokes are gone, not restyled: no data-town-connections and
+// no dashed ground stroke may come back.
+const groundNode = findElement(sceneNode, 'data-town-ground', '1')
+assert.ok(groundNode, 'the estate ground SVG exists')
+const groundTree = render(groundNode)
+assert.match(groundTree, /viewBox="0 0 1200 700"/)
+assert.match(groundTree, /pointer-events-none/)
+assert.equal((groundTree.match(/data-town-drive="/g) || []).length, 12, 'all twelve private drives exist')
+assert.equal((groundTree.match(/data-town-lane="/g) || []).length, 2, 'the estate loop and Main Avenue are drawn')
+assert.equal((groundTree.match(/data-town-plaza-band="/g) || []).length, plugin.TOWN_PLAZA_BANDS.length)
+assert.doesNotMatch(groundTree, /stroke-dasharray/, 'paving is continuous, never dashed')
+assert.doesNotMatch(scene, /stroke-dasharray/, 'no rendered ground element is dashed')
+assert.doesNotMatch(scene, /data-town-connections/)
+assert.equal((stageTree.match(/data-town-ground="1"/g) || []).length, 1, 'one ground SVG, not a layer per road')
+assert.equal((stageTree.match(/data-town-meadow="1"/g) || []).length, 1, 'one meadow layer')
+
+// Drives come from the plot table itself, so paving and occupancy can never
+// disagree about where a private path belongs.
+assert.equal(plugin.TOWN_DRIVES.length, 12)
+assert.deepEqual(plugin.TOWN_DRIVES.map((drive) => drive.id), plugin.TOWN_PLOTS.map((plot) => plot.id))
+for (const drive of plugin.TOWN_DRIVES) {
+  const plot = plugin.TOWN_PLOTS.find((candidate) => candidate.id === drive.id)
+  assert.equal(drive.x, plot.left, `drive ${drive.id} meets the middle of its parcel`)
+  assert.ok(drive.doorY < drive.gateY, `drive ${drive.id} runs from the doorstep to its lane`)
+  assert.equal(drive.gateY, plugin.TOWN_GATE_Y[plot.region])
+}
+assert.equal(plugin.TOWN_DRIVES.find((drive) => drive.id === 'north-1').gateY, plugin.TOWN_LANE_NORTH_Y)
+assert.equal(plugin.TOWN_DRIVES.find((drive) => drive.id === 'west-1').gateY, plugin.TOWN_AVENUE_Y)
+assert.equal(plugin.TOWN_DRIVES.find((drive) => drive.id === 'south-1').gateY, plugin.TOWN_LANE_SOUTH_Y)
+
+// The pond is one irregular path inside its authored rect, and that rect
+// touches no parcel and no lane centre.
+assert.match(groundTree, /data-town-landmark="stream"/)
+for (const plot of plugin.TOWN_PLOTS) {
+  assert.equal(plugin.rectsOverlap(plugin.townPlotRect(plot), plugin.TOWN_POND_RECT), false,
+    `the pond must not touch ${plot.id}`)
+}
+assert.ok(plugin.TOWN_POND_RECT.x + plugin.TOWN_POND_RECT.w < plugin.TOWN_LANE_WEST_X,
+  'the pond ends before the west lane')
+
+// The plaza is a stepped set of axis-aligned bands, chosen so no band paves
+// under a parcel, Router Hall or the fountain. That property is checked here
+// instead of being left to visual taste.
+const bands = plugin.TOWN_PLAZA_BANDS
+assert.ok(Array.isArray(bands) && bands.length >= 6, 'the plaza is built from explicit bands')
+let plazaMinX = Infinity
+let plazaMinY = Infinity
+let plazaMaxX = -Infinity
+let plazaMaxY = -Infinity
+for (const band of bands) {
+  const rect = { x: band.x, y: band.y, w: band.w, h: band.h }
+  assert.ok(band.id, 'every plaza band has an id')
+  assert.ok(rect.w > 0 && rect.h > 0, `${band.id} has area`)
+  assert.ok(rect.x >= 0 && rect.y >= 0
+    && rect.x + rect.w <= plugin.TOWN_STAGE.width
+    && rect.y + rect.h <= plugin.TOWN_STAGE.height, `${band.id} stays inside the stage`)
+  for (const plot of plugin.TOWN_PLOTS) {
+    assert.equal(plugin.rectsOverlap(rect, plugin.townPlotRect(plot)), false,
+      `plaza band ${band.id} paves under ${plot.id}`)
+  }
+  assert.equal(plugin.rectsOverlap(rect, plugin.TOWN_ROUTER_RECT), false, `${band.id} clears Router Hall`)
+  assert.equal(plugin.rectsOverlap(rect, plugin.TOWN_FOUNTAIN_RECT), false, `${band.id} clears the fountain`)
+  plazaMinX = Math.min(plazaMinX, rect.x)
+  plazaMinY = Math.min(plazaMinY, rect.y)
+  plazaMaxX = Math.max(plazaMaxX, rect.x + rect.w)
+  plazaMaxY = Math.max(plazaMaxY, rect.y + rect.h)
+}
+assert.ok(plazaMaxX - plazaMinX >= 380 && plazaMaxY - plazaMinY >= 340,
+  `the plaza must stay a square, got ${plazaMaxX - plazaMinX}x${plazaMaxY - plazaMinY}`)
+const plazaBox = { x: plazaMinX, y: plazaMinY, w: plazaMaxX - plazaMinX, h: plazaMaxY - plazaMinY }
+assert.equal(plugin.rectsOverlap(plazaBox, plugin.TOWN_ROUTER_RECT), true, 'the Router stands inside the plaza footprint')
+assert.equal(plugin.rectsOverlap(plazaBox, plugin.TOWN_FOUNTAIN_RECT), true, 'the fountain stands inside the plaza footprint')
+assert.ok(plazaMinY <= plugin.TOWN_FOUNTAIN_RECT.y && plazaMaxY >= plugin.TOWN_FOUNTAIN_RECT.y + plugin.TOWN_FOUNTAIN_RECT.h,
+  'the fountain sits in the southern half of the plaza')
+
+// Meadow tiles: built once, deterministic, and dominated by base grass.
+assert.equal(plugin.TOWN_MEADOW_TILES.length, 19 * 22, '19x22 sixty-four by thirty-two cells cover the stage')
+assert.equal(new Set(plugin.TOWN_MEADOW_TILES.map((tile) => tile.key)).size, 19 * 22, 'no duplicate meadow cells')
+const meadowCounts = plugin.TOWN_MEADOW_TILES.reduce((acc, tile) => {
+  acc[tile.sprite] = (acc[tile.sprite] || 0) + 1
+  return acc
+}, {})
+assert.deepEqual(Object.keys(meadowCounts).sort(), ['grass-b.png', 'grass-c.png', 'grass.png'],
+  'all three meadow variants are used')
+const grassShare = meadowCounts['grass.png'] / plugin.TOWN_MEADOW_TILES.length
+assert.ok(grassShare > 0.7 && grassShare < 0.88, `base grass must dominate, got ${grassShare.toFixed(3)}`)
+assert.equal(plugin.townMeadowSprite(3, 4), plugin.townMeadowSprite(3, 4), 'the meadow hash is deterministic')
+assert.equal(plugin.townMeadowSprite(3, 4), 'grass.png', 'a known cell keeps its authored variant')
+assert.equal(plugin.townMeadowSprite(8, 3), 'grass-b.png', 'the second variant is reachable from a fixed cell')
+assert.equal(plugin.townMeadowSprite(6, 3), 'grass-c.png', 'the third variant is reachable from a fixed cell')
+const lastMeadow = plugin.TOWN_MEADOW_TILES[plugin.TOWN_MEADOW_TILES.length - 1]
+assert.ok(lastMeadow.left + 64 >= plugin.TOWN_STAGE.width && lastMeadow.top + 32 >= plugin.TOWN_STAGE.height,
+  'the meadow covers the whole stage')
+
+// Trees and planting stand in declared garden zones. Nothing is planted in a
+// parcel box or the pond.
+const scenery = [...plugin.TOWN_TREES, ...plugin.TOWN_GARDEN_PROPS]
+assert.ok(plugin.TOWN_TREES.length >= 6, 'the large trees live in the greenbelt')
+for (const item of scenery) {
+  const point = { x: item.left - 1, y: item.top - 1, w: 2, h: 2 }
+  const zone = plugin.TOWN_GARDEN_ZONES.find((candidate) => (
+    item.left >= candidate.x && item.left <= candidate.x + candidate.w
+    && item.top >= candidate.y && item.top <= candidate.y + candidate.h
+  ))
+  assert.ok(zone, `${item.key} stands in a declared garden zone`)
+  assert.equal(plugin.rectsOverlap(point, plugin.TOWN_POND_RECT), false, `${item.key} is not in the pond`)
+  for (const plot of plugin.TOWN_PLOTS) {
+    assert.equal(plugin.rectsOverlap(point, plugin.townPlotRect(plot)), false,
+      `${item.key} stands inside ${plot.id}`)
+  }
+}
+// Civic props are bottom-anchored at their authored anchor and never drift into
+// a parcel or the water.
+for (const item of plugin.TOWN_CIVIC_PROPS) {
+  const point = { x: item.left - 1, y: item.top - 1, w: 2, h: 2 }
+  assert.equal(plugin.rectsOverlap(point, plugin.TOWN_POND_RECT), false, `${item.key} is not in the pond`)
+  for (const plot of plugin.TOWN_PLOTS) {
+    assert.equal(plugin.rectsOverlap(point, plugin.townPlotRect(plot)), false, `${item.key} stands inside ${plot.id}`)
+  }
+}
+// The old scattered percentage map is gone: the stage children are positioned
+// in stage pixels (the only percentages left are local 50% centrings inside a
+// single parcel marker).
+assert.doesNotMatch(stageTree, /left:26%/)
+
+// Houses and actors render at stage pixels, not percentages.
+const plotHouse = render(h(plugin.TownHouse, {
+  session: workerOne, isRouter: false, slot: 0, onOpen: () => undefined,
+  houseRef: () => undefined, building: false, reducedMotion: false, assets, pet: null, dimmed: false,
+}))
+assert.match(plotHouse, /left:330px/)
+assert.match(plotHouse, /top:125px/)
+assert.doesNotMatch(plotHouse, /left:26%/)
+const routerHouse = render(h(plugin.TownHouse, {
+  session: root, isRouter: true, slot: 0, onOpen: () => undefined,
+  houseRef: () => undefined, building: false, reducedMotion: false, assets, pet: null, dimmed: false,
+}))
+assert.match(routerHouse, /left:600px/)
+assert.match(routerHouse, /top:325px/)
+const homeActor = render(h(plugin.TownActor, {
+  session: workerOne, isRouter: false, actorState: null, pet: null, personArt: null,
+  reducedMotion: false, dimmed: false, onOpen: () => undefined,
+}))
+assert.match(homeActor, /left:330px/)
+assert.match(homeActor, /top:190px/, 'a north actor waits on its doorstep, not on a percentage offset')
+
+// -- actor routes from the drawn estate -------------------------------------
+// The walking graph is data and every route is a polyline over it. Routes that
+// skipped the lanes would still "work" in a unit test and look wrong on screen,
+// so the expected routes below are spelled out node by node.
+
+/** Liang-Barsky: does the segment a->b pass through the inside of `rect`?
+ *  The rect is inset a hair so a walk that grazes a paved edge is not a hit. */
+function segmentHitsRect(a, b, rect) {
+  const inset = 0.01
+  const left = rect.x + inset
+  const right = rect.x + rect.w - inset
+  const top = rect.y + inset
+  const bottom = rect.y + rect.h - inset
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  let t0 = 0
+  let t1 = 1
+  const edges = [[-dx, a.x - left], [dx, right - a.x], [-dy, a.y - top], [dy, bottom - a.y]]
+  for (const [p, q] of edges) {
+    if (p === 0) {
+      if (q < 0) return false
+      continue
+    }
+    const r = q / p
+    if (p < 0) {
+      if (r > t1) return false
+      if (r > t0) t0 = r
+    } else {
+      if (r < t0) return false
+      if (r < t1) t1 = r
+    }
+  }
+  return t1 > t0
+}
+
+const nodeIds = Object.keys(plugin.TOWN_NODES)
+assert.ok(nodeIds.length >= 25, 'the walking graph exports one coordinate per node')
+for (const id of nodeIds) {
+  const node = plugin.TOWN_NODES[id]
+  assert.ok(Number.isFinite(node.x) && Number.isFinite(node.y), `${id} has a numeric coordinate`)
+  assert.ok(node.x >= 0 && node.x <= plugin.TOWN_STAGE.width, `${id} stays inside the stage horizontally`)
+  assert.ok(node.y >= 0 && node.y <= plugin.TOWN_STAGE.height, `${id} stays inside the stage vertically`)
+}
+// A home node is the exact doorstep anchor the actor starts on, and a gate
+// node is the far end of the private drive the ground SVG already paints.
+const homeIds = plugin.TOWN_PLOTS.map((plot) => plot.id).concat('router')
+for (const plot of plugin.TOWN_PLOTS) {
+  assert.deepEqual(plugin.TOWN_NODES[plot.id],
+    { x: plot.left, y: plugin.TOWN_DOORSTEP_Y[plot.region] },
+    `${plot.id} home node is its doorstep anchor`)
+  assert.deepEqual(plugin.TOWN_NODES[`${plot.id}-gate`],
+    { x: plot.left, y: plugin.TOWN_GATE_Y[plot.region] },
+    `${plot.id} gate node is the end of its drive`)
+}
+for (const drive of plugin.TOWN_DRIVES) {
+  assert.deepEqual(plugin.TOWN_NODES[`${drive.id}-gate`], { x: drive.x, y: drive.gateY },
+    `the ${drive.id} gate stands on its drawn drive`)
+}
+assert.deepEqual(plugin.TOWN_NODES.router, { x: plugin.TOWN_ROUTER.left, y: plugin.TOWN_ROUTER_DOOR_Y })
+// Plaza nodes ride the authored fountain corridors, so the walked detour is
+// also the paved detour.
+const linkWest = plugin.TOWN_PLAZA_BANDS.find((band) => band.id === 'fountain-link-west')
+const linkEast = plugin.TOWN_PLAZA_BANDS.find((band) => band.id === 'fountain-link-east')
+assert.ok(plugin.TOWN_NODES['fountain-west'].x >= linkWest.x
+  && plugin.TOWN_NODES['fountain-west'].x <= linkWest.x + linkWest.w,
+  'the west fountain node stands on the west corridor')
+assert.ok(plugin.TOWN_NODES['fountain-east'].x >= linkEast.x
+  && plugin.TOWN_NODES['fountain-east'].x <= linkEast.x + linkEast.w,
+  'the east fountain node stands on the east corridor')
+assert.equal(plugin.TOWN_NODES['fountain-west'].y, plugin.TOWN_FOUNTAIN_RECT.y + plugin.TOWN_FOUNTAIN_RECT.h)
+assert.equal(plugin.TOWN_NODES['fountain-east'].y, plugin.TOWN_FOUNTAIN_RECT.y + plugin.TOWN_FOUNTAIN_RECT.h)
+
+// Every place can reach the hub, first and last ids are honest, every hop is a
+// real node, and no route repeats a node back to back.
+const civicIds = ['router', 'noticeboard', 'well', 'fountain-west', 'fountain-east',
+  'bench-west', 'bench-east', 'plaza-west', 'plaza-east']
+assert.deepEqual(plugin.townRoute('plaza-hub', 'plaza-hub'), ['plaza-hub'], 'the identity route is one node')
+assert.deepEqual(plugin.townRoute('nowhere', 'plaza-hub'), [], 'an unknown node has no route instead of throwing')
+for (const id of homeIds.concat(civicIds)) {
+  const route = plugin.townRoute(id, 'plaza-hub')
+  assert.ok(route.length >= 1, `${id} has a route to the plaza hub`)
+  assert.equal(route[0], id, `${id} route starts at itself`)
+  assert.equal(route[route.length - 1], 'plaza-hub', `${id} route ends at the hub`)
+  for (const nodeId of route) assert.ok(plugin.TOWN_NODES[nodeId], `${id} route uses a real node: ${nodeId}`)
+  for (let i = 1; i < route.length; i += 1) {
+    assert.notEqual(route[i], route[i - 1], `${id} route repeats ${route[i]}`)
+  }
+  assert.ok(plugin.TOWN_ROUTES_TO_HUB[id], `${id} is in the routes-to-hub table`)
+}
+// Home routes leave by their own private drive and reach the hub. This is the
+// assertion that fails loudly if someone "optimises" a route through the grass.
+for (const plot of plugin.TOWN_PLOTS) {
+  const route = plugin.townRoute(plot.id, 'plaza-hub')
+  assert.ok(route.includes(`${plot.id}-gate`), `${plot.id} leaves by its own gate`)
+  assert.ok(route.includes('plaza-hub'), `${plot.id} reaches the plaza hub`)
+}
+// Two concrete routes, north and middle, in full.
+assert.deepEqual(plugin.townRoute('north-1', 'plaza-hub'),
+  ['north-1', 'north-1-gate', 'corner-north-west', 'lane-west-avenue', 'plaza-hub'])
+assert.deepEqual(plugin.townRoute('west-1', 'plaza-hub'),
+  ['west-1', 'west-1-gate', 'plaza-hub'])
+assert.deepEqual(plugin.townRoute('south-4', 'plaza-hub'),
+  ['south-4', 'south-4-gate', 'corner-south-east', 'lane-east-avenue', 'plaza-hub'])
+// No walked segment wades through the pond or the fountain, between any two
+// places a character can actually be sent.
+for (const from of homeIds) {
+  for (const to of civicIds) {
+    const route = plugin.townRoute(from, to)
+    assert.ok(route.length >= (from === to ? 1 : 2), `${from} can reach ${to}`)
+    assert.equal(route[0], from)
+    assert.equal(route[route.length - 1], to)
+    for (let i = 1; i < route.length; i += 1) {
+      assert.notEqual(route[i], route[i - 1], `${from}->${to} repeats ${route[i]}`)
+      const a = plugin.TOWN_NODES[route[i - 1]]
+      const b = plugin.TOWN_NODES[route[i]]
+      assert.equal(segmentHitsRect(a, b, plugin.TOWN_POND_RECT), false,
+        `${from}->${to} wades through the pond on the way to ${route[i]}`)
+      assert.equal(segmentHitsRect(a, b, plugin.TOWN_FOUNTAIN_RECT), false,
+        `${from}->${to} walks through the fountain on the way to ${route[i]}`)
+    }
+  }
+}
+for (const from of civicIds) {
+  for (const to of civicIds) {
+    const route = plugin.townRoute(from, to)
+    for (let i = 1; i < route.length; i += 1) {
+      const a = plugin.TOWN_NODES[route[i - 1]]
+      const b = plugin.TOWN_NODES[route[i]]
+      assert.equal(segmentHitsRect(a, b, plugin.TOWN_FOUNTAIN_RECT), false,
+        `${from}->${to} walks through the fountain on the way to ${route[i]}`)
+    }
+  }
+}
+// Fountain and bench trips go around the basin, not across it.
+assert.ok(plugin.townRoute('plaza-hub', 'bench-west').includes('plaza-west'))
+assert.ok(plugin.townRoute('plaza-hub', 'bench-east').includes('plaza-east'))
+assert.deepEqual(plugin.townRoute('fountain-west', 'fountain-east'),
+  ['fountain-west', 'plaza-west', 'plaza-hub', 'plaza-east', 'fountain-east'])
+
+// Destination choice is deterministic and never a trip to where the actor
+// already stands: a refreshed town object cannot reshuffle a walk.
+const standing = { nodeId: 'plaza-hub', homeId: 'north-1', stepCount: 1 }
+assert.equal(plugin.townNextDestination(standing, 'failed', 3), 'north-1')
+assert.equal(plugin.townNextDestination(standing, 'queued', 7), 'noticeboard')
+assert.equal(
+  plugin.townNextDestination({ ...standing, nodeId: 'noticeboard' }, 'queued', 7),
+  'plaza-hub',
+  'already at the noticeboard: step off instead of standing still',
+)
+assert.equal(
+  plugin.townNextDestination(standing, 'running', 42),
+  plugin.townNextDestination({ ...standing }, 'running', 42),
+  'the same actor and hash pick the same destination',
+)
+for (const status of ['running', 'review', 'idle', 'queued', 'failed']) {
+  for (let step = 0; step < 12; step += 1) {
+    const destination = plugin.townNextDestination(
+      { nodeId: 'plaza-hub', homeId: 'north-1', stepCount: step }, status, step * 37,
+    )
+    assert.ok(plugin.TOWN_NODES[destination], `${status} destination ${destination} is a real node`)
+    assert.notEqual(destination, 'plaza-hub', `${status} trip ${step} is not a trip to itself`)
+  }
+}
+
+// -- one movement clock -----------------------------------------------------
+// The walk step is pure, so the timing rules can be checked without a browser:
+// no arrival radius, no overshoot, no catch-up teleport after a hidden tab.
+const walkPath = [{ x: 0, y: 0 }, { x: 40, y: 0 }, { x: 40, y: 30 }, { x: 70, y: 30 }]
+const walkActor = (over) => ({ left: 0, top: 0, path: walkPath, pathIndex: 1, facingLeft: false, speed: 100, ...over })
+
+// A normal frame advances speed * elapsed along the current segment.
+let step = plugin.townWalkFrame(walkActor({}), 0.04)
+assert.ok(Math.abs(step.left - 4) < 1e-9, `expected 4 px of travel, got ${step.left}`)
+assert.equal(step.top, 0)
+assert.equal(step.pathIndex, 1)
+assert.equal(step.arrived, false)
+
+// A large frame lands exactly on the waypoint: no overshoot, no snap radius.
+const nearPath = [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 80 }]
+step = plugin.townWalkFrame({ left: 0, top: 0, path: nearPath, pathIndex: 1, facingLeft: false, speed: 100 }, 0.5)
+assert.equal(step.left, 5, 'the frame stops exactly on the waypoint')
+assert.equal(step.top, 0)
+assert.equal(step.pathIndex, 2, 'reaching a waypoint advances the path index')
+assert.equal(step.arrived, false, 'a waypoint is not the end of the route')
+
+// The next frame continues along the NEXT segment, not to the destination.
+step = plugin.townWalkFrame({
+  left: step.left, top: step.top, pathIndex: step.pathIndex, facingLeft: step.facingLeft,
+  speed: 100, path: nearPath,
+}, 0.1)
+assert.equal(step.left, 5)
+assert.ok(Math.abs(step.top - 10) < 1e-9, `expected the next segment to move 10 px, got ${step.top}`)
+assert.equal(step.pathIndex, 2)
+assert.equal(step.arrived, false)
+
+// A vertical segment never flips facing, whichever way the actor faced before.
+for (const facingLeft of [true, false]) {
+  const vertical = plugin.townWalkFrame({
+    left: 5, top: 0, path: nearPath, pathIndex: 2, facingLeft, speed: 100,
+  }, 0.05)
+  assert.equal(vertical.facingLeft, facingLeft, 'a vertical walk keeps the last horizontal facing')
+}
+// A horizontal segment sets it, and a 1 px threshold keeps sub-pixel noise out.
+assert.equal(plugin.townWalkFrame(walkActor({ facingLeft: true }), 0.04).facingLeft, false)
+assert.equal(plugin.townWalkFrame({
+  left: 80, top: 0, path: [{ x: 0, y: 0 }, { x: 40, y: 0 }], pathIndex: 1, facingLeft: false, speed: 100,
+}, 0.04).facingLeft, true)
+
+// Elapsed time is capped at one tenth of a second after a stalled tab.
+const longPath = [{ x: 0, y: 0 }, { x: 300, y: 0 }]
+const stalled = plugin.townWalkFrame({ left: 0, top: 0, path: longPath, pathIndex: 1, facingLeft: false, speed: 100 }, 5)
+assert.equal(plugin.TOWN_MAX_FRAME_SECONDS, 0.1)
+assert.equal(stalled.left, 10, 'a five-second stall walks one capped frame, not 500 px')
+assert.equal(stalled.pathIndex, 1)
+assert.equal(plugin.townWalkFrame({ left: 0, top: 0, path: longPath, pathIndex: 1, speed: 100 }, -3).left, 0,
+  'a negative elapsed time cannot walk backwards')
+
+// A completed route keeps its exact final coordinate for every later frame.
+const finished = plugin.townWalkFrame({ left: 70, top: 30, path: walkPath, pathIndex: 4, speed: 100 }, 0.04)
+assert.equal(finished.left, 70)
+assert.equal(finished.top, 30)
+assert.equal(finished.arrived, true)
+assert.equal(finished.pathIndex, 4)
+
+// The epsilon is a float guard, not an arrival radius.
+assert.equal(plugin.TOWN_EPSILON_PX, 0.0001)
+const fuzzy = plugin.townWalkFrame({
+  left: 0, top: 0, path: [{ x: 0, y: 0 }, { x: 2, y: 0 }], pathIndex: 1, speed: 100,
+}, 0.0199995)
+assert.equal(fuzzy.left, 2, 'a step within epsilon lands exactly on the node')
+assert.equal(fuzzy.pathIndex, 2)
+assert.doesNotMatch(source, /TOWN_ARRIVE_PX/, 'the old 0.9 px arrival radius is gone')
+
+// -- one rAF clock, not an interval -----------------------------------------
+// The probe stubs effects, so these are structural checks: the pure timing is
+// covered above, and the installed UI check in the plan covers the rest.
+assert.match(source, /requestAnimationFrame/, 'the population is driven by rAF')
+assert.match(source, /cancelAnimationFrame/, 'unmount cancels the frame')
+assert.doesNotMatch(source, /\},\s*120\)/, 'the 120 ms interval is gone')
+assert.match(source, /membersRef\.current = members/, 'the loop reads members through a ref')
+assert.match(source, /\}, \[paused, reducedMotion\]\)/, 'the loop depends on pause and reduced motion only, never the poll')
+assert.match(source, /visibilitychange/, 'a hidden tab stops the clock')
+assert.doesNotMatch(source, /reducedMotion \|\| paused/, 'pause is not reduced motion')
+assert.doesNotMatch(source, /transition-\[left,top/, 'position is never CSS-interpolated')
+assert.match(source, /transition-opacity/, 'only opacity transitions, for filtering')
+assert.match(source, /function TownPopulation\(/, 'the population is its own component')
+const sceneBody = source.slice(source.indexOf('function TownScene('), source.indexOf('function townChoices('))
+assert.doesNotMatch(sceneBody, /useTownSimulation\(/, 'TownScene no longer owns the simulation')
+const populationBody = source.slice(source.indexOf('function TownPopulation('), source.indexOf('const TownEmptyPlot'))
+assert.match(populationBody, /useTownSimulation\(/, 'TownPopulation owns the simulation')
+assert.match(populationBody, /key: `actor:\$\{town\.id\}`/)
+assert.match(populationBody, /key: `actor:\$\{worker\.id\}`/)
+
+// -- bounded sprite frames --------------------------------------------------
+// Every state, every column: the sheet must never ask for a cell it does not
+// have. The old keyframe ended at -8 * frameWidth on an 8-column sheet, which
+// is the blank column past the artwork.
+const PET_STATES = ['idle', 'running-right', 'running-left', 'waving', 'jumping',
+  'failed', 'waiting', 'running', 'review']
+const kody = pets['hermes-kody']
+assert.deepEqual(plugin.petdexFrameCell(kody, 'idle', 0), { col: 0, row: 0 })
+for (const state of PET_STATES) {
+  for (let index = 0; index <= 15; index += 1) {
+    const cell = plugin.petdexFrameCell(kody, state, index)
+    assert.ok(Number.isInteger(cell.col) && cell.col >= 0 && cell.col < 8,
+      `${state}/${index}: column ${cell.col} is outside the 8-column sheet`)
+    assert.ok(Number.isInteger(cell.row) && cell.row >= 0 && cell.row < 9,
+      `${state}/${index}: row ${cell.row} is outside the 9-row sheet`)
+    assert.equal(cell.col, index % 8)
+    assert.equal(cell.row, kody.rows_map[state])
+  }
+}
+// Negative, huge and nonsense indices wrap instead of painting off-sheet.
+for (const index of [-1, -7, -8, -9, -999, -1000001, Number.MAX_SAFE_INTEGER,
+  1e15, Number.NaN, null, undefined, '7']) {
+  for (const state of PET_STATES) {
+    const cell = plugin.petdexFrameCell(kody, state, index)
+    assert.ok(Number.isInteger(cell.col) && cell.col >= 0 && cell.col < 8, `index ${index}: col ${cell.col}`)
+    assert.ok(Number.isInteger(cell.row) && cell.row >= 0 && cell.row < 9, `index ${index}: row ${cell.row}`)
+  }
+}
+// Missing or wrong metadata falls back to a real cell, never NaN.
+assert.deepEqual(plugin.petdexFrameCell(null, 'idle', 0), { col: 0, row: 0 })
+assert.deepEqual(plugin.petdexFrameCell({}, 'idle', 0), { col: 0, row: 0 })
+assert.deepEqual(plugin.petdexFrameCell({ cols: 0, rows: 0 }, 'idle', 3), { col: 3, row: 0 })
+assert.deepEqual(plugin.petdexFrameCell({ cols: 3, rows: 2 }, 'idle', 4), { col: 1, row: 0 })
+assert.deepEqual(plugin.petdexFrameCell({ cols: 3, rows: 2 }, 'idle', -1), { col: 2, row: 0 })
+assert.deepEqual(plugin.petdexFrameCell({ cols: 4, rows: 4, rows_map: { review: 99 } }, 'review', 2),
+  { col: 2, row: 3 }, 'a row beyond the sheet clamps to the last one')
+assert.deepEqual(plugin.petdexFrameCell({ rows_map: { waving: -5 } }, 'waving', 0), { col: 0, row: 0 })
+assert.deepEqual(plugin.petdexFrameCell({}, 'not-a-state', 1), { col: 1, row: 0 })
+// The last visible column of an 8-column sheet is 7, so the leftmost paint is
+// -7 * frameWidth and never the old -8 * frameWidth blank frame.
+const lastCell = plugin.petdexFrameCell(kody, 'running-right', 7)
+assert.equal(lastCell.col, 7)
+assert.equal(-lastCell.col * 48, -7 * 48)
+
+// The rendered sprite paints both axes in one plain background-position and
+// carries the cell it chose, with no CSS animation left to restart.
+const petSprite = (over) => render(h(plugin.PetdexSprite, {
+  session: workerOne, isRouter: false, pet: kody, personArt: null,
+  animState: 'running-right', facingLeft: false, scale: 1, reducedMotion: false, frameIndex: 3, ...over,
+}))
+assert.match(petSprite({}), /data-petdex-frame="3:1"/)
+assert.match(petSprite({}), /background-position:-144px -52px/, '3 * 48 px across, one row down')
+assert.doesNotMatch(petSprite({}), /superagent-petdex-sprite/, 'the sheet is not CSS-animated')
+assert.match(petSprite({ frameIndex: 7 }), /background-position:-336px -52px/, 'the last visible column is 7')
+assert.doesNotMatch(petSprite({ frameIndex: 7 }), /-384px/, 'column 8 of an 8-column sheet is never painted')
+assert.match(petSprite({ frameIndex: 15 }), /data-petdex-frame="7:1"/, 'the frame index wraps back into the sheet')
+assert.match(petSprite({ frameIndex: 9, reducedMotion: true }), /data-petdex-frame="0:1"/,
+  'reduced motion pins the first cell')
+assert.match(petSprite({ animState: 'review' }), /data-petdex-frame="3:8"/)
+
+// The person.png fallback uses its three walk columns and the direction row.
+const fallbackSprite = (over) => render(h(plugin.PetdexSprite, {
+  session: workerOne, isRouter: false, pet: null, personArt: assets['person.png'].data_url,
+  animState: 'running-left', facingLeft: true, scale: 1, reducedMotion: false, frameIndex: 4, ...over,
+}))
+assert.match(fallbackSprite({}), /background-position:-36px -36px/, 'column 1 of 3 on the left-facing row')
+assert.match(fallbackSprite({}), /data-petdex-frame="1:1"/)
+assert.doesNotMatch(fallbackSprite({}), /superagent-town-person/, 'the fallback is not CSS-animated')
+assert.match(fallbackSprite({ animState: 'running-right' }), /data-petdex-frame="1:2"/)
+assert.match(fallbackSprite({ animState: 'jumping' }), /data-petdex-frame="1:3"/)
+
+// The removed keyframes and their custom properties are gone for good.
+assert.doesNotMatch(source, /superagent-petdex-anim/)
+assert.doesNotMatch(source, /superagent-town-walk/)
+assert.doesNotMatch(source, /--pet-frame-w|--town-person-step/)
+assert.match(source, /animTime/, 'frame time is stored on the actor')
+assert.match(source, /backgroundPosition: `\$\{-col \* fw\}px \$\{-row \* fh\}px`/)
+
+// -- twelve authored parcels, occupied or deliberately vacant --------------
+// The fixture has workers in slots 0 and 1, so exactly ten lots are empty.
+// Slot 0 is an ordinary parcel: the Router is a civic building, not a plot
+// occupant, so it neither takes nor blocks a lot.
+assert.equal((scene.match(/data-town-plot="/g) || []).length, 12, 'every parcel renders one marker')
+assert.equal((scene.match(/data-town-empty-plot="/g) || []).length, 10, 'ten parcels are vacant')
+assert.match(scene, /data-town-empty-plot="north-3"/)
+assert.doesNotMatch(scene, /data-town-empty-plot="north-1"/)
+assert.doesNotMatch(scene, /data-town-empty-plot="north-2"/)
+assert.match(scene, /data-town-plot="north-3" data-town-empty-plot="north-3"/, 'a vacant parcel carries both markers')
+assert.match(scene, /data-town-house="S-0002" data-town-plot="north-1"/)
+assert.match(scene, /data-town-house="S-0003" data-town-plot="north-2"/)
+// Occupancy is read from each worker's own slot, deduped and clamped.
+assert.deepEqual([...plugin.townOccupiedSlots(root.workers)].sort((a, b) => a - b), [0, 1])
+assert.deepEqual(plugin.townVacantPlots(root.workers).map((plot) => plot.id),
+  ['north-3', 'north-4', 'west-1', 'west-2', 'east-1', 'east-2', 'south-1', 'south-2', 'south-3', 'south-4'])
+assert.equal(plugin.townVacantPlots(null).length, 12, 'an empty town still draws all twelve parcels')
+assert.deepEqual([...plugin.townOccupiedSlots([{ id: 'S-0009', town_slot: 99 }])], [11],
+  'a legacy slot clamps onto a real parcel instead of inventing a thirteenth')
+assert.deepEqual([...plugin.townOccupiedSlots([{ id: 'S-0009', town_slot: 4 }, { id: 'S-0010', town_slot: 4 }])], [4],
+  'a duplicated slot reserves one parcel')
+assert.deepEqual([...plugin.townOccupiedSlots([{ town_slot: 2 }])], [],
+  'a worker without an id reserves nothing, because it renders no house')
+
+// A town with only its Router: twelve vacant lots, zero worker houses.
+const routerOnly = render(h(plugin.TownScene, {
+  town: { ...root, workers: [] },
+  assets: sceneAssets,
+  pets,
+  buildingIds: {},
+  onOpen: () => undefined,
+  registerHouse: () => () => undefined,
+  reducedMotion: false,
+}))
+assert.equal((routerOnly.match(/data-town-empty-plot="/g) || []).length, 12)
+assert.match(routerOnly, /Router house S-0001/)
+assert.doesNotMatch(routerOnly, /data-town-house="S-0002"/)
+assert.doesNotMatch(routerOnly, /Worker house/)
 
 const switcher = render(h(plugin.TownSwitcher, {
   towns: [root],
