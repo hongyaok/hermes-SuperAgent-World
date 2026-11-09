@@ -5326,7 +5326,7 @@ function defaultAnimForStatus(status) {
   return 'idle'
 }
 
-function useTownSimulation(town, buildingIds, reducedMotion) {
+function useTownSimulation(town, buildingIds, reducedMotion, paused) {
   const simRef = useRef({})
   const [, setTick] = useState(0)
 
@@ -5338,6 +5338,12 @@ function useTownSimulation(town, buildingIds, reducedMotion) {
     }
     return list
   }, [town])
+
+  // The frame loop must never depend on the poll-derived members array: a new
+  // town object every 2s would tear the clock down and restart every walk.
+  // Keep the newest members in a ref the running loop can read instead.
+  const membersRef = useRef(members)
+  membersRef.current = members
 
   // Sync actors with current sessions synchronously so initial render & render probe have positions immediately.
   const stateMap = simRef.current
@@ -5421,15 +5427,87 @@ function useTownSimulation(town, buildingIds, reducedMotion) {
   }
 
   useEffect(() => {
-    if (reducedMotion || !members.length || typeof window === 'undefined') return undefined
-    const timer = window.setInterval(() => {
-      advanceTownSimulation(simRef.current, members, TOWN_TICK_SECONDS)
-      setTick((t) => (t + 1) % 1000000)
-    }, 120)
-    return () => window.clearInterval(timer)
-  }, [members, reducedMotion])
+    if (paused || reducedMotion) return undefined
+    if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
+      return undefined
+    }
+    const doc = typeof document === 'undefined' ? null : document
+    let raf = 0
+    // null means "no previous frame": the first tick after a start or a tab
+    // resume begins a fresh 40 ms window instead of replaying the gap.
+    let lastUpdate = null
+
+    const tick = (now) => {
+      if (lastUpdate === null) lastUpdate = now - 40
+      const elapsed = now - lastUpdate
+      // 25 fps is plenty for a 12 px walk step and keeps the town cheap.
+      if (elapsed >= 40) {
+        const dt = Math.min(0.1, Math.max(0, elapsed / 1000))
+        lastUpdate = now
+        advanceTownSimulation(simRef.current, membersRef.current, dt)
+        setTick((value) => (value + 1) % 1000000)
+      }
+      raf = window.requestAnimationFrame(tick)
+    }
+
+    // Called on pause, unmount and every visibility change; safe to repeat.
+    const stop = () => {
+      if (raf) window.cancelAnimationFrame(raf)
+      raf = 0
+      lastUpdate = null
+    }
+    const visibility = () => {
+      stop()
+      if (!doc || !doc.hidden) raf = window.requestAnimationFrame(tick)
+    }
+
+    if (doc && typeof doc.addEventListener === 'function') {
+      doc.addEventListener('visibilitychange', visibility)
+    }
+    if (!doc || !doc.hidden) raf = window.requestAnimationFrame(tick)
+    return () => {
+      stop()
+      if (doc && typeof doc.removeEventListener === 'function') {
+        doc.removeEventListener('visibilitychange', visibility)
+      }
+    }
+  }, [paused, reducedMotion])
 
   return simRef.current
+}
+
+/** The animated population: the only part of the town that re-renders on a
+ *  frame. Keeping the simulation hook here means the meadow, the paving, the
+ *  houses and the HUD are not rebuilt 25 times a second. */
+function TownPopulation({ town, buildingIds, pets, personArt, reducedMotion, paused, filter, onOpen }) {
+  const actorMap = useTownSimulation(town, buildingIds, reducedMotion, paused)
+  const petMap = pets || {}
+  const routerPet = petMap[town.avatar_slug] || null
+  const workers = Array.isArray(town.workers) ? town.workers : []
+  return [
+    jsx(TownActor, {
+      key: `actor:${town.id}`,
+      session: town,
+      isRouter: true,
+      actorState: actorMap[town.id],
+      pet: routerPet,
+      personArt,
+      reducedMotion,
+      dimmed: false,
+      onOpen,
+    }),
+    ...workers.map((worker) => jsx(TownActor, {
+      key: `actor:${worker.id}`,
+      session: worker,
+      isRouter: false,
+      actorState: actorMap[worker.id],
+      pet: petMap[worker.avatar_slug] || null,
+      personArt,
+      reducedMotion,
+      dimmed: !matchesTownFilter(worker, filter, false),
+      onOpen,
+    })),
+  ]
 }
 
 function matchesTownFilter(session, filter, isRouter) {
@@ -5465,7 +5543,7 @@ function TownActor({ session, isRouter, actorState, pet, personArt, reducedMotio
     title: `${sessionTitle(session)} · ${petName} (${townStatusLabel(session.status)})`,
     className: cn(
       'superagent-actor-btn group absolute flex flex-col items-center focus:outline-none',
-      'transition-[left,top,opacity] duration-150 ease-linear',
+      'transition-opacity duration-150 ease-linear',
       dimmed && 'opacity-35',
     ),
     style: {
@@ -5989,7 +6067,6 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
   }, [town.id])
   const townTime = useTownTime()
   const isDark = townTime.phase === 'night' || townTime.phase === 'dusk'
-  const actorMap = useTownSimulation(town, buildingIds, reducedMotion || paused)
   const counts = workers.reduce((acc, worker) => {
     const key = townStatusLabel(worker.status)
     acc[key] = (acc[key] || 0) + 1
@@ -6380,28 +6457,17 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
                 pet: petMap[worker.avatar_slug] || null,
                 dimmed: !matchesTownFilter(worker, filter, false),
               })),
-              jsx(TownActor, {
-                key: `actor:${town.id}`,
-                session: town,
-                isRouter: true,
-                actorState: actorMap[town.id],
-                pet: routerPet,
+              jsx(TownPopulation, {
+                key: 'population',
+                town,
+                buildingIds,
+                pets: petMap,
                 personArt,
-                reducedMotion: reducedMotion || paused,
-                dimmed: false,
+                reducedMotion,
+                paused,
+                filter,
                 onOpen,
               }),
-              ...workers.map((worker) => jsx(TownActor, {
-                key: `actor:${worker.id}`,
-                session: worker,
-                isRouter: false,
-                actorState: actorMap[worker.id],
-                pet: petMap[worker.avatar_slug] || null,
-                personArt,
-                reducedMotion: reducedMotion || paused,
-                dimmed: !matchesTownFilter(worker, filter, false),
-                onOpen,
-              })),
             ],
           }),
         }),
@@ -8129,6 +8195,7 @@ export {
   TOWN_WALK_PX_PER_SEC, TOWN_REVIEW_PX_PER_SEC, TOWN_RUN_PX_PER_SEC,
   TOWN_TICK_SECONDS, townActorSpeed, advanceTownSimulation,
   townNextDestination, townTripPause,
+  townWalkFrame, TOWN_EPSILON_PX, TOWN_MAX_FRAME_SECONDS, TOWN_FACING_DX_PX,
 }
 
 export default {

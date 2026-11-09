@@ -693,6 +693,95 @@ for (const status of ['running', 'review', 'idle', 'queued', 'failed']) {
   }
 }
 
+// -- one movement clock -----------------------------------------------------
+// The walk step is pure, so the timing rules can be checked without a browser:
+// no arrival radius, no overshoot, no catch-up teleport after a hidden tab.
+const walkPath = [{ x: 0, y: 0 }, { x: 40, y: 0 }, { x: 40, y: 30 }, { x: 70, y: 30 }]
+const walkActor = (over) => ({ left: 0, top: 0, path: walkPath, pathIndex: 1, facingLeft: false, speed: 100, ...over })
+
+// A normal frame advances speed * elapsed along the current segment.
+let step = plugin.townWalkFrame(walkActor({}), 0.04)
+assert.ok(Math.abs(step.left - 4) < 1e-9, `expected 4 px of travel, got ${step.left}`)
+assert.equal(step.top, 0)
+assert.equal(step.pathIndex, 1)
+assert.equal(step.arrived, false)
+
+// A large frame lands exactly on the waypoint: no overshoot, no snap radius.
+const nearPath = [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 80 }]
+step = plugin.townWalkFrame({ left: 0, top: 0, path: nearPath, pathIndex: 1, facingLeft: false, speed: 100 }, 0.5)
+assert.equal(step.left, 5, 'the frame stops exactly on the waypoint')
+assert.equal(step.top, 0)
+assert.equal(step.pathIndex, 2, 'reaching a waypoint advances the path index')
+assert.equal(step.arrived, false, 'a waypoint is not the end of the route')
+
+// The next frame continues along the NEXT segment, not to the destination.
+step = plugin.townWalkFrame({
+  left: step.left, top: step.top, pathIndex: step.pathIndex, facingLeft: step.facingLeft,
+  speed: 100, path: nearPath,
+}, 0.1)
+assert.equal(step.left, 5)
+assert.ok(Math.abs(step.top - 10) < 1e-9, `expected the next segment to move 10 px, got ${step.top}`)
+assert.equal(step.pathIndex, 2)
+assert.equal(step.arrived, false)
+
+// A vertical segment never flips facing, whichever way the actor faced before.
+for (const facingLeft of [true, false]) {
+  const vertical = plugin.townWalkFrame({
+    left: 5, top: 0, path: nearPath, pathIndex: 2, facingLeft, speed: 100,
+  }, 0.05)
+  assert.equal(vertical.facingLeft, facingLeft, 'a vertical walk keeps the last horizontal facing')
+}
+// A horizontal segment sets it, and a 1 px threshold keeps sub-pixel noise out.
+assert.equal(plugin.townWalkFrame(walkActor({ facingLeft: true }), 0.04).facingLeft, false)
+assert.equal(plugin.townWalkFrame({
+  left: 80, top: 0, path: [{ x: 0, y: 0 }, { x: 40, y: 0 }], pathIndex: 1, facingLeft: false, speed: 100,
+}, 0.04).facingLeft, true)
+
+// Elapsed time is capped at one tenth of a second after a stalled tab.
+const longPath = [{ x: 0, y: 0 }, { x: 300, y: 0 }]
+const stalled = plugin.townWalkFrame({ left: 0, top: 0, path: longPath, pathIndex: 1, facingLeft: false, speed: 100 }, 5)
+assert.equal(plugin.TOWN_MAX_FRAME_SECONDS, 0.1)
+assert.equal(stalled.left, 10, 'a five-second stall walks one capped frame, not 500 px')
+assert.equal(stalled.pathIndex, 1)
+assert.equal(plugin.townWalkFrame({ left: 0, top: 0, path: longPath, pathIndex: 1, speed: 100 }, -3).left, 0,
+  'a negative elapsed time cannot walk backwards')
+
+// A completed route keeps its exact final coordinate for every later frame.
+const finished = plugin.townWalkFrame({ left: 70, top: 30, path: walkPath, pathIndex: 4, speed: 100 }, 0.04)
+assert.equal(finished.left, 70)
+assert.equal(finished.top, 30)
+assert.equal(finished.arrived, true)
+assert.equal(finished.pathIndex, 4)
+
+// The epsilon is a float guard, not an arrival radius.
+assert.equal(plugin.TOWN_EPSILON_PX, 0.0001)
+const fuzzy = plugin.townWalkFrame({
+  left: 0, top: 0, path: [{ x: 0, y: 0 }, { x: 2, y: 0 }], pathIndex: 1, speed: 100,
+}, 0.0199995)
+assert.equal(fuzzy.left, 2, 'a step within epsilon lands exactly on the node')
+assert.equal(fuzzy.pathIndex, 2)
+assert.doesNotMatch(source, /TOWN_ARRIVE_PX/, 'the old 0.9 px arrival radius is gone')
+
+// -- one rAF clock, not an interval -----------------------------------------
+// The probe stubs effects, so these are structural checks: the pure timing is
+// covered above, and the installed UI check in the plan covers the rest.
+assert.match(source, /requestAnimationFrame/, 'the population is driven by rAF')
+assert.match(source, /cancelAnimationFrame/, 'unmount cancels the frame')
+assert.doesNotMatch(source, /\},\s*120\)/, 'the 120 ms interval is gone')
+assert.match(source, /membersRef\.current = members/, 'the loop reads members through a ref')
+assert.match(source, /\}, \[paused, reducedMotion\]\)/, 'the loop depends on pause and reduced motion only, never the poll')
+assert.match(source, /visibilitychange/, 'a hidden tab stops the clock')
+assert.doesNotMatch(source, /reducedMotion \|\| paused/, 'pause is not reduced motion')
+assert.doesNotMatch(source, /transition-\[left,top/, 'position is never CSS-interpolated')
+assert.match(source, /transition-opacity/, 'only opacity transitions, for filtering')
+assert.match(source, /function TownPopulation\(/, 'the population is its own component')
+const sceneBody = source.slice(source.indexOf('function TownScene('), source.indexOf('function townChoices('))
+assert.doesNotMatch(sceneBody, /useTownSimulation\(/, 'TownScene no longer owns the simulation')
+const populationBody = source.slice(source.indexOf('function TownPopulation('), source.indexOf('const TownEmptyPlot'))
+assert.match(populationBody, /useTownSimulation\(/, 'TownPopulation owns the simulation')
+assert.match(populationBody, /key: `actor:\$\{town\.id\}`/)
+assert.match(populationBody, /key: `actor:\$\{worker\.id\}`/)
+
 // -- twelve authored parcels, occupied or deliberately vacant --------------
 // The fixture has workers in slots 0 and 1, so exactly ten lots are empty.
 // Slot 0 is an ordinary parcel: the Router is a civic building, not a plot
