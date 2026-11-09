@@ -147,6 +147,10 @@ function render(node) {
   if (props.style && props.style.overflowY) bits.push(`overflow-y:${props.style.overflowY}`)
   if (props.style && props.style.isolation) bits.push(`isolation:${props.style.isolation}`)
   if (props.style && props.style.zIndex != null) bits.push(`z-index:${props.style.zIndex}`)
+  // Left/top are serialized so a regression from stage pixels back to
+  // percentages is visible to the assertions below.
+  if (props.style && props.style.left) bits.push(`left:${props.style.left}`)
+  if (props.style && props.style.top) bits.push(`top:${props.style.top}`)
   const children = props.children
   if (children != null) bits.push(Array.isArray(children) ? children.map(render).join(' ') : render(children))
   return bits.join(' ')
@@ -237,16 +241,86 @@ const quiet = render(h(plugin.TownScene, {
 }))
 assert.doesNotMatch(quiet, /superagent-town-build/)
 
-assert.deepEqual(plugin.townHousePosition(0), plugin.townHousePosition(0))
-assert.deepEqual(plugin.townHousePosition(3), { left: 78, top: 50, scale: 0.72 })
+// -- fixed estate geometry -------------------------------------------------
+// Every slot is an authored parcel on a 1200x700 logical stage. These
+// assertions are the contract: a slot's rectangle must never depend on the
+// session id, a poll, or the window size.
+assert.deepEqual(plugin.TOWN_STAGE, { width: 1200, height: 700 })
+assert.equal(plugin.TOWN_STAGE_MIN_SCALE, 0.8)
+assert.equal(plugin.TOWN_STAGE_MAX_SCALE, 1.25)
+assert.deepEqual(plugin.TOWN_ROUTER, { left: 600, top: 325, scale: 0.9 })
 assert.equal(plugin.TOWN_PLOTS.length, 12)
-assert.deepEqual(plugin.townHousePosition(11), { left: 62, top: 80, scale: 0.72 })
-assert.ok(plugin.townHousePosition(12).left >= 0)
-// Community check: all twelve plots sit inside the 20-80% band, not at the far edges.
-for (let slot = 0; slot < 12; slot += 1) {
-  const plot = plugin.townHousePosition(slot)
-  assert.ok(plot.left >= 20 && plot.left <= 80, `plot ${slot} left ${plot.left} inside community band`)
+assert.equal(new Set(plugin.TOWN_PLOTS.map((plot) => plot.id)).size, 12, 'plot ids are unique')
+assert.equal(new Set(plugin.TOWN_PLOTS.map((plot) => `${plot.left}:${plot.top}`)).size, 12, 'plot anchors are unique')
+for (const plot of plugin.TOWN_PLOTS) {
+  assert.ok(plot.id && plot.region, `plot ${plot.id} has an id and a region`)
+  const box = plugin.townPlotRect(plot)
+  assert.deepEqual(box, { x: plot.left - 56, y: plot.top - 65, w: 112, h: 130 })
+  assert.ok(box.x >= 0 && box.x + box.w <= plugin.TOWN_STAGE.width, `${plot.id} fits the stage horizontally`)
+  assert.ok(box.y >= 0 && box.y + box.h <= plugin.TOWN_STAGE.height, `${plot.id} fits the stage vertically`)
 }
+// Same slot, different sessions, identical position. This is the whole point:
+// the old implementation hashed the session id into a sub-percent offset, so
+// every reload moved the house.
+assert.deepEqual(plugin.townHousePosition(4, 'S-0002'), plugin.townHousePosition(4, 'S-9999'))
+assert.deepEqual(plugin.townHousePosition(4), plugin.TOWN_PLOTS[4])
+assert.deepEqual(plugin.townHousePosition(3), plugin.TOWN_PLOTS[3])
+assert.deepEqual(plugin.townHousePosition(11), plugin.TOWN_PLOTS[11])
+assert.deepEqual(plugin.townHousePosition(99), plugin.TOWN_PLOTS[11], 'out-of-range slots clamp to the last plot')
+assert.deepEqual(plugin.townHousePosition(-2), plugin.TOWN_PLOTS[0])
+assert.deepEqual(plugin.townHousePosition('nonsense'), plugin.TOWN_PLOTS[0])
+// The lookup returns a copy, so a caller cannot edit the authored table.
+const plotCopy = plugin.townHousePosition(0)
+plotCopy.left = 9999
+assert.equal(plugin.TOWN_PLOTS[0].left, 330)
+
+// Strict positive-area overlap: a shared edge is legal (a drive meets a
+// lane), a real overlap is not.
+assert.equal(plugin.rectsOverlap({ x: 0, y: 0, w: 10, h: 10 }, { x: 10, y: 0, w: 10, h: 10 }), false)
+assert.equal(plugin.rectsOverlap({ x: 0, y: 0, w: 10, h: 10 }, { x: 9, y: 9, w: 10, h: 10 }), true)
+
+// No parcel may sit on the Router, the pond, or a civic prop, and no two
+// reserved boxes may overlap either.
+const reserved = plugin.TOWN_RESERVED_RECTS
+assert.ok(Array.isArray(reserved) && reserved.length >= 10, 'reserved boxes are exported')
+for (let i = 0; i < reserved.length; i += 1) {
+  for (let j = i + 1; j < reserved.length; j += 1) {
+    assert.equal(plugin.rectsOverlap(reserved[i], reserved[j]), false,
+      `reserved boxes overlap: ${JSON.stringify(reserved[i])} / ${JSON.stringify(reserved[j])}`)
+  }
+}
+for (const plot of plugin.TOWN_PLOTS) {
+  for (const rect of reserved) {
+    assert.equal(plugin.rectsOverlap(plugin.townPlotRect(plot), rect), false,
+      `${plot.id} overlaps ${JSON.stringify(rect)}`)
+  }
+}
+// The screenshot bug: slot 4 used to stand in the pond.
+assert.equal(
+  plugin.rectsOverlap(plugin.townPlotRect(plugin.townHousePosition(4)), plugin.TOWN_POND_RECT),
+  false,
+)
+
+// Houses and actors render at stage pixels, not percentages.
+const plotHouse = render(h(plugin.TownHouse, {
+  session: workerOne, isRouter: false, slot: 0, onOpen: () => undefined,
+  houseRef: () => undefined, building: false, reducedMotion: false, assets, pet: null, dimmed: false,
+}))
+assert.match(plotHouse, /left:330px/)
+assert.match(plotHouse, /top:125px/)
+assert.doesNotMatch(plotHouse, /left:26%/)
+const routerHouse = render(h(plugin.TownHouse, {
+  session: root, isRouter: true, slot: 0, onOpen: () => undefined,
+  houseRef: () => undefined, building: false, reducedMotion: false, assets, pet: null, dimmed: false,
+}))
+assert.match(routerHouse, /left:600px/)
+assert.match(routerHouse, /top:325px/)
+const homeActor = render(h(plugin.TownActor, {
+  session: workerOne, isRouter: false, actorState: null, pet: null, personArt: null,
+  reducedMotion: false, dimmed: false, onOpen: () => undefined,
+}))
+assert.match(homeActor, /left:330px/)
+assert.match(homeActor, /top:190px/, 'a north actor waits on its doorstep, not on a percentage offset')
 
 const switcher = render(h(plugin.TownSwitcher, {
   towns: [root],
