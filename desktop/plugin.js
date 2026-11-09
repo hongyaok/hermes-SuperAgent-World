@@ -5693,11 +5693,142 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
   })
 }
 
+/** Only root chats are towns. The board endpoint already filters, but a
+ *  session list leaking into `towns` must never grow a worker row here: the
+ *  switcher picks towns, workers stay inside their own town. */
+function townChoices(towns) {
+  if (!Array.isArray(towns)) return []
+  return towns.filter((town) => !!town && !!town.id && town.parent_session_id == null)
+}
+
+/** Heading plus one row per town, shared by the SDK menu and the plain
+ *  popover so both shells render the same list (and the probe can render it
+ *  without opening anything). No panel chrome: the caller supplies it. */
+function TownPickerList({ towns, value, onSelect }) {
+  const choices = townChoices(towns)
+  return [
+    jsx('div', {
+      key: 'heading',
+      className: 'px-2 py-1 text-[0.625rem] uppercase tracking-wide text-(--ui-text-tertiary)',
+      children: `Towns (${choices.length})`,
+    }),
+    ...(choices.length
+      ? choices.map((town) => jsxs('button', {
+          key: town.id,
+          type: 'button',
+          role: 'menuitemradio',
+          'aria-checked': town.id === value,
+          'data-town-option': '1',
+          'data-town-id': town.id,
+          title: sessionTitle(town),
+          onClick: () => onSelect(town.id),
+          className: cn('flex min-h-7 w-full items-center gap-2 rounded px-2 py-1 text-left',
+            'text-(--ui-text-secondary) hover:bg-(--chrome-action-hover)',
+            town.id === value && 'bg-(--chrome-action-hover) font-medium text-(--ui-text-primary)'),
+          children: [
+            jsx('span', {
+              key: 'title', className: 'min-w-0 flex-1 truncate',
+              children: sessionTitle(town),
+            }),
+            jsx('span', {
+              key: 'status', className: 'shrink-0 text-[0.625rem] text-(--ui-text-tertiary)',
+              children: townStatusLabel(town.status),
+            }),
+            jsx('span', {
+              key: 'workers', className: 'shrink-0 text-[0.625rem] text-(--ui-text-quaternary)',
+              children: `${(town.workers || []).length} workers`,
+            }),
+          ],
+        }))
+      : [
+          jsx('div', {
+            key: 'none', className: 'px-2 py-1 text-xs text-(--ui-text-tertiary)',
+            children: 'No towns',
+          }),
+        ]),
+  ]
+}
+
+/** The plain-shell popover: a themed, height-capped panel anchored under the
+ *  trigger. Extracted so the probe can assert its chrome without opening it. */
+function TownPickerPopover({ towns, value, onSelect }) {
+  return jsx('div', {
+    role: 'presentation',
+    className: cn('absolute left-0 top-8 z-40 flex max-h-72 w-72 flex-col',
+      'gap-0.5 overflow-y-auto rounded border border-(--ui-stroke-secondary)',
+      'bg-background p-1 shadow-lg superagent-pixel-scroll'),
+    children: jsx(TownPickerList, { towns, value, onSelect }),
+  })
+}
+
 function TownSwitcher({
   towns, value, onChange, onPrev, onNext, onNew, onReroll, rerolling,
   failedCount, onRetryFailed, retryingFailed, onSessions, canPrev, canNext, sessionsRef,
 }) {
-  const current = towns.find((town) => town.id === value)
+  const [open, setOpen] = useState(false)
+  const choices = townChoices(towns)
+  const current = choices.find((town) => town.id === value)
+  const choose = (id) => {
+    setOpen(false)
+    onChange(id)
+  }
+  const label = current
+    ? `${sessionTitle(current)} · ${townStatusLabel(current.status)}`
+    : 'No towns'
+  // A native <select> paints its popup with the OS chrome (white on Windows),
+  // so the light option text vanished. This trigger opens a themed panel
+  // instead; the SDK menu is used only when every binding is present.
+  const trigger = jsx('button', {
+    key: 'trigger',
+    type: 'button',
+    'aria-label': 'Select town',
+    'aria-haspopup': 'menu',
+    'aria-expanded': !!open,
+    'data-town-picker': '1',
+    title: current ? label : 'Select town',
+    onClick: () => setOpen((prev) => !prev),
+    className: cn('inline-flex h-7 min-w-[8rem] max-w-[15rem] items-center gap-1 px-1.5',
+      'text-xs text-(--ui-text-secondary) hover:bg-(--chrome-action-hover)',
+      open && 'bg-(--chrome-action-hover)'),
+    children: [
+      jsx('span', {
+        key: 'label', className: 'min-w-0 flex-1 truncate text-left', children: label,
+      }),
+      jsx('span', {
+        key: 'caret', className: 'shrink-0 text-[0.625rem] text-(--ui-text-tertiary)',
+        children: '▾',
+      }),
+    ],
+  })
+  const picker = (DropdownMenu && DropdownMenuTrigger && DropdownMenuContent)
+    ? jsxs(DropdownMenu, {
+        open, onOpenChange: setOpen,
+        children: [
+          jsx(DropdownMenuTrigger, { key: 'trigger', asChild: true, children: trigger }),
+          jsx(DropdownMenuContent, {
+            key: 'content', align: 'start', className: 'w-72 p-1',
+            children: jsx(TownPickerList, { towns: choices, value, onSelect: choose }),
+          }),
+        ],
+      })
+    : jsxs('div', {
+        className: 'relative',
+        // Legacy shells have no portalled menu: close on focus loss / Escape.
+        onBlur: (event) => {
+          if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false)
+        },
+        onKeyDown: (event) => {
+          if (event.key === 'Escape') setOpen(false)
+        },
+        children: [
+          trigger,
+          open
+            ? jsx(TownPickerPopover, {
+                key: 'popover', towns: choices, value, onSelect: choose,
+              })
+            : null,
+        ],
+      })
   return jsxs('div', {
     className: 'flex min-w-0 flex-wrap items-center gap-1.5',
     children: [
@@ -5714,21 +5845,7 @@ function TownSwitcher({
               'disabled:opacity-30 disabled:hover:bg-transparent'),
             children: '‹',
           }),
-          jsx('select', {
-            key: 'select',
-            value: value || '',
-            'aria-label': 'Select town',
-            title: current ? `${sessionTitle(current)} · ${townStatusLabel(current.status)}` : 'Select town',
-            onChange: (event) => onChange(event.target.value),
-            className: cn('h-7 max-w-[15rem] min-w-[8rem] truncate bg-transparent px-1',
-              'text-xs text-(--ui-text-secondary) focus:outline-none'),
-            children: towns.length
-              ? towns.map((town) => jsx('option', {
-                  key: town.id, value: town.id,
-                  children: `${sessionTitle(town)} · ${townStatusLabel(town.status)}`,
-                }))
-              : jsx('option', { key: 'none', value: '', children: 'No towns' }),
-          }),
+          picker,
           jsx('button', {
             key: 'next', type: 'button', onClick: onNext, disabled: !canNext,
             'aria-label': 'Next town', title: 'Next town',
@@ -7255,8 +7372,8 @@ export {
   modelWithThinking, reasoningLabel, backendNeedsRestart,
   TownScene, TownHouse, TownActor, PetdexSprite, TownSpeechBubble,
   TownBulletinBoard, TownBulletinModal,
-  TownSwitcher, TownChatDialog, TownEmpty, CommentBox, CreatePrBox,
-  townHousePosition, townHouseSprite, townStatusLabel, deriveSpeechBubble, TOWN_PLOTS,
+  TownSwitcher, TownPickerList, TownPickerPopover, TownChatDialog, TownEmpty, CommentBox, CreatePrBox,
+  townChoices, townHousePosition, townHouseSprite, townStatusLabel, deriveSpeechBubble, TOWN_PLOTS,
 }
 
 export default {

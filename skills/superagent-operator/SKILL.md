@@ -1,7 +1,7 @@
 ---
 name: superagent-operator
 description: Operate Superagent chats, workers and GitHub watch.
-version: 0.6.1
+version: 0.6.2
 platforms: [linux, macos, windows]
 metadata:
   hermes:
@@ -89,7 +89,7 @@ GitHub connection.
    **Stop** cancels that session; a follow-up resumes its Hermes session. The
    dialog has **Retry** after `failed`/`cancelled`, model/thinking changes, **Diff**,
    **Create PR**, **Comment / Approve PR**, export, and Router dispatch actions. Closing it never stops the worker.
-6. Switch towns with the selector or left/right arrows; click **🎲 Reroll sprites** (`POST /town/pets/reroll`) to pick fresh Petdex characters for the town. Switching only changes
+6. Switch towns with the town picker (**Select town** button → `Towns (N)` panel of roots with status and worker count, never worker sessions) or left/right arrows; click **🎲 Reroll sprites** (`POST /town/pets/reroll`) to pick fresh Petdex characters for the town. Switching only changes
    the view, never a session. **Sessions** has search, rename, pin, archive and
    delete for rows that are archived or orphaned.
 7. A turn that ends in `review` or `failed` raises one desktop toast
