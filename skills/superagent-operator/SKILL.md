@@ -1,7 +1,7 @@
 ---
 name: superagent-operator
 description: Operate Superagent chats, workers and GitHub watch.
-version: 0.6.3
+version: 0.6.4
 platforms: [linux, macos, windows]
 metadata:
   hermes:
@@ -37,7 +37,7 @@ possible.**
 | Desktop **Superagent** page (`/superagent`) | Town scene (Router + worker houses, wandering Petdex sprites, speech bubbles, HUD filter pills, pause toggle, **🎲 Reroll sprites**, **↻ Retry failed**), house chat dialog, town switcher, Sessions drawer, Settings, GitHub, diff/comment/PR create/review. |
 | Status-bar chip + side pane | `▶ N` running chats and `◆ M` chats in `review`/`failed`; ticket attention only as a fallback. |
 | Agent tools | Ticket tools (`superagent_ask`, `superagent_tick`, `superagent_status`, `superagent_run`) and Town/PR tools (`superagent_spawn`, `superagent_town_status`, `superagent_message_worker`, `superagent_pr_create`, `superagent_pr_review`). |
-| CLI | `hermes superagent …` for status, chat, sessions, presets, GitHub, diff, comment and worktree cleanup (`hermes superagent cleanup`). |
+| CLI | `hermes superagent …` for status, chat, sessions, presets, GitHub, diff, comment, worktree cleanup and the read-only install diagnosis (`hermes superagent doctor`). |
 | Slash command | `/superagent status\|ask\|tick\|run\|help`. |
 | Cron blueprint | **Superagent watch** every 5 minutes; runs `superagent_tick(wait=true)` as a real agent turn, so it may launch ticket workers. |
 
@@ -295,7 +295,14 @@ hermes superagent tick
 hermes superagent run T-0001
 hermes superagent show T-0001
 hermes superagent doctor
+hermes superagent doctor --json
 ```
+
+`doctor` is read-only: it reports `ok`/`warn`/`FAIL` for the plugin/API
+version, database totals, the `hermes` binary, the configured repository and
+its dirty count, stale worktrees, model choices and the data-tier gate. It
+never starts an engine or a worker and never touches the network, so it works
+on an installation that cannot launch anything.
 
 `run` promotes to `queued`; the worker starts on the next agent turn. Every
 subcommand accepts `--json`. Exit codes: `0` ok, `1` runtime/configuration
