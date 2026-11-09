@@ -1971,6 +1971,14 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
     provider: (settings && settings.default_provider) || '',
     effort: (settings && settings.default_reasoning_effort) || '',
   }))
+  // Spawned workers may run a different (usually cheaper) model than the
+  // router. Empty fields mean "inherit the router session", which is also what
+  // a settings file written before this block existed means.
+  const [workerModel, setWorkerModel] = useState(() => ({
+    model: (settings && settings.worker_model) || '',
+    provider: (settings && settings.worker_provider) || '',
+    effort: (settings && settings.worker_reasoning_effort) || '',
+  }))
   const [rows, setRows] = useState(() => presetRowsFrom(settings))
   const [maxWorkers, setMaxWorkers] = useState(() => Number(settings && settings.max_workers) || 2)
   const [maxTurns, setMaxTurns] = useState(() => Number(settings && settings.chat_max_turns) || 120)
@@ -2022,6 +2030,9 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
     model: (settings && settings.default_model) || '',
     provider: (settings && settings.default_provider) || '',
     effort: (settings && settings.default_reasoning_effort) || '',
+    workerModel: (settings && settings.worker_model) || '',
+    workerProvider: (settings && settings.worker_provider) || '',
+    workerEffort: (settings && settings.worker_reasoning_effort) || '',
     presets: presetRowsFrom(settings),
     workers: Number(settings && settings.max_workers) || 2,
     turns: Number(settings && settings.chat_max_turns) || 120,
@@ -2039,6 +2050,11 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
       model: settings.default_model || '',
       provider: settings.default_provider || '',
       effort: settings.default_reasoning_effort || '',
+    })
+    setWorkerModel({
+      model: settings.worker_model || '',
+      provider: settings.worker_provider || '',
+      effort: settings.worker_reasoning_effort || '',
     })
     setRows(presetRowsFrom(settings))
     setMaxWorkers(Number(settings.max_workers) || 2)
@@ -2067,6 +2083,9 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
         default_model: String(model.model || '').trim(),
         default_provider: String(model.provider || '').trim(),
         default_reasoning_effort: String(model.effort || '').trim(),
+        worker_model: String(workerModel.model || '').trim(),
+        worker_provider: String(workerModel.provider || '').trim(),
+        worker_reasoning_effort: String(workerModel.effort || '').trim(),
         model_presets: rows
           .map((row) => ({
             name: String(row.name || '').trim(),
@@ -2214,6 +2233,63 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
                       jsx('span', { key: 'p', children: model.provider ? `provider: ${model.provider}` : 'provider: auto (chosen by Hermes)' }),
                       jsx('span', { key: 'n', children: 'No default means the CLI picks.' }),
                     ],
+                  }),
+                  jsx('div', {
+                    key: 'worker-label', className: 'mt-2 text-[0.6875rem] font-medium uppercase tracking-wide text-(--ui-text-tertiary)',
+                    children: 'Worker model',
+                  }),
+                  jsxs('div', {
+                    key: 'worker-picker', className: 'flex flex-wrap items-center gap-1',
+                    children: [
+                      jsx(ModelPicker, {
+                        value: workerModel, models, disabled: save.isPending,
+                        onChange: (next) => {
+                          edited()
+                          setWorkerModel({
+                            model: next.model || '', provider: next.provider || '',
+                            effort: String(next.effort || ''),
+                          })
+                        },
+                      }),
+                      (workerModel.model || workerModel.provider || workerModel.effort)
+                        ? jsx(GhostButton, {
+                            key: 'clear', title: 'Clear the worker model (spawned workers inherit the router)',
+                            onClick: () => { edited(); setWorkerModel({ model: '', provider: '', effort: '' }) },
+                            children: 'Inherit router',
+                          })
+                        : null,
+                    ],
+                  }),
+                  jsxs('label', {
+                    key: 'worker-effort',
+                    className: 'flex items-center gap-2 text-[0.6875rem] text-(--ui-text-tertiary)',
+                    children: [
+                      jsx('span', {
+                        key: 'l', className: 'min-w-0 flex-1',
+                        children: 'Worker thinking',
+                      }),
+                      jsx('select', {
+                        key: 'i',
+                        value: workerModel.effort || '',
+                        'aria-label': 'Worker thinking level',
+                        onChange: (event) => {
+                          edited()
+                          setWorkerModel((current) => ({ ...current, effort: event.target.value }))
+                        },
+                        className: cn('rounded border border-(--ui-stroke-secondary)',
+                          'bg-background px-1.5 py-1 text-[0.6875rem] text-(--ui-text-secondary)',
+                          'focus:outline-none'),
+                        children: REASONING_LEVELS.map((level) => jsx('option', {
+                          key: level.value || 'inherit',
+                          value: level.value,
+                          children: level.value ? level.label : 'Inherit router',
+                        })),
+                      }),
+                    ],
+                  }),
+                  jsx('div', {
+                    key: 'worker-help', className: 'text-[0.6875rem] leading-snug text-(--ui-text-tertiary)',
+                    children: 'Spawned workers use this model, provider and thinking level. Empty means they inherit the router session; a superagent_spawn override still wins.',
                   }),
                   jsxs('label', {
                     key: 'workers', className: 'flex items-center gap-2 text-[0.6875rem] text-(--ui-text-tertiary)',

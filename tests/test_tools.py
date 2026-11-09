@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 
 class FakeCtx:
     def __init__(self, config=None):
@@ -261,5 +263,149 @@ def test_pr_create_and_pr_review_tools(tmp_path, monkeypatch, sa):
     )
     assert reviewed["ok"] is True
     assert reviewed["review"]["state"] == "APPROVE"
+
+
+# -- spawn tool: worker model resolution ------------------------------------
+
+
+class SpawnRunner:
+    """Records launch arguments; the real Runner is exercised elsewhere."""
+
+    def __init__(self):
+        self.launches = []
+
+    def launch_turn(self, session_id, prompt, **kwargs):
+        self.launches.append({"session_id": session_id, "prompt": prompt, **kwargs})
+
+
+@pytest.fixture
+def spawn_env(tmp_path, monkeypatch, sa):
+    """A worker town in a throwaway data dir, with a recording runner."""
+    monkeypatch.setattr(sa.sa_settings, "data_dir", lambda: tmp_path)
+    for name in sa.sa_settings.ENV_VARS.values():
+        monkeypatch.delenv(name, raising=False)
+    sa.sa_settings.clear_cache()
+    runner = SpawnRunner()
+    monkeypatch.setattr(sa.sa_runtime, "shared_runner", lambda _store: runner)
+    store = sa.sa_chats.ChatStore(tmp_path / "superagent.db")
+    yield store, runner
+    sa.sa_settings.clear_cache()
+
+
+def test_spawn_tool_resolves_worker_model_before_the_parent(spawn_env, sa):
+    store, runner = spawn_env
+    root = store.create_session(
+        "router",
+        model="router-model",
+        provider="router-provider",
+        reasoning_effort="high",
+        repo="",
+    )
+    sa.sa_settings.save_settings(
+        {
+            "worker_model": "cheap/worker-model",
+            "worker_provider": "cheap-provider",
+            "worker_reasoning_effort": "low",
+        }
+    )
+
+    first = json.loads(
+        sa.sa_tools.superagent_spawn(
+            {"parent_session_id": root["id"], "prompt": "fix the parser"}, ctx=object()
+        )
+    )
+    assert first["ok"] is True
+    child = first["session"]
+    assert child["model"] == "cheap/worker-model"
+    assert child["provider"] == "cheap-provider"
+    assert child["reasoning_effort"] == "low"
+    assert runner.launches[-1]["model"] == "cheap/worker-model"
+    assert runner.launches[-1]["provider"] == "cheap-provider"
+    assert runner.launches[-1]["reasoning_effort"] == "low"
+
+    # A per-spawn argument beats the setting.
+    second = json.loads(
+        sa.sa_tools.superagent_spawn(
+            {
+                "parent_session_id": root["id"],
+                "prompt": "one-off job",
+                "model": "one-off-model",
+                "provider": "one-off-provider",
+                "reasoning_effort": "max",
+            },
+            ctx=object(),
+        )
+    )
+    assert second["ok"] is True
+    assert second["session"]["model"] == "one-off-model"
+    assert second["session"]["provider"] == "one-off-provider"
+    assert second["session"]["reasoning_effort"] == "max"
+
+    # Empty settings restore the pre-feature inheritance from the router.
+    sa.sa_settings.save_settings(
+        {"worker_model": "", "worker_provider": "", "worker_reasoning_effort": ""}
+    )
+    third = json.loads(
+        sa.sa_tools.superagent_spawn(
+            {"parent_session_id": root["id"], "prompt": "inherit"}, ctx=object()
+        )
+    )
+    assert third["session"]["model"] == "router-model"
+    assert third["session"]["provider"] == "router-provider"
+    assert third["session"]["reasoning_effort"] == "high"
+
+
+def test_spawn_tool_rejects_a_bad_effort_without_creating_a_row(spawn_env, sa):
+    store, runner = spawn_env
+    root = store.create_session("router")
+
+    result = json.loads(
+        sa.sa_tools.superagent_spawn(
+            {
+                "parent_session_id": root["id"],
+                "prompt": "work",
+                "reasoning_effort": "infinite",
+            },
+            ctx=object(),
+        )
+    )
+    assert "reasoning_effort must be one of" in result["error"]
+    assert "session" not in result
+    assert runner.launches == []
+    assert [row["id"] for row in store.list_sessions()["sessions"]] == [root["id"]]
+
+
+def test_spawn_tool_refuses_a_contributor_model_before_creating_a_row(
+    spawn_env, sa, monkeypatch
+):
+    store, runner = spawn_env
+    root = store.create_session("router")
+    monkeypatch.setattr(sa.sa_model_policy, "host_allows_data_tiers", lambda: False)
+    sa.sa_settings.save_settings({"worker_model": "muse-spark-1.3-contributor"})
+
+    from_settings = json.loads(
+        sa.sa_tools.superagent_spawn(
+            {"parent_session_id": root["id"], "prompt": "work"}, ctx=object()
+        )
+    )
+    assert "contributor" in from_settings["error"]
+    assert "session" not in from_settings
+
+    # An explicit per-spawn model is checked the same way.
+    sa.sa_settings.save_settings({"worker_model": ""})
+    from_arg = json.loads(
+        sa.sa_tools.superagent_spawn(
+            {
+                "parent_session_id": root["id"],
+                "prompt": "work",
+                "model": "meta/muse-spark-1.3-contributor",
+            },
+            ctx=object(),
+        )
+    )
+    assert "contributor" in from_arg["error"]
+
+    assert runner.launches == []
+    assert [row["id"] for row in store.list_sessions()["sessions"]] == [root["id"]]
 
 

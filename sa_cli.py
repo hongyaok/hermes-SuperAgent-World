@@ -255,6 +255,25 @@ def render_models(data: dict) -> str:
     return "\n".join(lines)
 
 
+def worker_model_label(data: dict) -> str:
+    """One-line summary of the worker model setting: `model · provider · effort`.
+
+    All three empty is the default and means "a worker inherits its router",
+    which is the only state worth spelling out in words; a partial override
+    names what is set and leaves the rest to the router.
+    """
+    model = str(data.get("worker_model") or "").strip()
+    provider = str(data.get("worker_provider") or "").strip()
+    effort = str(data.get("worker_reasoning_effort") or "").strip()
+    if not (model or provider or effort):
+        return "inherit router"
+    return " · ".join((
+        model or "router model",
+        provider or "router provider",
+        effort or "router thinking",
+    ))
+
+
 def render_settings(data: dict) -> str:
     """Human view of the merged settings; the token is only ever `set`/`unset`."""
     def line(label: str, value: Any, empty: str = "(unset)") -> str:
@@ -288,6 +307,7 @@ def render_settings(data: dict) -> str:
                 "default thinking",
                 data.get("default_reasoning_effort") or "model default",
             ))
+            lines.append(line("worker model", worker_model_label(data)))
     lines.append(line("GitHub token", "set (value never shown)" if data.get("github_token_set") else "not set"))
     lines.append(line(
         "data-tier models",
