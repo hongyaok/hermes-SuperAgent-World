@@ -3,6 +3,55 @@
 All notable changes to the `superagent` Hermes plugin. Plain bullets, newest
 first.
 
+## 0.10.0 — 2026-11-10
+
+The GitHub side gained three opt-in actions, each with its own switch and each
+off by default: reply on the thread when a turn finishes, resolve an issue into
+a pull request, and merge a pull request after commenting on it.
+
+### Added
+
+- **Reply on finish (`sa_replies.py`, `sa_runner.py`, `desktop/plugin.js`).**
+  `github_reply_on_finish` posts a finished turn's summary on the session's
+  issue or PR, once per session, using `sa_diff.default_comment_body` — the same
+  body the **Comment on PR** panel previews, so the automatic and human
+  comments cannot disagree. The runner hook runs only after a turn ends in
+  `review` and turns any failure into a `reply_failed` event instead of failing
+  the turn.
+- **Resolving issues into pull requests (`allow_issue_pr_create`,
+  `sa_settings.pr_create_allowed`).** An issue session may commit its worktree,
+  push a `superagent/` branch and open a PR whose body says `Closes #N`,
+  without granting PR sessions push rights. One rule — `pr_create_allowed` —
+  now backs both prompt builders and the `superagent_pr_create` gate.
+- **Merging a pull request (`allow_worker_merge_pr`, `sa_github.merge_pr`,
+  `superagent_pr_merge`).** The tool re-reads the PR (`mergeable` is only
+  computed by `GET /pulls/{n}`), refuses a draft, a closed PR or
+  `mergeable: false`, posts its verdict comment first so the reasoning survives
+  a refusal, and then merges. GitHub still applies branch protection, and a
+  refusal comes back as `{ok: false, error}` rather than a silent success.
+- **Settings surface.** Three checkboxes in **⚙ Settings**, matching
+  `plugin.yaml` rows, `POST /settings` validation and README/DESIGN rows. The
+  plugin now provides ten tools.
+
+### Changed
+
+- **The issue prompt is a resolution prompt.** With publishing enabled it asks
+  for one `superagent_pr_create` call and a `Closes #N` body instead of a vague
+  "mention the issue", and the PR prompt carries a merge rule when merging is
+  on ("never merge a draft, a failing change, or one you would ask a question
+  about").
+- **The watch-mode and onboarding copy names the thread, not just PRs.**
+
+### Fixed
+
+- **README claimed `POST /chats/{id}/pr` returns `403` when
+  `allow_worker_pr_create` is off.** That route is a human action from the
+  panel and never had the gate; the doc now says so and points at the
+  agent-facing tool, which is gated.
+- **A refused merge is no longer reported as a merge.** GitHub answers `200`
+  with `merged: false` for a merge it did not perform, so `merge_pr` returns
+  that flag and the tool branches on it.
+
 ## 0.9.0 — 2026-11-10
 
 The GitHub watcher stops being PR-only: open issues are polled too, and a
