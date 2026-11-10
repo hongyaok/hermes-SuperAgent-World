@@ -82,7 +82,7 @@ except ImportError:  # loaded standalone by the gateway / pytest
 
 router = APIRouter()
 
-VERSION = "0.8.0"
+VERSION = "0.9.0"
 # Contract generation for the desktop: bumped when a release adds routes the
 # panel feature-detects (v2 = session management; v3 = towns and worker
 # spawning).

@@ -3,6 +3,44 @@
 All notable changes to the `superagent` Hermes plugin. Plain bullets, newest
 first.
 
+## 0.9.0 — 2026-11-10
+
+The GitHub watcher stops being PR-only: open issues are polled too, and a
+comment that mentions `@sa` or `/sa` starts work the same way `@<login>` does.
+
+### Added
+
+- **Issue watching (`sa_github.py`, `sa_watcher.py`, `sa_chats.py`,
+  `dashboard/plugin_api.py`, `sa_cli.py`, `desktop/plugin.js`, `plugin.yaml`).**
+  `GitHubClient` gains `list_open_issues`, `get_issue`, `list_issue_comments`
+  and `build_issue_prompt`; `GitHubWatcher` polls both kinds through one
+  `(kind, thread)` list, so the baseline, dedupe, allow-list and trigger rules
+  stay single-sourced. An issue mention becomes a `github_issue` session with a
+  new `issue_number` column (idempotent migration); in `auto` mode it runs in
+  its own `worker-<session_id>` worktree off the clone. New
+  `github_watch_issues` setting (default on), `POST /github/issues/{n}/work`,
+  **Work on this issue** plus the **Also watch issues** checkbox in the GitHub
+  panel, and `hermes superagent github work <n> --issue`.
+- **`GET /github/prs` returns `issues` beside `prs`** so one cached call feeds
+  both panel columns and `hermes superagent github prs`.
+
+### Changed
+
+- **Short trigger aliases.** `is_trigger` accepts `@sa` and `/sa` anywhere in a
+  comment, matched on word boundaries so `@sample` and the `/sa` in
+  `docs/sa.md` do not start a worker.
+- **`github_pr_limit` now caps pull requests *and* issues per poll**, and the
+  watch-mode help plus the onboarding step say "PRs and issues".
+
+### Fixed
+
+- **Issue mentions were silently invisible.** The live watcher listed only
+  `/pulls`; the issue-comment `GitHubSource` belongs to the ticket engine, which
+  no live surface starts, so the documented issue-comment support was
+  unreachable.
+- **Session titles and the CLI status line name the thread actually worked on**
+  (`Issue #3`, `PR #7`) instead of always saying PR.
+
 ## 0.8.0 — 2026-11-09
 
 Workers become configurable and cheaper to run: a separate model/provider/thinking
