@@ -303,6 +303,9 @@ def render_settings(data: dict) -> str:
         ("github_watch_mode", "GitHub watch mode"),
         ("github_watch_new_prs", "GitHub new PRs"),
         ("github_poll_seconds", "GitHub poll (s)"),
+        ("allow_issue_pr_create", "resolve issues (PR)"),
+        ("allow_worker_merge_pr", "merge PRs"),
+        ("github_reply_on_finish", "reply on finish"),
     ):
         lines.append(line(label, data.get(key)))
         if key == "default_provider":
