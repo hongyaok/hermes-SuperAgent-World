@@ -27,10 +27,27 @@ def _args(**kwargs):
         allowed=None,
         watch_mode="",
         request="",
+        issue=False,
         json=False,
     )
     base.update(kwargs)
     return types.SimpleNamespace(**base)
+
+
+def issue(number=3, title="Crash on an empty payload", author="alice"):
+    return {
+        "number": number,
+        "title": title,
+        "body": "POST /parse with {} raises a KeyError.",
+        "author": author,
+        "state": "open",
+        "labels": ["bug"],
+        "comment_count": 1,
+        "html_url": f"https://github.com/{REPO}/issues/{number}",
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-02T00:00:00Z",
+        "repo": REPO,
+    }
 
 
 def pr(number=7, title="Add parser tests", author="alice"):
@@ -57,6 +74,8 @@ STATUS = {
     "login": "agent",
     "token_set": True,
     "open_prs": [pr()],
+    "open_issues": [issue()],
+    "watch_issues": True,
     "last_poll": None,
     "last_error": "",
     "watching": True,
@@ -89,6 +108,7 @@ class FakeClient:
     instances = []
     fail = ""
     prs = [pr()]
+    issues = [issue()]
 
     def __init__(self, token, repo, timeout=20):
         self.token = token
@@ -118,6 +138,18 @@ class FakeClient:
             if item["number"] == number:
                 return dict(item)
         raise _sa_github().GitHubError(f"pull request #{number} was not found", 404)
+
+    def list_open_issues(self, limit=10):
+        return [dict(item) for item in FakeClient.issues]
+
+    def list_issue_comments(self, number):
+        return []
+
+    def get_issue(self, number):
+        for item in FakeClient.issues:
+            if item["number"] == number:
+                return dict(item)
+        raise _sa_github().GitHubError(f"issue #{number} was not found", 404)
 
 
 _PLUGIN = None
@@ -503,3 +535,36 @@ def test_parser_registers_the_github_command_and_flags(sa):
 
     ns = parser.parse_args(["--json", "github", "status"])
     assert ns.json is True and ns.action == "status"
+
+
+def test_work_on_an_issue_creates_a_github_issue_session(cli, capsys):
+    connect_settings(cli.sa, default_model="m1", default_provider="p1")
+
+    rc = cli.sa.sa_cli.run(
+        _args(action="work", number="3", issue=True, request="it crashes on {}"), object()
+    )
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    call = cli.runner.launched[0]
+    assert "Work on GitHub issue #3" in call["prompt"]
+    assert "it crashes on {}" in call["prompt"]
+
+    session = cli.sa.sa_chats.ChatStore(cli.db).get_session(call["session_id"], message_limit=0)
+    assert session["source"] == "github_issue"
+    assert session["issue_number"] == 3
+    assert session["pr_number"] is None
+    assert session["status"] == "queued"
+    assert session["title"].startswith("Issue #3")
+    assert "Issue #3" in out
+
+
+def test_work_on_an_issue_404s_for_an_unknown_number(cli, capsys):
+    connect_settings(cli.sa)
+
+    rc = cli.sa.sa_cli.run(_args(action="work", number="99", issue=True), object())
+
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "issue #99" in out
+    assert cli.runner.launched == []

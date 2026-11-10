@@ -217,6 +217,11 @@ def test_post_comment_sends_the_body(http):
         "Superagent: take a look",
         "  superagent: fix it",
         "SUPERAGENT: uppercase",
+        "@sa please fix the parser",
+        "@/sa, run the tests",
+        "can you /sa look at this?",
+        "@SA uppercase",
+        "/sa",
     ],
 )
 def test_is_trigger_accepts_the_documented_forms(body):
@@ -225,7 +230,20 @@ def test_is_trigger_accepts_the_documented_forms(body):
 
 @pytest.mark.parametrize(
     "body",
-    ["", "   ", "thanks, looks good", "@someone-else", "superagent is a plugin", None],
+    [
+        "",
+        "   ",
+        "thanks, looks good",
+        "@someone-else",
+        "superagent is a plugin",
+        # The short alias must stand alone: a longer word or a path segment
+        # is not a request.
+        "@sample logs please",
+        "see docs/sa.md",
+        "/sales report",
+        "https://example.com/sa",
+        None,
+    ],
 )
 def test_is_trigger_rejects_everything_else(body):
     assert sa_github.is_trigger(body, "agent") is False
@@ -533,3 +551,110 @@ def test_commit_and_push_branch_stages_commits_and_pushes(tmp_path):
     assert any("commit" in c for c in calls)
     assert any("push" in c for c in calls)
 
+
+
+# -- issues --------------------------------------------------------------
+
+
+def issue_payload(number=3, **overrides):
+    data = {
+        "number": number,
+        "title": "Crash on an empty payload",
+        "body": "POST /parse with {} raises a KeyError.",
+        "user": {"login": "alice"},
+        "state": "open",
+        "labels": [{"name": "bug"}, {"name": ""}],
+        "comments": 2,
+        "html_url": f"https://github.com/owner/name/issues/{number}",
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-02T00:00:00Z",
+        # _normalize_issue stamps the repo; the raw payload is what the client
+        # sees before that, so the fixture carries it too.
+        "repo": "owner/name",
+    }
+    data.update(overrides)
+    return data
+
+
+def test_list_open_issues_drops_pull_requests(http):
+    http.responses["/issues?state=open"] = [
+        issue_payload(3),
+        # Every PR comes back from /issues with this key; it must not be
+        # handled as an issue (that path is list_open_prs + a checkout).
+        issue_payload(7, pull_request={"url": "https://api.github.com/repos/owner/name/pulls/7"}),
+        issue_payload(4, title="Second"),
+    ]
+
+    issues = sa_github.GitHubClient(TOKEN, "owner/name").list_open_issues(limit=2)
+
+    assert [issue["number"] for issue in issues] == [3, 4]
+    assert issues[0]["author"] == "alice"
+    assert issues[0]["labels"] == ["bug"]
+    assert issues[0]["comment_count"] == 2
+    assert issues[0]["repo"] == "owner/name"
+    # The page is over-fetched so the caller's limit still means "issues".
+    url = http.url_for("/issues?state=open")
+    assert "per_page=24" in url
+
+
+def test_get_issue_refuses_a_pull_request(http):
+    http.responses["/issues/7"] = issue_payload(7, pull_request={"url": "x"})
+    with pytest.raises(sa_github.GitHubError) as excinfo:
+        sa_github.GitHubClient(TOKEN, "owner/name").get_issue(7)
+    assert excinfo.value.status == 422
+    assert "pull request" in str(excinfo.value)
+
+
+def test_get_issue_maps_a_404(http):
+    http.responses["/issues/99"] = http_error(404, "Not Found")
+    with pytest.raises(sa_github.GitHubError) as excinfo:
+        sa_github.GitHubClient(TOKEN, "owner/name").get_issue(99)
+    assert excinfo.value.status == 404
+
+
+def test_list_issue_comments_never_asks_for_review_comments(http):
+    http.responses["/issues/3/comments"] = [
+        {
+            "id": 11,
+            "user": {"login": "alice"},
+            "body": "@sa please fix",
+            "html_url": "https://github.com/owner/name/issues/3#issuecomment-11",
+            "created_at": "2026-01-03T00:00:00Z",
+        }
+    ]
+
+    comments = sa_github.GitHubClient(TOKEN, "owner/name").list_issue_comments(3)
+
+    assert [comment["id"] for comment in comments] == [11]
+    assert comments[0]["kind"] == "issue"
+    assert comments[0]["author"] == "alice"
+    # An issue has no diff, so /pulls/<n>/comments must not be requested.
+    assert http.url_for("/pulls/3/comments") == ""
+
+
+def test_build_issue_prompt_carries_the_issue_the_ask_and_the_rules():
+    prompt = sa_github.build_issue_prompt(
+        issue_payload(3, labels=["bug", "parser"]),
+        comment={"author": "alice", "body": "@sa the empty dict crashes it"},
+        checkout="/tmp/workspaces/worker-s-0007",
+        can_create_pr=False,
+    )
+
+    assert "Work on GitHub issue #3 in owner/name." in prompt
+    assert "Issue #3: Crash on an empty payload" in prompt
+    assert "Labels: bug, parser" in prompt
+    assert "POST /parse with {} raises a KeyError." in prompt
+    assert "Triggering comment from @alice:" in prompt
+    assert "the empty dict crashes it" in prompt
+    assert "/tmp/workspaces/worker-s-0007" in prompt
+    assert "Do NOT commit, push, merge" in prompt
+    assert "pull request #3" not in prompt
+
+
+def test_build_issue_prompt_allows_a_pr_when_the_setting_is_on():
+    prompt = sa_github.build_issue_prompt(
+        issue_payload(3), comment=None, can_create_pr=True
+    )
+    assert "superagent_pr_create" in prompt
+    assert "mention #3 in the pull request body" in prompt
+    assert "Do NOT commit, push, merge" not in prompt

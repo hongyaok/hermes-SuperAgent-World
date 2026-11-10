@@ -17,7 +17,7 @@ Most autonomous coding setups fail in one of two ways:
 
 | | Ticket path | Chat path |
 | :--- | :--- | :--- |
-| Trigger | router accepts an inbound request | a person sends a message, or the GitHub watcher opens a session |
+| Trigger | router accepts an inbound request | a person sends a message, or the GitHub watcher opens a session from a PR or issue comment |
 | Worker | Hermes subagent via `ctx.subagent_lifecycle` | headless `hermes chat` subprocess |
 | Launch context | only an active agent turn (tool call or cron) | any process, including the dashboard backend |
 | Record | `tickets` + `events` | `chat_sessions` + `chat_messages` + `chat_events` |
@@ -254,19 +254,21 @@ The page compares consecutive `/chats` polls. A transition from `queued`/`runnin
 
 ## 7. GitHub Watch
 
-One repository, one token, one polling thread.
+One repository, one token, one polling thread watching open pull requests and open issues.
 
 ### Connection and settings
 
-`sa_settings` stores the repository, token, agent login, allow-list and watch knobs in `settings.json` (the connect form's write path), layered over `config.yaml`. `sa_github.GitHubClient` is a stdlib `urllib` REST client bound to that repository: `me`, `repo_info`, `list_open_prs`, `get_pr`, `list_comments` (issue + review comments, oldest first), `post_comment`. `GitHubError` carries the HTTP status and never the token.
+`sa_settings` stores the repository, token, agent login, allow-list and watch knobs in `settings.json` (the connect form's write path), layered over `config.yaml`. `sa_github.GitHubClient` is a stdlib `urllib` REST client bound to that repository: `me`, `repo_info`, `list_open_prs`, `get_pr`, `list_comments` (issue + review comments, oldest first), `list_open_issues`, `get_issue`, `list_issue_comments`, `post_comment`. `GitHubError` carries the HTTP status and never the token.
+
+One poll builds a single list of `(kind, thread)` pairs — `("pr", …)` for every open PR and `("issue", …)` for every open issue — so baseline, dedupe, allow-list and trigger rules are written once. GitHub has no "issues but not pull requests" filter on `/issues` (a PR *is* an issue and arrives with a `pull_request` key), so `list_open_issues` over-fetches a page and drops the PRs; PRs stay on their own path because they need a head checkout. An issue has no diff, so its thread is read with `list_issue_comments` rather than `list_comments` (which would 404 on `/pulls/<n>/comments`).
 
 ### Baseline, dedupe and triggers
 
 - The first complete poll is a baseline: everything present is marked seen and creates nothing.
 - `gh_seen` keys (`gh_comment:…`, `gh_head:…`, `gh_baseline:…`) survive restarts. An unseen comment is marked seen **before** it is judged, so one malformed comment cannot replay forever.
-- A trigger is `@<agent-login>`, `@superagent`, `/superagent`, or a line starting `superagent:`. Bots (`*[bot]`, `github-actions`, `dependabot`) and the agent's own login are ignored.
+- A trigger is `@<agent-login>`, the short aliases `@sa` and `/sa`, `@superagent`, `/superagent`, or a line starting `superagent:`. The short aliases are matched with word boundaries (`(?<![\w-])[@/]sa(?![\w-])`) so `@sample` and the `/sa` in `docs/sa.md` do not start a worker. Bots (`*[bot]`, `github-actions`, `dependabot`) and the agent's own login are ignored.
 - `github_allowed_users` is an allow-list and an empty list means **nobody**. This is a deliberate fail-closed default.
-- `github_watch_new_prs` creates one review session per new head SHA; heads are tracked even while the flag is off so turning it on does not replay history.
+- `github_watch_new_prs` creates one review session per new head SHA; heads are tracked even while the flag is off so turning it on does not replay history. Issues have no head, so the flag never applies to them.
 
 ### Observe vs auto and PR worktrees
 

@@ -14,7 +14,7 @@ It separates **routing** from **execution**, and keeps every result behind one r
 2. **Open the Superagent tab** (sidebar → Superagent, or `/superagent`).
 3. **Pick a model or preset.** Use the composer's model picker, click a preset chip if one is configured, or open **⚙ Settings** to save a default model and named presets. With nothing configured the chip row stays hidden — the picker still works and a new chat follows the CLI default.
 4. **Chat.** Describe the work, optionally set a repo path, press Enter. The turn runs as a headless `hermes chat` worker; the rail, transcript and **Live workers** grid update while it runs, and a toast tells you when it finishes or fails.
-5. **(Optional) Connect GitHub.** Header → **GitHub** → repository, token, allowed users → **Connect**. `observe` records PR mentions as sessions; `auto` launches a worker on each one. **Work on this PR** starts one by hand.
+5. **(Optional) Connect GitHub.** Header → **GitHub** → repository, token, allowed users → **Connect**. `observe` records PR and issue mentions as sessions; `auto` launches a worker on each one. **Work on this PR** / **Work on this issue** starts one by hand.
 6. **Review before anything leaves your machine.** Open a finished session → **Diff** shows `git status`, `--stat` and the patch → **Comment on PR** previews an editable summary and posts only when you press **Post**. Nothing is committed, pushed or merged.
 
 ## What you get
@@ -26,7 +26,7 @@ It separates **routing** from **execution**, and keeps every result behind one r
 - **Model presets, thinking levels and defaults** — named `(model, provider)` pairs saved from the Settings panel, CLI or `config.yaml`, offered as composer chips; the picker and Settings expose `none … high, xhigh, max, ultra`, and the chosen level reaches the headless turn as `--reasoning`.
 - **Completion toasts** — one desktop notification per turn that ends in `review` or `failed` (no replay on page load, silent for cancelled turns).
 - **A usage report** — the header's **Usage** drawer shows chats, turns, tokens, review/failed counts, a 14-day token bar chart and the per-model split, all from one read-only `GET /usage` (`hermes superagent usage`).
-- **GitHub connect & PR watch** — one repository, an allow-list, `observe` or `auto` mode, open-PR list with **Work on this PR**, and one isolated `git worktree` per pull request.
+- **GitHub connect & watch** — one repository, an allow-list, `observe` or `auto` mode, open-PR and open-issue lists with **Work on this PR/issue**, and one isolated `git worktree` per thread.
 - **Review handoff** — a lazy diff panel, a human-confirmed PR comment/review, an optional **Create PR** sheet, plus `hermes superagent diff|comment`.
 - **Tickets for everything else** — deterministic zero-token triage, `superagent_ask/tick/status/run` tools, `/superagent`, and the **Superagent watch** cron blueprint.
 - **A CLI for the same state** — `hermes superagent status|chat|sessions|towns|search|retry|export|usage|pin|unpin|show|stop|models|settings|github|diff|comment|doctor`, all with `--json` and stable exit codes.
@@ -38,7 +38,7 @@ It separates **routing** from **execution**, and keeps every result behind one r
 - **SQLite** (`<HERMES_HOME>/plugin-data/superagent/superagent.db`) persists tickets (`T-0001`, `T-0002`, ...), event history, source deduplication, and polling cursors, plus the chat tables (sessions, messages, events) and GitHub dedupe.
 - **Ticket worker subagents** launched via `ctx.subagent_lifecycle` perform the coding work inside your repository and leave uncommitted changes in the working tree for human review (`review` state).
 - **Headless chat workers** — the desktop Superagent tab starts one `hermes chat` process per turn, streams its JSON output into the session transcript, and lets you resume, watch or stop it. A root/Router session gets the plugin toolset, so it can call `superagent_spawn` to create real child sessions; workers cannot spawn further workers. Spawned workers default to the bash-only `mini` harness (mini-swe-agent style: `-t terminal`, one command per step, explicit completion marker); `worker_harness: hermes` restores the full file + terminal toolset. Chat workers follow the same rule as ticket workers: changes stay uncommitted for review.
-- **GitHub PR watch** — connect a repository, and pull-request comments that mention the agent become sessions. `auto` mode checks each PR out as an isolated `git worktree` and launches a worker on it; `observe` (the default) only records the request.
+- **GitHub watch** — connect a repository, and pull-request **or issue** comments that mention the agent (`@<login>`, `@sa`, `/sa`, `@superagent`, `/superagent`, `superagent:`) become sessions. `auto` mode checks a PR out as an isolated `git worktree` (an issue gets its own worker worktree) and launches a worker; `observe` (the default) only records the request.
 - **Session handoff** — a finished session can show exactly what the worker changed (`git status`/`--stat`/patch, capped) and post one human-reviewed summary comment back to its pull request. Nothing is committed, pushed or merged.
 
 Router-side triage (the assessor) runs no LLM, and polling is plain REST plus SQLite. Ticket workers are subagents launched only inside an agent turn; chat turns — including ones the GitHub watcher starts in `auto` — are headless `hermes chat` subprocesses bounded by the caps and watchdog described in [Chat and models API](#8-chat-and-models-api). By default, the plugin runs in `observe` mode so it only records tickets until you explicitly approve them or switch to `auto`.
@@ -156,10 +156,11 @@ SUPERAGENT_WORKER_HARNESS=mini
 | `model_presets` | `list` | `[]` | Named models offered as composer chips. Empty means no chips (the model picker still works). Env: `SUPERAGENT_MODEL_PRESETS` (comma separated). |
 | `worker_yolo` | `bool` | `true` | Pass `--yolo` to headless chat workers so they do not wait for approval prompts. Env: `SUPERAGENT_WORKER_YOLO`. |
 | `chat_max_turns` | `int` | `120` | Maximum agent turns for one headless chat worker. Env: `SUPERAGENT_CHAT_MAX_TURNS`. |
-| `github_watch_mode` | `str` (`observe` \| `auto`) | `observe` | `observe` records PR mentions as `observed` sessions only; `auto` queues and launches a worker for each one. Env: `SUPERAGENT_GITHUB_WATCH_MODE`. |
+| `github_watch_mode` | `str` (`observe` \| `auto`) | `observe` | `observe` records PR and issue mentions as `observed` sessions only; `auto` queues and launches a worker for each one. Env: `SUPERAGENT_GITHUB_WATCH_MODE`. |
 | `github_watch_new_prs` | `bool` | `false` | Start a review session whenever a watched pull request gets a new head commit. Env: `SUPERAGENT_GITHUB_WATCH_NEW_PRS`. |
+| `github_watch_issues` | `bool` | `true` | Poll open issues as well as pull requests: an `@sa` or `/sa` mention in an issue comment starts work. Off leaves PR watching untouched. Env: `SUPERAGENT_GITHUB_WATCH_ISSUES`. |
 | `github_poll_seconds` | `int` | `90` | Seconds between background GitHub polls (minimum `5`). Env: `SUPERAGENT_GITHUB_POLL_SECONDS`. |
-| `github_pr_limit` | `int` | `10` | Maximum open pull requests checked per poll (`1`–`100`). Env: `SUPERAGENT_GITHUB_PR_LIMIT`. |
+| `github_pr_limit` | `int` | `10` | Maximum open pull requests **and** open issues checked per poll (`1`–`100`). Env: `SUPERAGENT_GITHUB_PR_LIMIT`. |
 | `turn_timeout_seconds` | `int` | `1800` | A queued or running chat turn older than this is cancelled by the next reap or chat-list read. `0` disables the guard. Env: `SUPERAGENT_TURN_TIMEOUT_SECONDS`. |
 | `allow_worker_git_worktree` | `bool` | `true` | Isolate each spawned town worker into its own git worktree (`<data_dir>/workspaces/worker-<session_id>`) so parallel workers do not collide. Env: `SUPERAGENT_ALLOW_WORKER_WORKTREE`. |
 | `allow_worker_pr_create` | `bool` | `false` | Allow workers/Router to commit worktree changes, push a `superagent/<session_id>` branch, and open a GitHub PR via `superagent_pr_create` or **Create PR**. Env: `SUPERAGENT_ALLOW_WORKER_PR_CREATE`. |
@@ -308,7 +309,7 @@ hermes superagent doctor --json
 | `hermes superagent comment <id> [--body TEXT \| --body-file PATH]` | Post one summary comment to the session's pull request and print its URL. `1` without a PR/token or when GitHub refuses, `2` for bad usage. |
 | `hermes superagent models` | Default model/provider plus the preset section (`name -> provider: model`). |
 | `hermes superagent settings [--json]` | Print the merged settings (the GitHub token is masked to `set`/`not set`); read-only. |
-| `hermes superagent github [status\|test\|connect\|disconnect\|prs\|poll\|work <n>]` | Connect a repository, manage the watch settings, list open PRs, and start work on one (see [GitHub connect & PR watch](#9-github-connect--pr-watch-v03)). |
+| `hermes superagent github [status\|test\|connect\|disconnect\|prs\|poll\|work <n> [--issue]]` | Connect a repository, manage the watch settings, list open PRs and issues, and start work on one (see [GitHub connect & watch](#9-github-connect--watch)). |
 | `hermes superagent cleanup [--json]` | Prune stale `pr-*` and `worker-*` git worktree directories under `<data_dir>/workspaces` that are not referenced by any active (non-archived) session. |
 | `hermes superagent doctor` | Read-only installation diagnosis: plugin/API version, database totals (towns, workers, running, archived), the resolved `hermes` binary, the configured repository (exists, git work branch, dirty count), stale `worker-*`/`pr-*` worktrees, default/worker models and the data-tier gate. `ok`/`warn`/`FAIL` per check; exit `1` when any check fails. Never writes, launches a worker or touches the network. |
 
@@ -357,7 +358,7 @@ The plugin ships a unified desktop extension (`desktop/plugin.js`) and a FastAPI
 - `GET|POST /api/plugins/superagent/settings` — merged public settings / save the panel-editable keys (the token is never returned).
 - `GET /api/plugins/superagent/models` — default model/provider and the configured presets (`[]` when none are configured).
 - `GET /api/plugins/superagent/usage?days=14` — read-only activity report: totals (`sessions`, `turns`, `tokens`, `duration_ms`, status `counts`), one bucket per local day, and the per-model split. `days` is clamped to `1–90`.
-- `GET /api/plugins/superagent/github/status` · `POST /github/{test,connect,settings,disconnect,poll}` · `GET /github/prs` · `POST /github/prs/{n}/work` — connect one repository, watch PRs and start a session on one (see [GitHub connect & PR watch](#9-github-connect--pr-watch)).
+- `GET /api/plugins/superagent/github/status` · `POST /github/{test,connect,settings,disconnect,poll}` · `GET /github/prs` · `POST /github/prs/{n}/work` · `POST /github/issues/{n}/work` — connect one repository, watch its PRs and issues, and start a session on one (see [GitHub connect & watch](#9-github-connect--watch)).
 
 The desktop page at `/superagent` leads with the chat workspace (see [Desktop chat workspace](#7-desktop-chat-workspace)); the ticket surface lives beside it:
 
@@ -481,25 +482,26 @@ they can call `superagent_spawn`, `superagent_town_status`, `superagent_message_
 - **Workers never own a terminal.** Each turn is spawned with a `stdin` **pipe that is closed immediately**, not `DEVNULL`: on Windows `isatty()` on the NUL device reports true, so a DEVNULL child believes it has a terminal, prints a consent prompt and cancels itself. A closed pipe is the one signal Hermes reads as "no terminal" on every platform, so a prompt can neither hang a turn nor silently cancel it.
 - **Consistent triage.** `POST /ask` runs the same `sa_assessor.assess(..., explicit=True)` rules as the router instead of hardcoding `accept`: a skip marker or acknowledgement is recorded as `ignored`, a design question becomes `blocked` (`needs_human`), and an actionable request becomes `observed` (`accept`). The verdict and reason are stored on the ticket and in its `assessed` event.
 
-### 9. GitHub connect & PR watch
+### 9. GitHub connect & watch
 
-Connect one repository and Superagent watches its pull requests. A comment that mentions the agent (`@<login>`, `@superagent`, `/superagent`, or a line starting `superagent:`) from an allowed user becomes a session; when `github_watch_new_prs` is on, a new head commit on a watched PR starts a review session once per SHA.
+Connect one repository and Superagent watches its open pull requests **and open issues**. A comment that mentions the agent (`@<login>`, the short aliases `@sa` and `/sa`, `@superagent`, `/superagent`, or a line starting `superagent:`) from an allowed user becomes a session; when `github_watch_new_prs` is on, a new head commit on a watched PR starts a review session once per SHA. `github_watch_issues` (on by default) decides whether issues are polled at all — with it off the watcher is PR-only. Issue and PR mentions share one allow-list, trigger list and dedupe table.
 
 | Method | Path | Behaviour |
 | :--- | :--- | :--- |
-| `GET` | `/github/status` | `{configured, repo, login, token_set, open_prs, last_poll, last_error, watching, watch_mode, watch_new_prs, allowed_users, poll_seconds, sessions_created}`; also starts the background poller (idempotent). |
+| `GET` | `/github/status` | `{configured, repo, login, token_set, open_prs, open_issues, last_poll, last_error, watching, watch_mode, watch_new_prs, watch_issues, allowed_users, poll_seconds, sessions_created}`; also starts the background poller (idempotent). |
 | `POST` | `/github/test` | `{repo?, token?}` — validate a token/repository pair without saving. Returns `{ok, login, full_name, default_branch, private, open_pr_count}`; `400` on a bad repo or rejected token. |
-| `POST` | `/github/connect` | `{repo, token?, allowed_users?, watch_mode?, watch_new_prs?, poll_seconds?}` — validate with the supplied or saved token, save the connection and the optional watch settings in one write, reset the baseline, start watching, return the status. `400` on a malformed repo/setting or an auth failure. |
-| `POST` | `/github/settings` | `{allowed_users?, watch_mode?, watch_new_prs?, poll_seconds?, agent_login?}` — save watch settings without touching the repository or token; the watcher is rebuilt so the next poll uses them. `400` on an unknown mode, a `poll_seconds` outside `15`–`3600`, or a malformed login. Returns `{ok, status}` (never the token). |
+| `POST` | `/github/connect` | `{repo, token?, allowed_users?, watch_mode?, watch_new_prs?, watch_issues?, poll_seconds?}` — validate with the supplied or saved token, save the connection and the optional watch settings in one write, reset the baseline, start watching, return the status. `400` on a malformed repo/setting or an auth failure. |
+| `POST` | `/github/settings` | `{allowed_users?, watch_mode?, watch_new_prs?, watch_issues?, poll_seconds?, agent_login?}` — save watch settings without touching the repository or token; the watcher is rebuilt so the next poll uses them. `400` on an unknown mode, a `poll_seconds` outside `15`–`3600`, or a malformed login. Returns `{ok, status}` (never the token). |
 | `POST` | `/github/disconnect` | Clear `github_repo` and `github_token` in `settings.json`, stop the poller. |
 | `POST` | `/github/poll` | One polling pass now: `{configured, polled, created, errors}`. |
-| `GET` | `/github/prs` | `{configured, prs}` — the cached open PR list. |
+| `GET` | `/github/prs` | `{configured, prs, issues}` — the cached open PR **and** issue lists. The name predates issue watching; one call feeds both panel columns and `hermes superagent github prs`. |
 | `POST` | `/github/prs/{number}/work` | `{request?}` — create a session for that PR and launch a worker (an explicit human action always launches). `400` when GitHub is not connected, `404` for an unknown PR. |
+| `POST` | `/github/issues/{number}/work` | `{request?}` — the same for an issue, in an isolated `worker-<session_id>` worktree off `repo_path`. `400` when GitHub is not connected, `404` for an unknown issue (and `400` if the number is a PR). |
 
 **Desktop panel.** The Superagent page has a **GitHub** button in the header with a status dot (green when a repository and token are configured) and the repository's short name. It opens a full-width panel above the chat workspace:
 
-- **Connection (left)** — repository (`owner/name`), a password field for the token (blank keeps the saved one; the placeholder says `saved token`), the comma-separated allowed-user list, and an Observe/Auto segmented control. **Connect** saves the whole form in one `POST /github/connect`; **Save settings** sends only the watch fields to `POST /github/settings`; **Poll now** runs one pass; **Disconnect** forgets the repository and token. The panel shows the resolved login, open-PR count, watching state, poll interval and the watcher's `last_error`. The token is never rendered.
-- **Open pull requests (right)** — the repository's open PRs with `#number`, a two-line title, author, updated age, and **Work on this PR** (`POST /github/prs/{n}/work`). The returned session is selected immediately, so the transcript opens in the centre column.
+- **Connection (left)** — repository (`owner/name`), a password field for the token (blank keeps the saved one; the placeholder says `saved token`), the comma-separated allowed-user list, an **Also watch issues** checkbox, and an Observe/Auto segmented control. **Connect** saves the whole form in one `POST /github/connect`; **Save settings** sends only the watch fields (allow-list, mode, issue toggle) to `POST /github/settings`; **Poll now** runs one pass; **Disconnect** forgets the repository and token. The panel shows the resolved login, how many PRs and issues are open, watching state, poll interval and the watcher's `last_error`. The token is never rendered.
+- **Open pull requests / open issues (right)** — two lists, PRs above issues, each row showing `#number`, a two-line title, author and updated age, with **Work on this PR** (`POST /github/prs/{n}/work`) or **Work on this issue** (`POST /github/issues/{n}/work`). The returned session is selected immediately, so the transcript opens in the centre column. With issue watching off the issue list says so instead of pretending the repository has none.
 - **PR badges** — a session created from a PR carries `pr_number`/`pr_url`, shown as a `#123` badge in the chat header, the session rail and the live-worker cards. Clicking it opens the PR in the browser.
 - **Polling** — `/github/prs` refreshes every 20 s only while the panel is open; `/github/status` refreshes at the same interval only while the panel is open or a session with a PR badge is on screen. Otherwise the status is fetched once for the header dot, so the chat workspace keeps its existing polling budget.
 
@@ -518,8 +520,9 @@ hermes superagent github test --repo owner/name --token <token>
 hermes superagent github connect --repo owner/name --token <token> \
   --allowed alice,bob --watch-mode observe
 
-# Start work on a PR (blocking turn; prints the session id and transcript)
+# Start work on a PR or an issue (blocking turn; prints the session id and transcript)
 hermes superagent github work 7 --request "add a regression test"
+hermes superagent github work 3 --issue --request "the empty payload crashes it"
 
 # Forget the repository and token
 hermes superagent github disconnect
@@ -531,11 +534,12 @@ hermes superagent github disconnect
 
 **Watch semantics.**
 
-- The **first successful poll is a baseline**: every existing comment and PR head is recorded as seen without creating a session, so connecting a busy repository does not replay its history.
+- The **first successful poll is a baseline**: every existing PR and issue comment, and every PR head, is recorded as seen without creating a session, so connecting a busy repository does not replay its history.
 - Dedupe lives in the `gh_seen(key, seen_at)` table, so restarts do not duplicate work. Every unseen comment is marked seen before it is judged; a malformed comment cannot replay forever.
 - Bots (`*[bot]`, `github-actions`, `dependabot`) and the agent's own comments are ignored. `github_allowed_users` is an allow-list; empty means **nobody**.
 - `github_watch_mode: observe` records sessions as `observed` and launches nothing. A human promotes one later (the session is a normal chat session with its PR prompt and checkout path).
-- `github_watch_mode: auto` creates the session as `queued` and launches it. With `repo_path` configured, the PR is fetched into that clone (`+refs/pull/<n>/head:refs/superagent/pr-<n>`) and checked out as a detached worktree at `<data_dir>/workspaces/pr-<n>`, so the user's checkout and branch are untouched. If the checkout fails the session launches in `repo_path` with a `github` warning event; with no usable repository the session is marked `failed`.
+- `github_watch_mode: auto` creates the session as `queued` and launches it. With `repo_path` configured, a PR is fetched into that clone (`+refs/pull/<n>/head:refs/superagent/pr-<n>`) and checked out as a detached worktree at `<data_dir>/workspaces/pr-<n>`, so the user's checkout and branch are untouched. An issue has no head to fetch, so it gets a fresh `worker-<session_id>` worktree and branch off the clone instead — a worker must never edit the tree the user is working in. If the checkout fails the session launches in `repo_path` with a `github` warning event; with no usable repository the session is marked `failed`.
+- **Open issues only** — issue watching polls `/repos/{repo}/issues`, which returns pull requests too (every PR is an issue); they are filtered out, because PRs are handled with a head checkout by the PR path. A mention in an issue *body*, a new issue with no comment, labels and assignment are not watched — only comments trigger work.
 
 ---
 
@@ -555,7 +559,7 @@ A new user should be able to choose models and get started without reading the d
 
 **Composer preset chips.** Before a chat starts, one chip per preset sits above the textarea. Clicking a chip fills the model/provider and highlights it; the normal ModelPicker stays available for an ad-hoc choice (which clears the chip). The selected name is sent as `preset` with `POST /chats`, together with the resolved `model`/`provider`. With **no presets configured the chip row is not rendered at all** — there is no built-in fallback list, because a chip for a model you have no credentials for can only start a failed worker. The picker and the default model still work.
 
-**First-run onboarding.** While there are no chat sessions yet, a compact **Get started** card lists three numbered steps: *Pick a model / preset* (opens Settings), *Connect a GitHub repo to watch PRs* (opens the GitHub panel; the hint states that an empty allow-list means nobody can trigger work and the agent ignores its own comments), and *Start a chat below*. Dismissing it writes `onboarded` through `ctx.storage`, so it does not come back.
+**First-run onboarding.** While there are no chat sessions yet, a compact **Get started** card lists three numbered steps: *Pick a model / preset* (opens Settings), *Connect a GitHub repo to watch PRs and issues* (opens the GitHub panel; the hint states that an empty allow-list means nobody can trigger work and the agent ignores its own comments), and *Start a chat below*. Dismissing it writes `onboarded` through `ctx.storage`, so it does not come back.
 
 **GitHub panel.** The allow-list field now carries the helper copy *"Only these users can trigger work; the agent ignores its own comments — add a teammate or a second account."*
 

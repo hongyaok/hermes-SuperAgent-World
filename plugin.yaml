@@ -154,6 +154,11 @@ config_schema:
     default: false
     label: Watch new PR heads
     description: Start a review session whenever a watched pull request gets a new head commit.
+  github_watch_issues:
+    type: bool
+    default: true
+    label: Watch issues
+    description: "Poll open issues too: an @sa or /sa mention in an issue comment starts work, like a PR mention."
   github_poll_seconds:
     type: int
     default: 90

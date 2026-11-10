@@ -72,7 +72,7 @@ GITHUB_USAGE = (
     "usage: hermes superagent github "
     "<status|test|connect|disconnect|prs|poll|work <number>> "
     "[--repo owner/name] [--token TOKEN] [--allowed alice,bob] "
-    "[--watch-mode observe|auto] [--request \"...\"] [--json]"
+    "[--watch-mode observe|auto] [--request \"...\"] [--issue] [--json]"
 )
 
 
@@ -856,7 +856,8 @@ def render_github_status(data: dict) -> str:
         f"  watching:  {'yes' if data.get('watching') else 'no'}"
         f"   mode={data.get('watch_mode') or 'observe'}"
         f"   poll={data.get('poll_seconds') or '-'}s",
-        f"  open PRs:  {len(open_prs)}   sessions created: {data.get('sessions_created') or 0}",
+        f"  open PRs:  {len(open_prs)}   issues: {len(data.get('open_issues') or [])}"
+        f"   sessions created: {data.get('sessions_created') or 0}",
         f"  allowed:   {', '.join(str(name) for name in allowed) if allowed else '(nobody)'}",
     ]
     if data.get("last_poll"):
@@ -897,9 +898,11 @@ def render_github_prs(data: dict) -> str:
             "  connect: hermes superagent github connect --repo owner/name --token <token>"
         )
     prs = [pr for pr in (data.get("prs") or []) if isinstance(pr, dict)]
+    issues = [issue for issue in (data.get("issues") or []) if isinstance(issue, dict)]
     lines = [f"Open pull requests ({len(prs)})"]
     if not prs:
         lines.append("  (none)")
+    if "issues" not in data:
         return "\n".join(lines)
     for pr in prs:
         title = " ".join(str(pr.get("title") or "").split())
@@ -915,6 +918,26 @@ def render_github_prs(data: dict) -> str:
             if part
         )
         lines.append(f"  #{str(pr.get('number') or '?'):<5} {title}")
+        lines.append(f"         {meta}")
+    lines += ["", f"Open issues ({len(issues)})"]
+    if not issues:
+        lines.append("  (none)")
+    for issue in issues:
+        title = " ".join(str(issue.get("title") or "").split())
+        if len(title) > 66:
+            title = title[:65] + "…"
+        labels = "/".join(str(name) for name in (issue.get("labels") or []))
+        meta = "   ".join(
+            part
+            for part in (
+                str(issue.get("author") or "-"),
+                _iso_age(issue.get("updated_at")) or "-",
+                labels,
+                str(issue.get("html_url") or ""),
+            )
+            if part
+        )
+        lines.append(f"  #{str(issue.get('number') or '?'):<5} {title}")
         lines.append(f"         {meta}")
     return "\n".join(lines)
 
@@ -2051,7 +2074,11 @@ def run_github(args: Any, want_json: bool = False) -> int:
         except Exception as exc:
             print(f"error: github prs failed: {exc}")
             return 1
-        data = {"configured": bool(status.get("configured")), "prs": status.get("open_prs") or []}
+        data = {
+            "configured": bool(status.get("configured")),
+            "prs": status.get("open_prs") or [],
+            "issues": status.get("open_issues") or [],
+        }
         print(json.dumps(data, indent=2, default=str) if want_json else render_github_prs(data))
         return 0
 
@@ -2184,9 +2211,10 @@ def run_github(args: Any, want_json: bool = False) -> int:
         print("error: GitHub is not connected (run `hermes superagent github connect`)")
         return 1
 
+    is_issue = bool(getattr(args, "issue", False))
     try:
         client = sa_github.GitHubClient(token, repo)
-        pr = client.get_pr(number)
+        thread = client.get_issue(number) if is_issue else client.get_pr(number)
     except sa_github.GitHubError as exc:
         print(f"error: {_mask(exc, token)}")
         return 1
@@ -2197,7 +2225,9 @@ def run_github(args: Any, want_json: bool = False) -> int:
     repo_path = str(settings.get("repo_path") or "").strip()
     checkout = ""
     warning = ""
-    if repo_path:
+    if repo_path and not is_issue:
+        # An issue has no head to fetch; its isolated worktree is made after
+        # the session exists (see below).
         workspace = str(sa_settings.data_dir() / "workspaces")
         try:
             info = sa_github.prepare_pr_checkout(repo_path, repo, number, workspace, token)
@@ -2207,7 +2237,10 @@ def run_github(args: Any, want_json: bool = False) -> int:
 
     request_text = str(getattr(args, "request", "") or "").strip()
     comment = {"author": "you", "body": request_text} if request_text else None
-    prompt = sa_github.build_pr_prompt(pr, comment=comment, checkout=checkout)
+    if is_issue:
+        prompt = sa_github.build_issue_prompt(thread, comment=comment, checkout=checkout)
+    else:
+        prompt = sa_github.build_pr_prompt(thread, comment=comment, checkout=checkout)
     session_repo = checkout
     if not session_repo and repo_path and Path(repo_path).expanduser().is_dir():
         session_repo = repo_path
@@ -2216,20 +2249,46 @@ def run_github(args: Any, want_json: bool = False) -> int:
 
     try:
         store = _github_store()
+        label = "Issue" if is_issue else "PR"
         session = store.create_session(
             prompt,
-            title=f"PR #{number}: {pr.get('title') or ''}".strip(),
+            title=f"{label} #{number}: {thread.get('title') or ''}".strip(),
             model=model,
             provider=provider,
             repo=session_repo,
-            source="github_pr",
+            source="github_issue" if is_issue else "github_pr",
             github_repo=repo,
-            pr_number=number,
-            pr_url=str(pr.get("html_url") or ""),
+            pr_number=None if is_issue else number,
+            pr_url="" if is_issue else str(thread.get("html_url") or ""),
+            issue_number=number if is_issue else None,
             status=sa_chats.QUEUED,
         )
         session_id = str(session["id"])
-        store.add_event(session_id, "github", f"CLI work on PR #{number}")
+        store.add_event(session_id, "github", f"CLI work on {label} #{number}")
+        if is_issue and repo_path and Path(repo_path).expanduser().is_dir():
+            try:
+                worktree = sa_github.prepare_worker_worktree(
+                    repo_path,
+                    session_id,
+                    str(sa_settings.data_dir() / "workspaces"),
+                    title=str(thread.get("title") or ""),
+                )
+                isolated = str(worktree.get("path") or "")
+            except sa_github.GitHubError as exc:
+                isolated = ""
+                warning = _mask(exc, token)
+            if isolated:
+                prompt = sa_github.build_issue_prompt(
+                    thread, comment=comment, checkout=isolated
+                )
+                session_repo = isolated
+                store.update_session(
+                    session_id,
+                    prompt=prompt,
+                    repo=isolated,
+                    worktree_path=isolated,
+                    branch_name=str(worktree.get("branch") or ""),
+                )
         if warning:
             store.add_event(session_id, "github", f"checkout failed: {warning}")
     except Exception as exc:
@@ -2286,7 +2345,7 @@ def run_github(args: Any, want_json: bool = False) -> int:
         }, indent=2, default=str))
     else:
         print(render_chat(fresh, str(getattr(store, "path", ""))))
-        print(f"  work on:   PR #{number} in {repo}")
+        print(f"  work on:   {label} #{number} in {repo}")
         if checkout:
             print(f"  checkout:  {checkout}")
         if warning:
@@ -2431,6 +2490,9 @@ def setup_cli(subparser: argparse.ArgumentParser) -> None:
         "--watch-mode", dest="watch_mode", default="", help="observe or auto"
     )
     github_p.add_argument("--request", default="", help="Extra instruction for `work`")
+    github_p.add_argument(
+        "--issue", action="store_true", help="`work`: treat the number as an issue, not a PR"
+    )
     _add_json_flag(github_p)
     doctor_p = subs.add_parser("doctor", help="Diagnose the installation (read-only)")
     _add_json_flag(doctor_p)

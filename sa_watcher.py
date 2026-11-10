@@ -1,19 +1,25 @@
-"""Watch GitHub pull requests and turn mentions into Superagent sessions.
+"""Watch GitHub pull requests and issues, and turn mentions into sessions.
 
-One poll is: fetch the open PRs, read each PR's comments, and act only on what
-is new. The very first successful poll for a repository is a *baseline* — it
-records every existing comment and PR head as seen without creating anything,
-so connecting an old repository does not dump 200 sessions on the user.
+One poll is: fetch the open pull requests and the open issues, read each
+thread's comments, and act only on what is new. The very first successful poll
+for a repository is a *baseline* — it records every existing comment and PR
+head as seen without creating anything, so connecting an old repository does
+not dump 200 sessions on the user.
 
-Two things can create a session:
+What can create a session:
 
-* a comment that mentions the agent (`@login`, `@superagent`, `/superagent`,
-  or a `superagent:` line) from an allowed human; and
+* a comment that mentions the agent (`@login`, the short aliases `@sa` and
+  `/sa`, `@superagent`, `/superagent`, or a `superagent:` line) from an
+  allowed human, on a pull request *or* an issue; and
 * a new PR head, when `github_watch_new_prs` is on, once per head SHA.
 
+`github_watch_issues` (on by default) decides whether issues are polled at
+all; with it off this is the PR-only watcher it has always been.
+
 In `observe` mode sessions are recorded as `observed` and nothing launches; a
-human promotes them. In `auto` mode each session is queued and launched, in an
-isolated `git worktree` of the PR when a local clone is configured.
+human promotes them. In `auto` mode each session is queued and launched: a PR
+in an isolated `git worktree` of its head, an issue in a fresh worker worktree
+off the configured clone.
 """
 
 from __future__ import annotations
@@ -80,6 +86,7 @@ class GitHubWatcher:
         self.sessions_created: int = 0
         self._login: str = ""
         self._last_prs: list[dict[str, Any]] = []
+        self._last_issues: list[dict[str, Any]] = []
         self._prs_at: float = 0.0
 
     # -- helpers ---------------------------------------------------------
@@ -104,6 +111,22 @@ class GitHubWatcher:
         except (TypeError, ValueError):
             seconds = DEFAULT_POLL_SECONDS
         return max(MIN_POLL_SECONDS, seconds)
+
+    def _limit(self, settings: dict[str, Any]) -> int:
+        try:
+            return int(_field(settings, "github_pr_limit", 10) or 10)
+        except (TypeError, ValueError):
+            return 10
+
+    def _watch_issues(self, settings: dict[str, Any]) -> bool:
+        """Issues are watched unless the operator turned them off."""
+        return bool(_field(settings, "github_watch_issues", True))
+
+    def _workspace(self, settings: dict[str, Any]) -> str:
+        """Where isolated checkouts live: the setting, else the data dir."""
+        return _text(_field(settings, "workspace_root", "")) or str(
+            sa_settings.data_dir() / "workspaces"
+        )
 
     def _client(self, settings: dict[str, Any]) -> Any:
         return self._client_factory(self._token(settings), self._repo(settings))
@@ -142,6 +165,7 @@ class GitHubWatcher:
         token = self._token(settings)
         configured = bool(repo and token)
         watch_mode = _text(_field(settings, "github_watch_mode", "observe")) or "observe"
+        watch_issues = self._watch_issues(settings)
         login = _text(_field(settings, "github_agent_login", "")) or self._login
         allowed_raw = _field(settings, "github_allowed_users", []) or []
         if isinstance(allowed_raw, str):
@@ -149,21 +173,31 @@ class GitHubWatcher:
         allowed_users = [str(name).strip() for name in allowed_raw if str(name).strip()]
 
         prs: list[dict[str, Any]] = list(self._last_prs) if configured else []
+        issues: list[dict[str, Any]] = list(self._last_issues) if configured else []
         if configured:
             fresh = time.time() - self._prs_at < STATUS_PR_CACHE_SECONDS
             if not fresh:
+                client = self._client(settings)
+                limit = self._limit(settings)
                 try:
-                    client = self._client(settings)
-                    prs = client.list_open_prs(
-                        limit=int(_field(settings, "github_pr_limit", 10) or 10)
-                    )
-                    self._last_prs = prs
-                    self._prs_at = time.time()
-                    if not login:
-                        login = self._login_for(settings, client)
+                    prs = client.list_open_prs(limit=limit)
                 except Exception as exc:
                     self.last_error = _redact(str(exc))
                     prs = list(self._last_prs)
+                if watch_issues:
+                    try:
+                        issues = client.list_open_issues(limit=limit)
+                    except Exception as exc:
+                        # A broken issue list still leaves the PR list usable.
+                        self.last_error = _redact(str(exc))
+                        issues = list(self._last_issues)
+                else:
+                    issues = []
+                self._last_prs = prs
+                self._last_issues = issues
+                self._prs_at = time.time()
+                if not login:
+                    login = self._login_for(settings, client)
 
         with self._bg_lock:
             watching = bool(self._thread is not None and self._thread.is_alive())
@@ -173,11 +207,13 @@ class GitHubWatcher:
             "login": login,
             "token_set": bool(token),
             "open_prs": prs,
+            "open_issues": issues,
             "last_poll": self.last_poll,
             "last_error": self.last_error,
             "watching": watching,
             "watch_mode": watch_mode,
             "watch_new_prs": bool(_field(settings, "github_watch_new_prs", False)),
+            "watch_issues": watch_issues,
             "allowed_users": allowed_users,
             "poll_seconds": self._poll_seconds(settings),
             "sessions_created": self.sessions_created,
@@ -208,10 +244,7 @@ class GitHubWatcher:
         created: list[str] = []
         errors: list[str] = []
         client = self._client(settings)
-        try:
-            limit = int(_field(settings, "github_pr_limit", 10) or 10)
-        except (TypeError, ValueError):
-            limit = 10
+        limit = self._limit(settings)
 
         try:
             prs = client.list_open_prs(limit=limit)
@@ -221,26 +254,51 @@ class GitHubWatcher:
             self.store.set_state(f"gh_last_poll:{repo}", str(self.last_poll))
             return {"configured": True, "polled": 0, "created": [], "errors": [str(exc)]}
 
+        watch_issues = self._watch_issues(settings)
+        issues: list[dict[str, Any]] = []
+        if watch_issues:
+            try:
+                issues = client.list_open_issues(limit=limit)
+                self._last_issues = list(issues)
+            except Exception as exc:
+                # An issue-list failure must not cost the user their PR work,
+                # and must not blank the list the panel is showing. Skipping
+                # issue work for this pass is the safe half: a stale list could
+                # only re-scan threads the dedupe table already covers.
+                errors.append(f"issues: {_redact(str(exc))}")
+        else:
+            self._last_issues = []
+
+        # One list of (kind, thread) pairs, so the baseline, dedupe and trigger
+        # rules below are written once rather than once per kind of thread.
+        threads: list[tuple[str, dict[str, Any]]] = [("pr", pr) for pr in prs]
+        threads += [("issue", issue) for issue in issues]
+
         self.last_error = ""
         self._last_prs = list(prs)
         self._prs_at = time.time()
         login = self._login_for(settings, client)
         baseline = not self.store.is_seen(self._baseline_key(repo))
         watch_new_prs = bool(_field(settings, "github_watch_new_prs", False))
-        for pr in prs:
+        for kind, thread in threads:
             try:
-                number = int(pr.get("number") or 0)
+                number = int(thread.get("number") or 0)
             except (TypeError, ValueError):
                 continue
             if not number:
                 continue
+            label = "PR" if kind == "pr" else "issue"
             try:
-                comments = client.list_comments(number)
+                comments = (
+                    client.list_comments(number)
+                    if kind == "pr"
+                    else client.list_issue_comments(number)
+                )
             except Exception as exc:
-                errors.append(f"PR #{number}: {_redact(str(exc))}")
+                errors.append(f"{label} #{number}: {_redact(str(exc))}")
                 continue
 
-            head_sha = _text(pr.get("head_sha"))
+            head_sha = _text(thread.get("head_sha")) if kind == "pr" else ""
             head_key = self._head_key(repo, number, head_sha) if head_sha else ""
             head_is_new = bool(head_key) and not self.store.is_seen(head_key)
 
@@ -261,7 +319,7 @@ class GitHubWatcher:
                 if not self._allowed(settings, comment, login):
                     continue
                 session_id = self._open_session(
-                    settings, pr, comment, errors=errors
+                    settings, thread, comment, kind=kind, errors=errors
                 )
                 if session_id:
                     created.append(session_id)
@@ -280,7 +338,7 @@ class GitHubWatcher:
                     ),
                 }
                 session_id = self._open_session(
-                    settings, pr, review, errors=errors, review=True
+                    settings, thread, review, kind="pr", errors=errors, review=True
                 )
                 if session_id:
                     created.append(session_id)
@@ -294,7 +352,12 @@ class GitHubWatcher:
         self.last_error = "" if not errors else _redact(errors[0])
         self.last_poll = time.time()
         self.store.set_state(f"gh_last_poll:{repo}", str(self.last_poll))
-        return {"configured": True, "polled": len(prs), "created": created, "errors": errors}
+        return {
+            "configured": True,
+            "polled": len(threads),
+            "created": created,
+            "errors": errors,
+        }
 
     def _allowed(self, settings: dict[str, Any], comment: dict[str, Any], login: str) -> bool:
         """Is this comment a work request from an allowed human?"""
@@ -317,87 +380,135 @@ class GitHubWatcher:
 
     # -- session creation ------------------------------------------------
 
+    def _prompt_for(
+        self,
+        settings: dict[str, Any],
+        thread: dict[str, Any],
+        comment: dict[str, Any],
+        *,
+        kind: str,
+        checkout: str,
+    ) -> str:
+        """The worker prompt for one PR or issue, checkout included."""
+        if kind == "pr":
+            return sa_github.build_pr_prompt(
+                thread,
+                comment=comment,
+                checkout=checkout,
+                can_create_pr=bool(_field(settings, "allow_worker_pr_create", False)),
+                can_approve_pr=bool(_field(settings, "allow_router_pr_approve", False)),
+            )
+        return sa_github.build_issue_prompt(
+            thread,
+            comment=comment,
+            checkout=checkout,
+            can_create_pr=bool(_field(settings, "allow_worker_pr_create", False)),
+        )
+
     def _open_session(
         self,
         settings: dict[str, Any],
-        pr: dict[str, Any],
+        thread: dict[str, Any],
         comment: dict[str, Any],
         *,
         errors: list[str],
+        kind: str = "pr",
         review: bool = False,
     ) -> str:
         repo = self._repo(settings)
-        number = int(pr.get("number") or 0)
-        title = _text(pr.get("title"))
+        number = int(thread.get("number") or 0)
+        title = _text(thread.get("title"))
+        is_pr = kind == "pr"
+        label = f"PR #{number}" if is_pr else f"Issue #{number}"
         mode = _text(_field(settings, "github_watch_mode", "observe")) or "observe"
         auto = mode == "auto"
         repo_path = _text(_field(settings, "repo_path", ""))
         checkout = ""
         warning = ""
 
-        if auto and repo_path:
-            workspace = _text(_field(settings, "workspace_root", "")) or str(
-                sa_settings.data_dir() / "workspaces"
-            )
+        if auto and repo_path and is_pr:
             try:
                 info = sa_github.prepare_pr_checkout(
                     repo_path,
                     repo,
                     number,
-                    workspace,
+                    self._workspace(settings),
                     self._token(settings),
                 )
                 checkout = str(info.get("path") or "")
             except sa_github.GitHubError as exc:
                 warning = str(exc)
 
-        prompt = sa_github.build_pr_prompt(
-            pr,
-            comment=comment,
-            checkout=checkout,
-            can_create_pr=bool(_field(settings, "allow_worker_pr_create", False)),
-            can_approve_pr=bool(_field(settings, "allow_router_pr_approve", False)),
-        )
-        # Remember where this PR lives so a later chat message resumes in the
-        # checkout (or the clone), not in the runner's default directory.
+        # Remember where this thread lives so a later chat message resumes in
+        # the checkout (or the clone), not in the runner's default directory.
         session_repo = checkout
         if not session_repo and repo_path and Path(repo_path).expanduser().is_dir():
             session_repo = repo_path
+
+        prompt = self._prompt_for(settings, thread, comment, kind=kind, checkout=checkout)
         effort = sa_settings.normalize_reasoning_effort(
             _field(settings, "default_reasoning_effort", "")
         )
         session = self.store.create_session(
             prompt,
-            title=f"PR #{number}: {title}".strip(),
+            title=f"{label}: {title}".strip(),
             model=_text(_field(settings, "default_model", "")),
             provider=_text(_field(settings, "default_provider", "")),
             reasoning_effort=effort,
             repo=session_repo,
-            source="github_pr",
+            source="github_pr" if is_pr else "github_issue",
             github_repo=repo,
-            pr_number=number,
-            pr_url=_text(pr.get("html_url")),
+            pr_number=number if is_pr else None,
+            pr_url=_text(thread.get("html_url")) if is_pr else None,
+            issue_number=None if is_pr else number,
             status=sa_chats.QUEUED if auto else sa_chats.OBSERVED,
         )
         session_id = str(session["id"])
         self.sessions_created += 1
 
         if review:
-            summary = f"new head {_text(pr.get('head_sha'))[:12]} on PR #{number}"
+            summary = f"new head {_text(thread.get('head_sha'))[:12]} on PR #{number}"
         else:
             body = _text(comment.get("body")).splitlines()
             first = " ".join(body[0].split()) if body else ""
-            summary = f"@{comment.get('author')} on PR #{number}: {first}"
+            summary = f"@{comment.get('author')} on {label}: {first}"
         self.store.add_event(session_id, "github", summary[:MAX_EVENT_CHARS])
 
         if not auto:
             return session_id
 
+        if repo_path and not is_pr:
+            # An issue has no head to fetch, so its row already exists and the
+            # isolated worktree is attached to it. The user may be mid-edit in
+            # the clone; a worker must not share that working tree.
+            try:
+                worktree = sa_github.prepare_worker_worktree(
+                    repo_path,
+                    session_id,
+                    self._workspace(settings),
+                    title=title,
+                )
+                isolated = str(worktree.get("path") or "")
+                if isolated:
+                    session_repo = isolated
+                    prompt = self._prompt_for(
+                        settings, thread, comment, kind=kind, checkout=isolated
+                    )
+                    self.store.update_session(
+                        session_id,
+                        prompt=prompt,
+                        repo=isolated,
+                        worktree_path=isolated,
+                        branch_name=str(worktree.get("branch") or ""),
+                    )
+            except sa_github.GitHubError as exc:
+                warning = str(exc)
+
         if warning:
             self.store.add_event(session_id, "github", f"checkout failed: {warning}")
         target = session_repo
         if not target:
-            message = warning or "no local repository is configured for PR work"
+            message = warning or "no local repository is configured for GitHub work"
             self._fail(session_id, message)
             errors.append(message)
             return session_id
