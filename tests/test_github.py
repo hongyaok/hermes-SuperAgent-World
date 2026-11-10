@@ -651,10 +651,68 @@ def test_build_issue_prompt_carries_the_issue_the_ask_and_the_rules():
     assert "pull request #3" not in prompt
 
 
-def test_build_issue_prompt_allows_a_pr_when_the_setting_is_on():
+def test_build_issue_prompt_resolves_the_issue_when_the_setting_is_on():
     prompt = sa_github.build_issue_prompt(
         issue_payload(3), comment=None, can_create_pr=True
     )
     assert "superagent_pr_create" in prompt
-    assert "mention #3 in the pull request body" in prompt
+    assert "Closes #3" in prompt
     assert "Do NOT commit, push, merge" not in prompt
+
+
+# -- merging -------------------------------------------------------------
+
+
+def test_merge_pr_sends_the_method_and_reads_the_body(http):
+    http.responses["/pulls/7/merge"] = {
+        "merged": True,
+        "sha": "abc123",
+        "message": "Pull Request successfully merged",
+    }
+
+    result = sa_github.GitHubClient(TOKEN, "owner/name").merge_pr(
+        7, merge_method="squash", commit_title="Ship it"
+    )
+
+    assert result == {
+        "merged": True,
+        "sha": "abc123",
+        "message": "Pull Request successfully merged",
+    }
+    request = http.request_for("/pulls/7/merge")
+    assert request.get_method() == "PUT"
+    assert json.loads(request.data.decode("utf-8")) == {
+        "merge_method": "squash",
+        "commit_title": "Ship it",
+    }
+
+
+def test_merge_pr_rejects_an_unknown_method(http):
+    with pytest.raises(sa_github.GitHubError) as excinfo:
+        sa_github.GitHubClient(TOKEN, "owner/name").merge_pr(7, merge_method="fast-forward")
+    assert "merge_method" in str(excinfo.value)
+
+
+def test_merge_pr_reports_a_refused_merge(http):
+    http.responses["/pulls/7/merge"] = http_error(405, "Pull Request is not mergeable")
+    with pytest.raises(sa_github.GitHubError) as excinfo:
+        sa_github.GitHubClient(TOKEN, "owner/name").merge_pr(7)
+    assert excinfo.value.status == 405
+    assert "not mergeable" in str(excinfo.value)
+
+
+def test_get_pr_exposes_mergeability(http):
+    http.responses["/pulls/7"] = pr_payload(7, mergeable=False, mergeable_state="dirty")
+    pr = sa_github.GitHubClient(TOKEN, "owner/name").get_pr(7)
+    assert pr["mergeable"] is False
+    assert pr["mergeable_state"] == "dirty"
+    assert pr["merged"] is False
+
+
+def test_build_pr_prompt_offers_a_merge_only_when_allowed():
+    allowed = sa_github.build_pr_prompt(pr_payload(7), can_merge=True)
+    blocked = sa_github.build_pr_prompt(pr_payload(7))
+
+    assert "superagent_pr_merge" in allowed
+    assert "Never merge a draft" in allowed
+    assert "superagent_pr_merge" not in blocked

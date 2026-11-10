@@ -2244,7 +2244,10 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
   const [yolo, setYolo] = useState(() => !(settings && settings.worker_yolo === false))
   const [allowWorktree, setAllowWorktree] = useState(() => !(settings && settings.allow_worker_git_worktree === false))
   const [allowPrCreate, setAllowPrCreate] = useState(() => !!(settings && settings.allow_worker_pr_create))
+  const [allowIssuePr, setAllowIssuePr] = useState(() => !!(settings && settings.allow_issue_pr_create))
   const [allowPrApprove, setAllowPrApprove] = useState(() => !!(settings && settings.allow_router_pr_approve))
+  const [allowPrMerge, setAllowPrMerge] = useState(() => !!(settings && settings.allow_worker_merge_pr))
+  const [replyOnFinish, setReplyOnFinish] = useState(() => !!(settings && settings.github_reply_on_finish))
   const [petdexEnabled, setPetdexEnabled] = useState(() => !(settings && settings.petdex_enabled === false))
   const [dataTierAllowed, setDataTierAllowed] = useState(
     () => !!(settings && settings.data_training_tiers_allowed),
@@ -2299,7 +2302,10 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
     yolo: !(settings && settings.worker_yolo === false),
     allowWorktree: !(settings && settings.allow_worker_git_worktree === false),
     allowPrCreate: !!(settings && settings.allow_worker_pr_create),
+    allowIssuePr: !!(settings && settings.allow_issue_pr_create),
     allowPrApprove: !!(settings && settings.allow_router_pr_approve),
+    allowPrMerge: !!(settings && settings.allow_worker_merge_pr),
+    replyOnFinish: !!(settings && settings.github_reply_on_finish),
     petdexEnabled: !(settings && settings.petdex_enabled === false),
     dataTier: !!(settings && settings.data_training_tiers_allowed),
   }), [settings])
@@ -2323,7 +2329,10 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
     setYolo(settings.worker_yolo !== false)
     setAllowWorktree(settings.allow_worker_git_worktree !== false)
     setAllowPrCreate(!!settings.allow_worker_pr_create)
+    setAllowIssuePr(!!settings.allow_issue_pr_create)
     setAllowPrApprove(!!settings.allow_router_pr_approve)
+    setAllowPrMerge(!!settings.allow_worker_merge_pr)
+    setReplyOnFinish(!!settings.github_reply_on_finish)
     setPetdexEnabled(settings.petdex_enabled !== false)
     setDataTierAllowed(settings.data_training_tiers_allowed === true)
   }, [signature]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -2360,7 +2369,10 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
         worker_yolo: !!yolo,
         allow_worker_git_worktree: !!allowWorktree,
         allow_worker_pr_create: !!allowPrCreate,
+        allow_issue_pr_create: !!allowIssuePr,
         allow_router_pr_approve: !!allowPrApprove,
+        allow_worker_merge_pr: !!allowPrMerge,
+        github_reply_on_finish: !!replyOnFinish,
         petdex_enabled: !!petdexEnabled,
       },
     }),
@@ -2655,6 +2667,42 @@ function SettingsPanel({ settings, models, loading, error, onRetry }) {
                         className: 'accent-(--ui-accent)',
                       }),
                       jsx('span', { key: 'l', className: 'min-w-0 flex-1', children: 'Allow Router & workers to review/approve PRs' }),
+                    ],
+                  }),
+                  jsxs('label', {
+                    key: 'issue-pr', className: 'flex items-center gap-2 text-[0.6875rem] text-(--ui-text-tertiary)',
+                    children: [
+                      jsx('input', {
+                        key: 'i', type: 'checkbox', checked: !!allowIssuePr,
+                        'aria-label': 'Resolve issues into pull requests',
+                        onChange: (event) => { edited(); setAllowIssuePr(!!event.target.checked) },
+                        className: 'accent-(--ui-accent)',
+                      }),
+                      jsx('span', { key: 'l', className: 'min-w-0 flex-1', children: 'Resolve issues into pull requests (branch, commit, PR)' }),
+                    ],
+                  }),
+                  jsxs('label', {
+                    key: 'pr-merge', className: 'flex items-center gap-2 text-[0.6875rem] text-(--ui-text-tertiary)',
+                    children: [
+                      jsx('input', {
+                        key: 'i', type: 'checkbox', checked: !!allowPrMerge,
+                        'aria-label': 'Allow workers to merge pull requests',
+                        onChange: (event) => { edited(); setAllowPrMerge(!!event.target.checked) },
+                        className: 'accent-(--ui-accent)',
+                      }),
+                      jsx('span', { key: 'l', className: 'min-w-0 flex-1', children: 'Allow workers to comment and merge PRs' }),
+                    ],
+                  }),
+                  jsxs('label', {
+                    key: 'reply-on-finish', className: 'flex items-center gap-2 text-[0.6875rem] text-(--ui-text-tertiary)',
+                    children: [
+                      jsx('input', {
+                        key: 'i', type: 'checkbox', checked: !!replyOnFinish,
+                        'aria-label': 'Reply on GitHub when a turn finishes',
+                        onChange: (event) => { edited(); setReplyOnFinish(!!event.target.checked) },
+                        className: 'accent-(--ui-accent)',
+                      }),
+                      jsx('span', { key: 'l', className: 'min-w-0 flex-1', children: 'Reply on the issue/PR when a turn finishes' }),
                     ],
                   }),
                   jsxs('label', {

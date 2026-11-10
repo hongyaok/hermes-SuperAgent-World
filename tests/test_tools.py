@@ -86,6 +86,7 @@ def test_register_wires_tools_commands_blueprint_skill_and_docs(sa):
         "superagent_ask", "superagent_tick", "superagent_status",
         "superagent_run", "superagent_spawn", "superagent_town_status",
         "superagent_message_worker", "superagent_pr_create", "superagent_pr_review",
+        "superagent_pr_merge",
     }
     assert all(toolset == "superagent" for toolset, _, _ in ctx.tools.values())
     assert "superagent" in ctx.commands
@@ -433,3 +434,235 @@ def test_spawn_tool_refuses_a_contributor_model_before_creating_a_row(
     assert [row["id"] for row in store.list_sessions()["sessions"]] == [root["id"]]
 
 
+
+
+# -- merge tool ------------------------------------------------------------
+
+
+def _review_session(store, **overrides):
+    data = {"pr_number": 42, "github_repo": "acme/widgets", "source": "github_pr"}
+    data.update(overrides)
+    return store.create_session("review the pull request", **data)
+
+
+def test_pr_merge_is_gated_by_its_own_setting(tmp_path, monkeypatch, sa):
+    monkeypatch.setattr(sa.sa_settings, "data_dir", lambda: tmp_path)
+    store = sa.sa_chats.ChatStore(tmp_path / "superagent.db")
+    row = _review_session(store)
+    monkeypatch.setattr(sa.sa_settings, "load_settings", lambda: dict(sa.sa_settings.DEFAULTS))
+
+    out = json.loads(
+        sa.sa_tools.superagent_pr_merge(
+            {"session_id": row["id"], "body": "LGTM"}, ctx=FakeCtx()
+        )
+    )
+
+    assert out["ok"] is False
+    assert "allow_worker_merge_pr" in out["error"]
+
+
+def test_pr_merge_posts_the_comment_then_merges(tmp_path, monkeypatch, sa):
+    monkeypatch.setattr(sa.sa_settings, "data_dir", lambda: tmp_path)
+    store = sa.sa_chats.ChatStore(tmp_path / "superagent.db")
+    row = _review_session(store)
+    enabled = dict(
+        sa.sa_settings.DEFAULTS,
+        allow_worker_merge_pr=True,
+        github_repo="acme/widgets",
+        github_token="tok",
+    )
+    monkeypatch.setattr(sa.sa_settings, "load_settings", lambda: enabled)
+
+    order = []
+
+    def fake_get_pr(self, number):
+        order.append("get_pr")
+        return {
+            "number": number,
+            "state": "open",
+            "draft": False,
+            "mergeable": True,
+            "mergeable_state": "clean",
+            "merged": False,
+        }
+
+    def fake_comment(self, number, body):
+        order.append("comment")
+        return {"id": 9, "html_url": f"https://github.com/acme/widgets/pull/{number}#issuecomment-9"}
+
+    def fake_merge(self, number, *, merge_method="merge", commit_title="", commit_message=""):
+        order.append(("merge", merge_method))
+        return {"merged": True, "sha": "abc123", "message": "Pull Request successfully merged"}
+
+    monkeypatch.setattr(sa.sa_github.GitHubClient, "get_pr", fake_get_pr)
+    monkeypatch.setattr(sa.sa_github.GitHubClient, "post_comment", fake_comment)
+    monkeypatch.setattr(sa.sa_github.GitHubClient, "merge_pr", fake_merge)
+
+    out = json.loads(
+        sa.sa_tools.superagent_pr_merge(
+            {"session_id": row["id"], "body": "LGTM, merging", "merge_method": "squash"},
+            ctx=FakeCtx(),
+        )
+    )
+
+    assert out["ok"] is True
+    assert out["merged"] is True
+    assert out["sha"] == "abc123"
+    # The comment is posted before the merge, so it survives a refusal.
+    assert order == ["get_pr", "comment", ("merge", "squash")]
+    kinds = [event["kind"] for event in store.get_session(row["id"])["events"]]
+    assert "pr_commented" in kinds
+    assert "pr_merged" in kinds
+    # The verdict comment is the thread's one reply for this session.
+    assert store.is_seen(sa.sa_replies.reply_key(row["id"]))
+
+
+def test_pr_merge_refuses_a_draft(tmp_path, monkeypatch, sa):
+    monkeypatch.setattr(sa.sa_settings, "data_dir", lambda: tmp_path)
+    store = sa.sa_chats.ChatStore(tmp_path / "superagent.db")
+    row = _review_session(store)
+    enabled = dict(sa.sa_settings.DEFAULTS, allow_worker_merge_pr=True, github_token="tok")
+    monkeypatch.setattr(sa.sa_settings, "load_settings", lambda: enabled)
+    monkeypatch.setattr(
+        sa.sa_github.GitHubClient,
+        "get_pr",
+        lambda self, number: {"number": number, "state": "open", "draft": True, "mergeable": True},
+    )
+    monkeypatch.setattr(
+        sa.sa_github.GitHubClient,
+        "merge_pr",
+        pytest.fail,  # a refused PR must never reach the merge call
+    )
+
+    out = json.loads(
+        sa.sa_tools.superagent_pr_merge({"session_id": row["id"]}, ctx=FakeCtx())
+    )
+
+    assert out["ok"] is False
+    assert "draft" in out["error"]
+
+
+def test_pr_merge_refuses_an_unmergeable_pr(tmp_path, monkeypatch, sa):
+    monkeypatch.setattr(sa.sa_settings, "data_dir", lambda: tmp_path)
+    store = sa.sa_chats.ChatStore(tmp_path / "superagent.db")
+    row = _review_session(store)
+    enabled = dict(sa.sa_settings.DEFAULTS, allow_worker_merge_pr=True, github_token="tok")
+    monkeypatch.setattr(sa.sa_settings, "load_settings", lambda: enabled)
+    monkeypatch.setattr(
+        sa.sa_github.GitHubClient,
+        "get_pr",
+        lambda self, number: {
+            "number": number,
+            "state": "open",
+            "draft": False,
+            "mergeable": False,
+            "mergeable_state": "dirty",
+        },
+    )
+    monkeypatch.setattr(sa.sa_github.GitHubClient, "merge_pr", pytest.fail)
+
+    out = json.loads(
+        sa.sa_tools.superagent_pr_merge({"session_id": row["id"]}, ctx=FakeCtx())
+    )
+
+    assert out["ok"] is False
+    assert "dirty" in out["error"]
+
+
+def test_pr_merge_reports_a_github_refusal(tmp_path, monkeypatch, sa):
+    monkeypatch.setattr(sa.sa_settings, "data_dir", lambda: tmp_path)
+    store = sa.sa_chats.ChatStore(tmp_path / "superagent.db")
+    row = _review_session(store)
+    enabled = dict(sa.sa_settings.DEFAULTS, allow_worker_merge_pr=True, github_token="tok")
+    monkeypatch.setattr(sa.sa_settings, "load_settings", lambda: enabled)
+    monkeypatch.setattr(
+        sa.sa_github.GitHubClient,
+        "get_pr",
+        lambda self, number: {"number": number, "state": "open", "draft": False, "mergeable": True},
+    )
+    monkeypatch.setattr(
+        sa.sa_github.GitHubClient,
+        "merge_pr",
+        lambda self, number, **kw: {
+            "merged": False,
+            "sha": "",
+            "message": "Pull Request is not mergeable",
+        },
+    )
+
+    out = json.loads(
+        sa.sa_tools.superagent_pr_merge({"session_id": row["id"]}, ctx=FakeCtx())
+    )
+
+    assert out["ok"] is False
+    assert "not mergeable" in out["error"]
+    kinds = [event["kind"] for event in store.get_session(row["id"])["events"]]
+    assert "pr_merge_refused" in kinds
+
+
+def test_pr_merge_needs_a_linked_pull_request(tmp_path, monkeypatch, sa):
+    monkeypatch.setattr(sa.sa_settings, "data_dir", lambda: tmp_path)
+    store = sa.sa_chats.ChatStore(tmp_path / "superagent.db")
+    row = store.create_session("just a chat")
+    enabled = dict(sa.sa_settings.DEFAULTS, allow_worker_merge_pr=True, github_token="tok")
+    monkeypatch.setattr(sa.sa_settings, "load_settings", lambda: enabled)
+
+    out = json.loads(
+        sa.sa_tools.superagent_pr_merge({"session_id": row["id"]}, ctx=FakeCtx())
+    )
+
+    assert out["ok"] is False
+    assert "no pull request" in out["error"]
+
+
+def test_an_issue_session_can_resolve_itself_when_its_switch_is_on(tmp_path, monkeypatch, sa):
+    monkeypatch.setattr(sa.sa_settings, "data_dir", lambda: tmp_path)
+    store = sa.sa_chats.ChatStore(tmp_path / "superagent.db")
+    issue = store.create_session(
+        "fix the crash", source="github_issue", issue_number=3, repo=str(tmp_path)
+    )
+    pr_session = store.create_session(
+        "fix the crash", source="github_pr", pr_number=4, repo=str(tmp_path)
+    )
+    settings = dict(
+        sa.sa_settings.DEFAULTS,
+        allow_issue_pr_create=True,
+        github_repo="acme/widgets",
+        github_token="tok",
+        github_pr_base_branch="main",
+    )
+    monkeypatch.setattr(sa.sa_settings, "load_settings", lambda: settings)
+    monkeypatch.setattr(
+        sa.sa_github,
+        "commit_and_push_branch",
+        lambda *a, **kw: {"branch": kw["branch"], "sha": "abc1234", "committed": True, "pushed": True},
+    )
+    monkeypatch.setattr(
+        sa.sa_github.GitHubClient,
+        "create_pr",
+        lambda self, **kw: {
+            "number": 42,
+            "title": kw["title"],
+            "html_url": "https://github.com/acme/widgets/pull/42",
+            "head_ref": kw["head"],
+            "base_ref": kw["base"],
+            "draft": kw["draft"],
+        },
+    )
+
+    refused = json.loads(
+        sa.sa_tools.superagent_pr_create(
+            {"session_id": pr_session["id"], "title": "Fix"}, ctx=FakeCtx()
+        )
+    )
+    assert refused["ok"] is False
+    assert "allow_worker_pr_create" in refused["error"]
+
+    resolved = json.loads(
+        sa.sa_tools.superagent_pr_create(
+            {"session_id": issue["id"], "title": "Fix the crash", "body": "Closes #3"},
+            ctx=FakeCtx(),
+        )
+    )
+    assert resolved["ok"] is True
+    assert resolved["pr"]["number"] == 42

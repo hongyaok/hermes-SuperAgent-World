@@ -13,6 +13,7 @@ try:
         sa_engine,
         sa_github,
         sa_model_policy,
+        sa_replies,
         sa_runner,
         sa_runtime,
         sa_settings,
@@ -23,6 +24,7 @@ except ImportError:  # top-level import (root __init__ loaded as `__init__` by p
     import sa_engine  # type: ignore[no-redef]
     import sa_github  # type: ignore[no-redef]
     import sa_model_policy  # type: ignore[no-redef]
+    import sa_replies  # type: ignore[no-redef]
     import sa_runner  # type: ignore[no-redef]
     import sa_runtime  # type: ignore[no-redef]
     import sa_settings  # type: ignore[no-redef]
@@ -402,17 +404,6 @@ def superagent_message_worker(args: dict, ctx: Any = None, **kwargs: Any) -> str
                     ),
                 }
             )
-        if action == "create_pr" and not settings.get("allow_worker_pr_create"):
-            return json.dumps(
-                {
-                    "ok": False,
-                    "error": (
-                        "PR creation by workers is disabled. "
-                        "Enable allow_worker_pr_create in Superagent Settings."
-                    ),
-                }
-            )
-
         store = _chat_store()
         parent = store.get_session(parent_id, message_limit=0)
         if parent is None:
@@ -432,6 +423,16 @@ def superagent_message_worker(args: dict, ctx: Any = None, **kwargs: Any) -> str
                 {
                     "ok": False,
                     "error": f"worker {worker_id} is currently {worker.get('status')}; wait for its turn to finish",
+                }
+            )
+        if action == "create_pr" and not sa_settings.pr_create_allowed(settings, worker):
+            return json.dumps(
+                {
+                    "ok": False,
+                    "error": (
+                        "PR creation by workers is disabled. Enable allow_worker_pr_create"
+                        " (or allow_issue_pr_create for an issue session) in Superagent Settings."
+                    ),
                 }
             )
 
@@ -501,16 +502,6 @@ def superagent_pr_create(args: dict, ctx: Any = None, **kwargs: Any) -> str:
         if ctx is None:
             return json.dumps({"error": "plugin context unavailable"})
         settings = sa_settings.load_settings()
-        if not settings.get("allow_worker_pr_create"):
-            return json.dumps(
-                {
-                    "ok": False,
-                    "error": (
-                        "PR creation by workers is disabled. "
-                        "Enable allow_worker_pr_create in Superagent Settings."
-                    ),
-                }
-            )
         session_id = str((args or {}).get("session_id") or "").strip()
         title = str((args or {}).get("title") or "").strip()
         body = str((args or {}).get("body") or "").strip()
@@ -527,6 +518,16 @@ def superagent_pr_create(args: dict, ctx: Any = None, **kwargs: Any) -> str:
         session = store.get_session(session_id, message_limit=0)
         if session is None:
             return json.dumps({"ok": False, "error": f"unknown session {session_id}"})
+        if not sa_settings.pr_create_allowed(settings, session):
+            return json.dumps(
+                {
+                    "ok": False,
+                    "error": (
+                        "PR creation by workers is disabled. Enable allow_worker_pr_create"
+                        " (or allow_issue_pr_create for an issue session) in Superagent Settings."
+                    ),
+                }
+            )
 
         repo_path = str(
             session.get("worktree_path")
@@ -670,3 +671,118 @@ def superagent_pr_review(args: dict, ctx: Any = None, **kwargs: Any) -> str:
     except Exception as exc:
         return json.dumps({"ok": False, "error": sa_runner.redact_secrets(exc)})
 
+
+
+def superagent_pr_merge(args: dict, ctx: Any = None, **kwargs: Any) -> str:
+    """Post an optional review comment and merge a session's pull request.
+
+    One action, in this order, because "comment and then merge" is what a
+    reviewer expects: the comment lands even when GitHub refuses the merge, and
+    a refused merge is reported as a refusal rather than a success.
+    """
+    try:
+        if ctx is None:
+            return json.dumps({"error": "plugin context unavailable"})
+        settings = sa_settings.load_settings()
+        if not settings.get("allow_worker_merge_pr"):
+            return json.dumps(
+                {
+                    "ok": False,
+                    "error": (
+                        "PR merging by agents is disabled. "
+                        "Enable allow_worker_merge_pr in Superagent Settings."
+                    ),
+                }
+            )
+
+        session_id = str((args or {}).get("session_id") or "").strip()
+        body = str((args or {}).get("body") or "").strip()
+        merge_method = str((args or {}).get("merge_method") or "merge").strip().lower()
+        raw_number = (args or {}).get("pr_number")
+        if raw_number is None:
+            raw_number = (args or {}).get("number")
+
+        if not session_id or not sa_chats.is_session_id(session_id):
+            return json.dumps({"ok": False, "error": "valid session_id is required"})
+        try:
+            explicit = int(raw_number) if raw_number is not None else 0
+        except (TypeError, ValueError):
+            explicit = 0
+        if explicit < 0:
+            return json.dumps({"ok": False, "error": "pr_number must be positive"})
+
+        store = _chat_store()
+        session = store.get_session(session_id, message_limit=0)
+        if session is None:
+            return json.dumps({"ok": False, "error": f"unknown session {session_id}"})
+        pr_number = explicit or int(session.get("pr_number") or 0)
+        if pr_number <= 0:
+            return json.dumps(
+                {"ok": False, "error": "this session has no pull request to merge"}
+            )
+
+        github_repo = str(session.get("github_repo") or settings.get("github_repo") or "").strip()
+        token = str(settings.get("github_token") or "").strip()
+        if not github_repo or "/" not in github_repo:
+            return json.dumps({"ok": False, "error": "no GitHub repository (owner/name) configured"})
+        if not token:
+            return json.dumps({"ok": False, "error": "no GitHub token configured"})
+
+        client = sa_github.GitHubClient(token, github_repo)
+        # A merge decision always re-reads the PR: `mergeable` is absent from
+        # the list endpoint and GitHub computes it on demand.
+        pr = client.get_pr(pr_number)
+        if pr.get("merged"):
+            return json.dumps(
+                {"ok": True, "merged": True, "already": True, "pr_number": pr_number}
+            )
+        state = str(pr.get("state") or "")
+        if state != "open":
+            return json.dumps(
+                {"ok": False, "error": f"PR #{pr_number} is {state or 'not open'}, not open"}
+            )
+        if pr.get("draft"):
+            return json.dumps(
+                {"ok": False, "error": f"PR #{pr_number} is a draft; mark it ready before merging"}
+            )
+        if pr.get("mergeable") is False:
+            reason = str(pr.get("mergeable_state") or "not mergeable")
+            return json.dumps(
+                {"ok": False, "error": f"PR #{pr_number} is not mergeable ({reason})"}
+            )
+
+        comment: Any = None
+        if body:
+            comment = client.post_comment(pr_number, body)
+            # The finish hook posts the session summary. This comment is the
+            # verdict, so mark the session replied to keep the thread to one.
+            store.mark_seen(sa_replies.reply_key(session_id))
+            store.add_event(session_id, "pr_commented", f"PR #{pr_number} review comment")
+
+        merged = client.merge_pr(pr_number, merge_method=merge_method)
+        if not merged.get("merged"):
+            message = str(merged.get("message") or "GitHub refused the merge")
+            store.add_event(session_id, "pr_merge_refused", f"PR #{pr_number}: {message}")
+            return json.dumps(
+                {"ok": False, "merged": False, "pr_number": pr_number, "error": message}
+            )
+
+        detail = f"PR #{pr_number} merged ({merge_method}) {(merged.get('sha') or '').strip()}".strip()
+        store.add_event(session_id, "pr_merged", detail)
+        if session.get("parent_session_id"):
+            store.add_event(str(session["parent_session_id"]), "pr_merged", f"{session_id}: {detail}")
+
+        return json.dumps(
+            {
+                "ok": True,
+                "merged": True,
+                "pr_number": pr_number,
+                "sha": merged.get("sha") or "",
+                "message": merged.get("message") or "",
+                "comment": comment,
+                "merge_method": merge_method,
+            },
+            default=str,
+        )
+    except Exception as exc:
+        return json.dumps({"ok": False, "error": sa_runner.redact_secrets(exc)})

@@ -384,3 +384,25 @@ def test_config_settings_falls_back_to_yaml_when_loader_points_elsewhere(home, m
     )
 
     assert sa_settings._config_settings() == {"default_model": "from-yaml"}
+
+
+# -- publishing permission -------------------------------------------------
+
+
+def test_pr_create_allowed_covers_both_switches(sa):
+    base = dict(sa.sa_settings.DEFAULTS)
+
+    # Nothing on: no session may publish.
+    assert sa.sa_settings.pr_create_allowed(base, "github_pr") is False
+    assert sa.sa_settings.pr_create_allowed(base, "github_issue") is False
+
+    general = dict(base, allow_worker_pr_create=True)
+    assert sa.sa_settings.pr_create_allowed(general, "github_pr") is True
+    assert sa.sa_settings.pr_create_allowed(general, "github_issue") is True
+
+    # The issue switch is narrow: it never grants a PR session push rights.
+    issue_only = dict(base, allow_issue_pr_create=True)
+    assert sa.sa_settings.pr_create_allowed(issue_only, "github_issue") is True
+    assert sa.sa_settings.pr_create_allowed(issue_only, "github_pr") is False
+    assert sa.sa_settings.pr_create_allowed(issue_only, {"source": "github_issue"}) is True
+    assert sa.sa_settings.pr_create_allowed(issue_only, {"source": "desktop"}) is False

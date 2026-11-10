@@ -395,14 +395,16 @@ class GitHubWatcher:
                 thread,
                 comment=comment,
                 checkout=checkout,
-                can_create_pr=bool(_field(settings, "allow_worker_pr_create", False)),
+                can_create_pr=sa_settings.pr_create_allowed(settings, "github_pr"),
                 can_approve_pr=bool(_field(settings, "allow_router_pr_approve", False)),
+                can_merge=bool(_field(settings, "allow_worker_merge_pr", False)),
             )
         return sa_github.build_issue_prompt(
             thread,
             comment=comment,
             checkout=checkout,
-            can_create_pr=bool(_field(settings, "allow_worker_pr_create", False)),
+            # An issue publishes its fix behind its own switch.
+            can_create_pr=sa_settings.pr_create_allowed(settings, "github_issue"),
         )
 
     def _open_session(

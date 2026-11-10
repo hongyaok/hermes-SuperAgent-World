@@ -161,6 +161,11 @@ class GitHubClient:
             "created_at": str(item.get("created_at") or ""),
             "updated_at": str(item.get("updated_at") or ""),
             "draft": bool(item.get("draft")),
+            # Only `GET /pulls/{n}` fills these; the list endpoint leaves them
+            # absent, so a merge decision always re-reads the PR first.
+            "mergeable": item.get("mergeable"),
+            "mergeable_state": str(item.get("mergeable_state") or ""),
+            "merged": bool(item.get("merged")),
             "repo": self.repo,
         }
 
@@ -246,6 +251,43 @@ class GitHubClient:
             "state": str((data.get("state") if isinstance(data, dict) else None) or verdict),
             "html_url": str((data.get("html_url") if isinstance(data, dict) else None) or ""),
             "fallback": False,
+        }
+
+    def merge_pr(
+        self,
+        number: int,
+        *,
+        merge_method: str = "merge",
+        commit_title: str = "",
+        commit_message: str = "",
+    ) -> dict[str, Any]:
+        """Merge a pull request and report what GitHub actually did.
+
+        GitHub answers 200 for a merge that did not happen (``merged: false``)
+        and 405/409/422 for one it refused, so the caller must read the body
+        rather than the status. Branch protection, "checks are failing" and
+        "head branch was modified" all arrive here as a `GitHubError` carrying
+        the status, which is what the tool reports back to the model.
+        """
+        method = str(merge_method or "merge").strip().lower()
+        if method not in ("merge", "squash", "rebase"):
+            raise GitHubError(
+                f"merge_method must be merge, squash, or rebase (got {merge_method!r})"
+            )
+        payload: dict[str, Any] = {"merge_method": method}
+        clean_title = str(commit_title or "").strip()
+        clean_message = str(commit_message or "").strip()
+        if clean_title:
+            payload["commit_title"] = clean_title[:256]
+        if clean_message:
+            payload["commit_message"] = clean_message[:BODY_LIMIT]
+        data = self._call("PUT", self._repo_path(f"pulls/{int(number)}/merge"), payload) or {}
+        if not isinstance(data, dict):
+            raise GitHubError("GitHub returned an unexpected merge response")
+        return {
+            "merged": bool(data.get("merged")),
+            "sha": str(data.get("sha") or ""),
+            "message": str(data.get("message") or ""),
         }
 
     # -- issues ----------------------------------------------------------
@@ -657,6 +699,7 @@ def build_pr_prompt(
     *,
     can_create_pr: bool = False,
     can_approve_pr: bool = False,
+    can_merge: bool = False,
 ) -> str:
     """The worker prompt for one PR: context, the ask, and the ground rules."""
     pr = pr or {}
@@ -726,6 +769,13 @@ def build_pr_prompt(
         lines.append(
             "- When asked to review or approve this pull request, use the superagent_pr_review tool."
         )
+    if can_merge:
+        lines.append(
+            "- When this pull request is sound — it does what it claims, the checks you ran pass,"
+            " and nothing else is obviously broken — write your verdict as the `body` of one"
+            " superagent_pr_merge call and let it post that comment and merge. Never merge a draft,"
+            " a failing change, or one you would ask a question about: say why and leave it open."
+        )
     lines += [
         "- If the request needs a design decision, ask one concrete question rather than guessing.",
         "- Finish with a summary of at most 200 words: what changed, files touched,"
@@ -783,9 +833,10 @@ def build_issue_prompt(
 
     if can_create_pr:
         commit_rule = (
-            "- Do NOT push to main/master or merge. To publish the change when asked, use the"
-            f" superagent_pr_create tool and mention #{number} in the pull request body;"
-            " otherwise leave the change in the working tree."
+            "- Do NOT push to main/master. To publish the fix, call superagent_pr_create once:"
+            " it commits this worktree, pushes a superagent/ branch and opens the pull request."
+            f" Put `Closes #{number}` in its body so the issue closes when the PR merges."
+            " If the change is not ready, leave it in the working tree and say what is missing."
         )
     else:
         commit_rule = (
