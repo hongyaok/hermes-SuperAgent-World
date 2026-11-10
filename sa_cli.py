@@ -2238,9 +2238,21 @@ def run_github(args: Any, want_json: bool = False) -> int:
     request_text = str(getattr(args, "request", "") or "").strip()
     comment = {"author": "you", "body": request_text} if request_text else None
     if is_issue:
-        prompt = sa_github.build_issue_prompt(thread, comment=comment, checkout=checkout)
+        prompt = sa_github.build_issue_prompt(
+            thread,
+            comment=comment,
+            checkout=checkout,
+            can_create_pr=sa_settings.pr_create_allowed(settings, "github_issue"),
+        )
     else:
-        prompt = sa_github.build_pr_prompt(thread, comment=comment, checkout=checkout)
+        prompt = sa_github.build_pr_prompt(
+            thread,
+            comment=comment,
+            checkout=checkout,
+            can_create_pr=sa_settings.pr_create_allowed(settings, "github_pr"),
+            can_approve_pr=bool(settings.get("allow_router_pr_approve", False)),
+            can_merge=bool(settings.get("allow_worker_merge_pr", False)),
+        )
     session_repo = checkout
     if not session_repo and repo_path and Path(repo_path).expanduser().is_dir():
         session_repo = repo_path

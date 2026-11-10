@@ -42,6 +42,7 @@ def register(ctx: Any) -> None:
         (sa_schemas.MESSAGE_WORKER, sa_tools.superagent_message_worker),
         (sa_schemas.PR_CREATE, sa_tools.superagent_pr_create),
         (sa_schemas.PR_REVIEW, sa_tools.superagent_pr_review),
+        (sa_schemas.PR_MERGE, sa_tools.superagent_pr_merge),
     ):
         ctx.register_tool(
             name=schema["name"],

@@ -17,6 +17,7 @@ provides_tools:
   - superagent_message_worker
   - superagent_pr_create
   - superagent_pr_review
+  - superagent_pr_merge
 config_schema:
   mode:
     type: str
@@ -186,11 +187,26 @@ config_schema:
     default: false
     label: Allow workers to create pull requests
     description: Let workers commit, push a branch, and open a GitHub pull request via superagent_pr_create.
+  allow_issue_pr_create:
+    type: bool
+    default: false
+    label: Resolve issues into pull requests
+    description: Let a GitHub issue session commit its work, push a superagent/ branch and open a pull request that closes the issue. Independent of allow_worker_pr_create, which governs PR sessions.
   allow_router_pr_approve:
     type: bool
     default: false
     label: Allow router/workers to review & approve pull requests
     description: Let the router or workers post formal APPROVE / REQUEST_CHANGES reviews on GitHub pull requests.
+  allow_worker_merge_pr:
+    type: bool
+    default: false
+    label: Allow workers to merge pull requests
+    description: Let a session post its review comment and merge the pull request with superagent_pr_merge when it judges the change sound. GitHub still refuses a draft, a conflicting head, or a branch protection rule.
+  github_reply_on_finish:
+    type: bool
+    default: false
+    label: Reply on GitHub when a turn finishes
+    description: Post the finished turn's summary as a comment on the session's issue or pull request (once per session). This is the same body the Comment panel previews.
   github_pr_base_branch:
     type: str
     default: ""

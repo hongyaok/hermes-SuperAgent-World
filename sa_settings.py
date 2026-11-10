@@ -58,7 +58,17 @@ DEFAULTS: dict[str, Any] = {
     "github_pr_limit": 10,
     "allow_worker_git_worktree": True,
     "allow_worker_pr_create": False,
+    # The same publishing power, narrowed to issue sessions: an operator can
+    # let an issue be resolved into a pull request without giving PR workers
+    # push rights. Off by default, like every other write path.
+    "allow_issue_pr_create": False,
     "allow_router_pr_approve": False,
+    # Merge is its own switch: reviewing a PR and merging it are different
+    # levels of trust, and GitHub cannot un-merge by reverting this setting.
+    "allow_worker_merge_pr": False,
+    # Post the finished turn's summary back on the issue or PR. Off by
+    # default: a reply is visible to everyone watching the repository.
+    "github_reply_on_finish": False,
     "github_pr_base_branch": "",
     "github_pr_draft_by_default": False,
     "petdex_enabled": True,
@@ -91,7 +101,10 @@ ENV_VARS: dict[str, str] = {
     "github_pr_limit": "SUPERAGENT_GITHUB_PR_LIMIT",
     "allow_worker_git_worktree": "SUPERAGENT_ALLOW_WORKER_WORKTREE",
     "allow_worker_pr_create": "SUPERAGENT_ALLOW_WORKER_PR_CREATE",
+    "allow_issue_pr_create": "SUPERAGENT_ALLOW_ISSUE_PR_CREATE",
     "allow_router_pr_approve": "SUPERAGENT_ALLOW_ROUTER_PR_APPROVE",
+    "allow_worker_merge_pr": "SUPERAGENT_ALLOW_WORKER_MERGE_PR",
+    "github_reply_on_finish": "SUPERAGENT_GITHUB_REPLY_ON_FINISH",
     "github_pr_base_branch": "SUPERAGENT_GITHUB_PR_BASE_BRANCH",
     "github_pr_draft_by_default": "SUPERAGENT_GITHUB_PR_DRAFT",
     "petdex_enabled": "SUPERAGENT_PETDEX_ENABLED",
@@ -501,6 +514,26 @@ def public_settings() -> dict[str, Any]:
     token = data.pop("github_token", "")
     data["github_token_set"] = bool(token)
     return data
+
+
+def pr_create_allowed(settings: dict, session_or_source: Any = None) -> bool:
+    """May this session publish its work as a pull request?
+
+    ``allow_worker_pr_create`` is the general switch. ``allow_issue_pr_create``
+    grants the same power to issue sessions only, so "resolve this issue into a
+    PR" can be on while PR workers still cannot push.
+
+    Accepts a session dict or a bare source string: the prompt builders and the
+    tool gates hold different things when they ask.
+    """
+    current = settings or {}
+    if bool(current.get("allow_worker_pr_create")):
+        return True
+    if isinstance(session_or_source, str):
+        source = session_or_source
+    else:
+        source = str((session_or_source or {}).get("source") or "")
+    return source == "github_issue" and bool(current.get("allow_issue_pr_create"))
 
 
 def valid_repo_name(repo: Any) -> bool:

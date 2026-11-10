@@ -131,7 +131,10 @@ SETTINGS_KEYS = (
     "chat_max_turns",
     "allow_worker_git_worktree",
     "allow_worker_pr_create",
+    "allow_issue_pr_create",
     "allow_router_pr_approve",
+    "allow_worker_merge_pr",
+    "github_reply_on_finish",
     "github_repo",
     "github_agent_login",
     "github_allowed_users",
@@ -159,7 +162,10 @@ SETTINGS_EDITABLE = (
     "chat_max_turns",
     "allow_worker_git_worktree",
     "allow_worker_pr_create",
+    "allow_issue_pr_create",
     "allow_router_pr_approve",
+    "allow_worker_merge_pr",
+    "github_reply_on_finish",
     "github_pr_base_branch",
     "github_pr_draft_by_default",
     "petdex_enabled",
@@ -860,7 +866,10 @@ def _settings_patch(data: Any) -> dict[str, Any]:
         "worker_yolo",
         "allow_worker_git_worktree",
         "allow_worker_pr_create",
+        "allow_issue_pr_create",
         "allow_router_pr_approve",
+        "allow_worker_merge_pr",
+        "github_reply_on_finish",
         "github_pr_draft_by_default",
         "petdex_enabled",
     ):
@@ -2477,8 +2486,9 @@ def github_pr_work(number: int, body: dict | None = None) -> dict[str, Any]:
         pr,
         comment=comment,
         checkout=checkout,
-        can_create_pr=bool(settings.get("allow_worker_pr_create", False)),
+        can_create_pr=sa_settings.pr_create_allowed(settings, "github_pr"),
         can_approve_pr=bool(settings.get("allow_router_pr_approve", False)),
+        can_merge=bool(settings.get("allow_worker_merge_pr", False)),
     )
     session_repo = checkout
     if not session_repo and repo_path and Path(repo_path).expanduser().is_dir():
@@ -2544,7 +2554,8 @@ def github_issue_work(number: int, body: dict | None = None) -> dict[str, Any]:
         detail = f"issue #{number} was not found" if code == 404 else _scrub(str(exc))
         raise HTTPException(status_code=code, detail=detail) from exc
 
-    allow_pr = bool(settings.get("allow_worker_pr_create", False))
+    # An issue publishes its fix behind its own switch.
+    allow_pr = sa_settings.pr_create_allowed(settings, "github_issue")
     request_text = _scrub(str((body or {}).get("request") or "").strip())
     comment = {"author": "you", "body": request_text} if request_text else None
     repo_path = str(settings.get("repo_path") or "").strip()

@@ -515,6 +515,9 @@ def test_post_settings_saves_every_editable_key(settings_api, tmp_path):
             "max_workers": 4,
             "worker_yolo": False,
             "chat_max_turns": 30,
+            "allow_issue_pr_create": True,
+            "allow_worker_merge_pr": True,
+            "github_reply_on_finish": True,
         }
     )
     assert saved["ok"] is True
@@ -534,6 +537,12 @@ def test_post_settings_saves_every_editable_key(settings_api, tmp_path):
     assert settings["max_workers"] == 4
     assert settings["worker_yolo"] is False
     assert settings["chat_max_turns"] == 30
+    # The three publishing switches are independently settable.
+    assert settings["allow_issue_pr_create"] is True
+    assert settings["allow_worker_merge_pr"] is True
+    assert settings["github_reply_on_finish"] is True
+    assert settings["allow_worker_pr_create"] is False
+    assert settings["allow_router_pr_approve"] is False
 
     # A second GET reads the same file back.
     assert api.get_settings()["model_presets"] == settings["model_presets"]

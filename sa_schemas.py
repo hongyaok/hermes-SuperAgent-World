@@ -266,3 +266,41 @@ PR_REVIEW = {
         "required": ["session_id"],
     },
 }
+
+PR_MERGE = {
+    "name": "superagent_pr_merge",
+    "description": (
+        "Post an optional review comment on a pull request and then merge it. The comment is "
+        "posted first, so it survives a refused merge. Requires allow_worker_merge_pr to be "
+        "enabled in Superagent Settings; a draft, a closed PR, or a PR GitHub reports as not "
+        "mergeable is refused."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "session_id": {
+                "type": "string",
+                "description": "The session merging the PR, e.g. S-0001.",
+            },
+            "pr_number": {
+                "type": "integer",
+                "description": (
+                    "Pull request to merge (defaults to the session's linked pr_number)."
+                ),
+            },
+            "body": {
+                "type": "string",
+                "description": (
+                    "Review comment to post before merging, markdown. Omit to merge silently."
+                ),
+            },
+            "merge_method": {
+                "type": "string",
+                "enum": ["merge", "squash", "rebase"],
+                "default": "merge",
+                "description": "How GitHub should merge: a merge commit, a squash, or a rebase.",
+            },
+        },
+        "required": ["session_id"],
+    },
+}

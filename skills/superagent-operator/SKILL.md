@@ -229,6 +229,22 @@ label/assignment events are not watched.
   and branch stay untouched. A checkout failure falls back to `repo_path` with
   a warning event; no usable repository marks the session `failed`.
 
+**What the agent may do with the thread.** All off by default, and each one is
+independent:
+
+- **Reply** (`github_reply_on_finish`) — a turn that ends in `review` posts its
+  summary on the issue or PR, once per session. Same body as the **Comment on
+  PR** preview. A failed reply is a `reply_failed` event, not a failed turn.
+- **Resolve an issue** (`allow_issue_pr_create`) — the issue prompt tells the
+  worker to call `superagent_pr_create` once, which commits the worktree,
+  pushes a `superagent/` branch and opens a PR with `Closes #N`. It does not
+  require `allow_worker_pr_create`, so issues can ship while PR workers stay
+  read-only.
+- **Merge** (`allow_worker_merge_pr`) — `superagent_pr_merge(session_id,
+  body=…)` posts the comment and then merges. Refuses a draft, a closed PR, or
+  `mergeable: false`; a GitHub refusal comes back as `{ok: false}` with the
+  reason, never as a silent success.
+
 **Rules that prevent noise.**
 
 - The first successful poll is a **baseline**: existing PR and issue comments
@@ -344,6 +360,9 @@ error, `2` usage.
 | `github_poll_seconds` | `90` | Background poll interval. |
 | `allow_worker_git_worktree` | `true` | Isolate each spawned town worker into its own git worktree. |
 | `allow_worker_pr_create` | `false` | Allow workers/Router to commit, push feature branches, and open GitHub PRs. |
+| `allow_issue_pr_create` | `false` | Let an **issue** session resolve itself: commit its worktree, push a branch, open a PR saying `Closes #N`. Does not grant PR workers any push rights. |
+| `allow_worker_merge_pr` | `false` | Let a session comment and merge with `superagent_pr_merge` when it judges the change sound. GitHub still refuses drafts, conflicts and branch protection. |
+| `github_reply_on_finish` | `false` | Post the finished turn's summary on the issue/PR, once per session. |
 | `allow_router_pr_approve` | `false` | Allow Router/workers to submit `APPROVE` / `REQUEST_CHANGES` PR reviews. |
 | `github_pr_base_branch` | `""` | Default base branch for worker-created PRs (empty = repo `default_branch`). |
 | `github_pr_draft_by_default` | `false` | Open worker-created PRs as drafts by default. |

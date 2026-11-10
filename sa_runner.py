@@ -23,10 +23,11 @@ from pathlib import Path
 from typing import Any, Optional
 
 try:  # normal: imported as part of the plugin package
-    from . import sa_chats, sa_model_policy
+    from . import sa_chats, sa_model_policy, sa_replies
 except ImportError:  # top-level import (dashboard backend, pytest)
     import sa_chats  # type: ignore[no-redef]
     import sa_model_policy  # type: ignore[no-redef]
+    import sa_replies  # type: ignore[no-redef]
 
 # How much stderr is kept for the error message of a failed turn.
 STDERR_LIMIT = 4000
@@ -970,6 +971,8 @@ class Runner:
                 f"exit={exit_code} tokens={metrics.get('tokens')} duration_ms={metrics.get('duration_ms')}",
             )
         self._finish(session_id, status, error=error, **fields)
+        if status == sa_chats.REVIEW:
+            self._reply_on_github(session_id)
 
     def _on_system(self, session_id: str, event: dict) -> None:
         fields: dict[str, Any] = {}
@@ -1037,6 +1040,22 @@ class Runner:
             self._threads.pop(session_id, None)
             self._started.pop(session_id, None)
             self._cancel_reasons.pop(session_id, None)
+
+    def _reply_on_github(self, session_id: str) -> None:
+        """Best-effort: post the summary back to the session's PR or issue.
+
+        Runs only after a turn ends in `review`, and only when
+        `github_reply_on_finish` is on — `sa_replies` owns the rest of the
+        decision. A reply must never change the session's status, so every
+        failure lands as an event.
+        """
+        try:
+            sa_replies.reply_after_turn(self.chat, session_id)
+        except Exception as exc:  # noqa: BLE001 - a reply cannot fail a turn
+            try:
+                self._add_event(session_id, "reply_failed", str(exc)[:MAX_EVENT_CHARS])
+            except Exception:
+                pass
 
     def _take_cancelled(self, session_id: str) -> bool:
         with self._lock:
