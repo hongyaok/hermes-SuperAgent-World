@@ -4153,7 +4153,46 @@ function GithubPrRow({ pr, onWork, pending }) {
   })
 }
 
-/** Connect/settings form on the left, the open PR list on the right. */
+function GithubIssueRow({ issue, onWork, pending }) {
+  const number = issue && issue.number
+  const title = String((issue && issue.title) || '').trim() || '(untitled)'
+  return jsxs('div', {
+    className: 'flex min-w-0 items-start gap-2 rounded px-1 py-1 hover:bg-(--chrome-action-hover)',
+    children: [
+      jsx('button', {
+        key: 'n', type: 'button', onClick: () => openUrl(issue && issue.html_url),
+        title: 'Open this issue on GitHub',
+        className: 'shrink-0 font-mono text-[0.6875rem] text-(--ui-text-tertiary) hover:text-(--ui-text-secondary)',
+        children: `#${number}`,
+      }),
+      jsxs('div', {
+        key: 'body', className: 'flex min-w-0 flex-1 flex-col gap-0.5',
+        children: [
+          jsx('span', {
+            key: 'title', className: 'line-clamp-2 break-words text-xs text-(--ui-text-secondary)',
+            title, children: title,
+          }),
+          jsxs('span', {
+            key: 'meta', className: 'flex min-w-0 items-baseline gap-1.5 text-[0.6875rem] text-(--ui-text-quaternary)',
+            children: [
+              jsx('span', { key: 'a', className: 'min-w-0 truncate', children: (issue && issue.author) || 'unknown' }),
+              jsx('span', { key: 'd', children: '·' }),
+              jsx('span', { key: 't', className: 'shrink-0 tabular-nums', children: fmtIsoAge(issue && issue.updated_at) || '—' }),
+            ],
+          }),
+        ],
+      }),
+      jsx(GhostButton, {
+        key: 'work', className: 'shrink-0 self-center', disabled: pending,
+        title: 'Start a Superagent worker on this issue',
+        onClick: () => onWork(number),
+        children: pending ? 'Starting…' : 'Work on this issue',
+      }),
+    ],
+  })
+}
+
+/** Connect/settings form on the left, the open PR and issue lists on the right. */
 function GithubPanel({ status, prs, prsLoading, onSelectSession }) {
   const queryClient = useQueryClient()
   const configured = !!(status && status.configured)
@@ -4163,11 +4202,15 @@ function GithubPanel({ status, prs, prsLoading, onSelectSession }) {
     ? status.allowed_users.join(', ')
     : ''
   const statusMode = (status && status.watch_mode) || 'observe'
+  // On unless the saved settings say off: an older payload without the key
+  // means the watcher's own default (watch).
+  const statusWatchIssues = !(status && status.watch_issues === false)
 
   const [repo, setRepo] = useState('')
   const [token, setToken] = useState('')
   const [allowed, setAllowed] = useState('')
   const [mode, setMode] = useState('observe')
+  const [watchIssues, setWatchIssues] = useState(true)
   const [notice, setNotice] = useState('')
 
   // Seed from the server when a value changes; typing never changes these
@@ -4175,6 +4218,7 @@ function GithubPanel({ status, prs, prsLoading, onSelectSession }) {
   useEffect(() => { setRepo(statusRepo) }, [statusRepo])
   useEffect(() => { setAllowed(statusAllowed) }, [statusAllowed])
   useEffect(() => { setMode(statusMode) }, [statusMode])
+  useEffect(() => { setWatchIssues(statusWatchIssues) }, [statusWatchIssues])
 
   const connect = useMutation({
     mutationFn: () => rest('/github/connect', {
@@ -4198,7 +4242,11 @@ function GithubPanel({ status, prs, prsLoading, onSelectSession }) {
   const save = useMutation({
     mutationFn: () => rest('/github/settings', {
       method: 'POST',
-      body: { allowed_users: splitList(allowed), watch_mode: mode },
+      body: {
+        allowed_users: splitList(allowed),
+        watch_mode: mode,
+        watch_issues: !!watchIssues,
+      },
     }),
     onSuccess: (result) => {
       if (result && result.ok === false && result.error) setNotice(String(result.error))
@@ -4227,6 +4275,22 @@ function GithubPanel({ status, prs, prsLoading, onSelectSession }) {
     },
   })
 
+  const workIssue = useMutation({
+    mutationFn: (number) => rest(`/github/issues/${number}/work`, { method: 'POST', body: {} }),
+    onSuccess: (result) => {
+      if (result && result.ok === false) {
+        setNotice(String(result.error || 'could not start work on that issue'))
+        return
+      }
+      setNotice('')
+      invalidateGithub(queryClient)
+      invalidateChats(queryClient)
+      if (result && result.session && result.session.id && onSelectSession) {
+        onSelectSession(result.session.id)
+      }
+    },
+  })
+
   const work = useMutation({
     mutationFn: (number) => rest(`/github/prs/${number}/work`, { method: 'POST', body: {} }),
     onSuccess: (result) => {
@@ -4245,14 +4309,16 @@ function GithubPanel({ status, prs, prsLoading, onSelectSession }) {
 
   const failure = notice ||
     errorText(connect.error) || errorText(save.error) || errorText(poll.error) ||
-    errorText(disconnect.error) || errorText(work.error)
+    errorText(disconnect.error) || errorText(work.error) || errorText(workIssue.error)
 
   const openPrs = (prs && prs.prs) || (status && status.open_prs) || []
+  const openIssues = (prs && prs.issues) || (status && status.open_issues) || []
   const lastError = (status && status.last_error) || ''
   const statusLine = configured
     ? [
         status.login ? `@${status.login}` : 'connected',
         `${openPrs.length} open PR${openPrs.length === 1 ? '' : 's'}`,
+        `${openIssues.length} open issue${openIssues.length === 1 ? '' : 's'}`,
         status.watching ? 'watching' : 'paused',
         `${status.poll_seconds || '—'}s poll`,
       ].join(' · ')
@@ -4307,7 +4373,7 @@ function GithubPanel({ status, prs, prsLoading, onSelectSession }) {
               }),
               jsx('div', {
                 key: 'allowed-help', className: 'text-[0.6875rem] leading-snug text-(--ui-text-quaternary)',
-                children: 'Only these users can trigger work; the agent ignores its own comments — add a teammate or a second account.',
+                children: 'Only these users can trigger work: mention the agent with @login, @sa or /sa. The agent ignores its own comments — add a teammate or a second account.',
               }),
               jsxs('div', {
                 key: 'mode', className: 'flex items-center gap-1 text-[0.6875rem] text-(--ui-text-quaternary)',
@@ -4315,6 +4381,18 @@ function GithubPanel({ status, prs, prsLoading, onSelectSession }) {
                   jsx('span', { key: 'l', className: 'mr-1', children: 'Watch' }),
                   jsx(ModeButton, { key: 'observe', label: 'Observe', active: mode === 'observe', onClick: () => setMode('observe') }),
                   jsx(ModeButton, { key: 'auto', label: 'Auto', active: mode === 'auto', onClick: () => setMode('auto') }),
+                ],
+              }),
+              jsxs('label', {
+                key: 'watch-issues', className: 'flex items-center gap-2 text-[0.6875rem] text-(--ui-text-quaternary)',
+                children: [
+                  jsx('input', {
+                    key: 'i', type: 'checkbox', checked: !!watchIssues,
+                    'aria-label': 'Also watch issues',
+                    onChange: (event) => setWatchIssues(!!event.target.checked),
+                    className: 'accent-(--ui-accent)',
+                  }),
+                  jsx('span', { key: 'l', className: 'min-w-0 flex-1', children: 'Also watch issues' }),
                 ],
               }),
               jsxs('div', {
@@ -4378,6 +4456,40 @@ function GithubPanel({ status, prs, prsLoading, onSelectSession }) {
                   }),
             ],
           }),
+          jsxs('div', {
+            key: 'issues', className: 'flex min-h-0 min-w-0 flex-1 flex-col gap-1',
+            children: [
+              jsxs('div', {
+                key: 'label', className: 'flex items-baseline justify-between gap-2',
+                children: [
+                  jsx('span', {
+                    key: 'l', className: 'text-[0.6875rem] font-medium uppercase tracking-wide text-(--ui-text-quaternary)',
+                    children: 'Open issues',
+                  }),
+                  jsx('span', {
+                    key: 'n', className: 'text-[0.6875rem] tabular-nums text-(--ui-text-quaternary)',
+                    children: openIssues.length ? String(openIssues.length) : '',
+                  }),
+                ],
+              }),
+              openIssues.length
+                ? jsx('div', {
+                    key: 'list', className: 'flex min-h-0 flex-col gap-0.5 overflow-y-auto pr-1',
+                    children: openIssues.map((issue) => jsx(GithubIssueRow, {
+                      key: String(issue.number),
+                      issue,
+                      onWork: (number) => workIssue.mutate(number),
+                      pending: workIssue.isPending && workIssue.variables === issue.number,
+                    })),
+                  })
+                : jsx('div', {
+                    key: 'empty', className: 'px-1 py-2 text-xs text-(--ui-text-tertiary)',
+                    children: configured
+                      ? (statusWatchIssues ? 'No open issues.' : 'Issue watching is off.')
+                      : 'Connect a repository to watch its issues.',
+                  }),
+            ],
+          }),
         ],
       }),
     ],
@@ -4396,8 +4508,8 @@ const ONBOARDING_STEPS = [
   {
     key: 'github',
     short: 'Watch a repo',
-    title: 'Connect a GitHub repo to watch PRs',
-    hint: 'An empty allow-list means nobody can trigger work, and the agent ignores its own comments.',
+    title: 'Connect a GitHub repo to watch PRs and issues',
+    hint: 'An empty allow-list means nobody can trigger work, and the agent ignores its own comments. Mention the agent with @login, @sa or /sa.',
   },
   {
     key: 'chat',

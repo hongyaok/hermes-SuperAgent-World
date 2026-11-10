@@ -64,6 +64,22 @@ def pr(number=7, title="Add parser tests", author="alice"):
     }
 
 
+def issue(number=3, title="Crash on an empty payload", author="alice"):
+    return {
+        "number": number,
+        "title": title,
+        "body": "POST /parse with {} raises a KeyError.",
+        "author": author,
+        "state": "open",
+        "labels": ["bug"],
+        "comment_count": 1,
+        "html_url": f"https://github.com/{REPO}/issues/{number}",
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-02T00:00:00Z",
+        "repo": REPO,
+    }
+
+
 class FakeWatcher:
     def __init__(self, status=None, poll_result=None, error=""):
         self._status = status or {
@@ -72,6 +88,8 @@ class FakeWatcher:
             "login": "agent",
             "token_set": True,
             "open_prs": [pr()],
+            "open_issues": [issue()],
+            "watch_issues": True,
             "last_poll": None,
             "last_error": "",
             "watching": False,
@@ -115,7 +133,9 @@ def install_watcher(api, monkeypatch, **kwargs):
     return watcher
 
 
-def install_client(api, monkeypatch, *, prs=None, fail="", login="agent", info=None):
+def install_client(
+    api, monkeypatch, *, prs=None, issues=None, fail="", login="agent", info=None
+):
     """Patch GitHubClient with a canned class and return it."""
 
     class FakeClient:
@@ -149,11 +169,25 @@ def install_client(api, monkeypatch, *, prs=None, fail="", login="agent", info=N
         def list_comments(self, number):
             return []
 
+        def list_open_issues(self, limit=10):
+            if fail:
+                raise api.sa_github.GitHubError(fail, 401)
+            return [dict(item) for item in (issues or [])]
+
+        def list_issue_comments(self, number):
+            return []
+
         def get_pr(self, number):
             for item in prs or []:
                 if item["number"] == number:
                     return dict(item)
             raise api.sa_github.GitHubError(f"pull request #{number} was not found", 404)
+
+        def get_issue(self, number):
+            for item in issues or []:
+                if item["number"] == number:
+                    return dict(item)
+            raise api.sa_github.GitHubError(f"issue #{number} was not found", 404)
 
     monkeypatch.setattr(api.sa_github, "GitHubClient", FakeClient)
     return FakeClient
@@ -364,6 +398,8 @@ def test_prs_lists_open_pull_requests(api, monkeypatch):
     body = api.github_prs()
     assert body["configured"] is True
     assert [item["number"] for item in body["prs"]] == [7]
+    # The same route carries the issue list, so one poll feeds both columns.
+    assert [item["number"] for item in body["issues"]] == [3]
 
 
 # -- work ----------------------------------------------------------------
@@ -587,6 +623,7 @@ def test_settings_accepts_a_list_and_coerces_the_flags(api, monkeypatch):
         {
             "allowed_users": ["@alice", "Bob", "alice"],
             "watch_new_prs": "on",
+            "watch_issues": "off",
             "poll_seconds": "45",
             "agent_login": "@superagent-bot",
         }
@@ -595,6 +632,7 @@ def test_settings_accepts_a_list_and_coerces_the_flags(api, monkeypatch):
     saved = json.loads(api.sa_settings.settings_path().read_text(encoding="utf-8"))
     assert saved["github_allowed_users"] == ["alice", "Bob"]
     assert saved["github_watch_new_prs"] is True
+    assert saved["github_watch_issues"] is False
     assert saved["github_poll_seconds"] == 45
     assert saved["github_agent_login"] == "superagent-bot"
     assert body["ok"] is True
@@ -675,3 +713,111 @@ def test_connect_rejects_a_bad_setting_before_saving(api, monkeypatch):
         api.github_connect({"repo": REPO, "token": TOKEN, "watch_mode": "always"})
     assert excinfo.value.status_code == 400
     assert not api.sa_settings.settings_path().exists()
+
+
+# -- work on an issue ----------------------------------------------------
+
+
+def test_issue_work_creates_a_session_and_launches_it(api, monkeypatch):
+    api.sa_settings.save_settings({"github_repo": REPO, "github_token": TOKEN})
+    install_client(api, monkeypatch, issues=[issue()])
+    runner = FakeRunner(store=api.sa_chats.ChatStore(api._db_path()))
+    monkeypatch.setattr(api, "_get_runner", lambda: runner)
+
+    body = api.github_issue_work(3, {"request": "the empty dict crashes it"})
+
+    assert body["ok"] is True
+    assert body["launched"] is True
+    session = body["session"]
+    assert session["source"] == "github_issue"
+    assert session["github_repo"] == REPO
+    assert session["issue_number"] == 3
+    assert session["pr_number"] is None
+    assert session["status"] == "running"
+    assert "Work on GitHub issue #3" in session["prompt"]
+    assert "the empty dict crashes it" in session["prompt"]
+    assert runner.launches[0]["repo"] == ""
+    assert_no_token(body)
+
+
+def test_issue_work_404s_for_an_unknown_issue(api, monkeypatch):
+    from fastapi import HTTPException
+
+    api.sa_settings.save_settings({"github_repo": REPO, "github_token": TOKEN})
+    install_client(api, monkeypatch, issues=[])
+    with pytest.raises(HTTPException) as excinfo:
+        api.github_issue_work(99)
+    assert excinfo.value.status_code == 404
+
+
+def test_issue_work_400s_when_github_is_not_connected(api, monkeypatch):
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as excinfo:
+        api.github_issue_work(3)
+    assert excinfo.value.status_code == 400
+    assert "not connected" in excinfo.value.detail
+
+
+def test_issue_work_rejects_an_invalid_number(api):
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as excinfo:
+        api.github_issue_work(0)
+    assert excinfo.value.status_code == 400
+
+
+def test_issue_work_isolates_the_worker_in_a_worktree(api, monkeypatch, tmp_path):
+    clone = tmp_path / "clone"
+    clone.mkdir()
+    worktree = tmp_path / "workspaces" / "worker-s-0001"
+    api.sa_settings.save_settings(
+        {"github_repo": REPO, "github_token": TOKEN, "repo_path": str(clone)}
+    )
+    install_client(api, monkeypatch, issues=[issue()])
+    runner = FakeRunner()
+    monkeypatch.setattr(api, "_get_runner", lambda: runner)
+    calls = []
+
+    def fake_worktree(repo, session_id, workspace, title="", **kwargs):
+        calls.append((repo, session_id, title))
+        return {
+            "path": str(worktree),
+            "branch": f"superagent/{str(session_id).lower()}",
+            "reused": False,
+        }
+
+    monkeypatch.setattr(api.sa_github, "prepare_worker_worktree", fake_worktree)
+
+    body = api.github_issue_work(3)
+
+    session = body["session"]
+    assert body["checkout"] == str(worktree)
+    assert session["repo"] == str(worktree)
+    assert session["worktree_path"] == str(worktree)
+    assert str(worktree) in runner.launches[0]["prompt"]
+    assert runner.launches[0]["repo"] == str(worktree)
+    assert calls and calls[0][0] == str(clone)
+
+
+def test_issue_work_survives_a_worktree_failure(api, monkeypatch, tmp_path):
+    clone = tmp_path / "clone"
+    clone.mkdir()
+    api.sa_settings.save_settings(
+        {"github_repo": REPO, "github_token": TOKEN, "repo_path": str(clone)}
+    )
+    install_client(api, monkeypatch, issues=[issue()])
+    runner = FakeRunner()
+    monkeypatch.setattr(api, "_get_runner", lambda: runner)
+
+    def broken(*args, **kwargs):
+        raise api.sa_github.GitHubError("could not create worker worktree: boom")
+
+    monkeypatch.setattr(api.sa_github, "prepare_worker_worktree", broken)
+
+    body = api.github_issue_work(3)
+
+    assert body["ok"] is True
+    assert body["checkout"] == ""
+    assert "boom" in body["warning"]
+    assert runner.launches[0]["repo"] == str(clone)

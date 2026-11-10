@@ -35,6 +35,35 @@ def pr(number=7, sha="a" * 40, title="Add parser tests", author="alice"):
     }
 
 
+def issue(number=3, title="Crash on an empty payload", author="alice", labels=("bug",)):
+    return {
+        "number": number,
+        "title": title,
+        "body": "POST /parse with {} raises a KeyError.",
+        "author": author,
+        "state": "open",
+        "labels": list(labels),
+        "comment_count": 1,
+        "html_url": f"https://github.com/{REPO}/issues/{number}",
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-02T00:00:00Z",
+        "repo": REPO,
+    }
+
+
+def issue_comment(cid=101, body="@sa fix the crash", author="alice"):
+    return {
+        "id": cid,
+        "kind": "issue",
+        "author": author,
+        "body": body,
+        "html_url": f"https://github.com/{REPO}/issues/3#issuecomment-{cid}",
+        "path": "",
+        "line": None,
+        "created_at": "2026-01-03T00:00:00Z",
+    }
+
+
 def comment(cid=1, body="@agent please fix the parser", author="alice", kind="issue"):
     return {
         "id": cid,
@@ -49,12 +78,27 @@ def comment(cid=1, body="@agent please fix the parser", author="alice", kind="is
 
 
 class FakeClient:
-    def __init__(self, prs=None, comments=None, login="agent", fail="", fail_comments=""):
+    def __init__(
+        self,
+        prs=None,
+        comments=None,
+        issues=None,
+        issue_comments=None,
+        login="agent",
+        fail="",
+        fail_comments="",
+        fail_issues="",
+    ):
         self.prs = list(prs or [])
         self.comments = {key: list(value) for key, value in (comments or {}).items()}
+        self.issues = list(issues or [])
+        self.issue_comments = {
+            key: list(value) for key, value in (issue_comments or {}).items()
+        }
         self.login = login
         self.fail = fail
         self.fail_comments = fail_comments
+        self.fail_issues = fail_issues
         self.calls = []
 
     def list_open_prs(self, limit=10):
@@ -68,6 +112,18 @@ class FakeClient:
         if self.fail_comments:
             raise sa_github.GitHubError(self.fail_comments, 500)
         return [dict(item) for item in self.comments.get(number, [])]
+
+    def list_open_issues(self, limit=10):
+        self.calls.append(("issues", limit))
+        if self.fail_issues:
+            raise sa_github.GitHubError(self.fail_issues, 500)
+        return [dict(item) for item in self.issues]
+
+    def list_issue_comments(self, number):
+        self.calls.append(("issue_comments", number))
+        if self.fail_comments:
+            raise sa_github.GitHubError(self.fail_comments, 500)
+        return [dict(item) for item in self.issue_comments.get(number, [])]
 
     def me(self):
         return {"login": self.login, "id": 1}
@@ -100,6 +156,7 @@ def make_settings(tmp_path, **overrides):
         "github_allowed_users": ["alice"],
         "github_watch_mode": "observe",
         "github_watch_new_prs": False,
+        "github_watch_issues": True,
         "github_pr_limit": 10,
         "github_poll_seconds": 90,
         "repo_path": "",
@@ -394,6 +451,8 @@ def test_status_is_json_safe_and_never_contains_the_token(chat, tmp_path):
     assert len(status["open_prs"]) == 1
     assert status["watch_mode"] == "observe"
     assert status["watch_new_prs"] is False
+    assert status["open_issues"] == []
+    assert status["watch_issues"] is True
     assert status["allowed_users"] == ["alice"]
     assert status["poll_seconds"] == 90
     assert status["watching"] is False
@@ -410,3 +469,114 @@ def test_sessions_created_counts_work(chat, tmp_path):
     client.comments[7].append(comment(cid=12))
     watcher.poll_once()
     assert watcher.sessions_created == 1
+
+
+# -- issues --------------------------------------------------------------
+
+
+def test_an_issue_comment_creates_a_github_issue_session(chat, tmp_path):
+    settings = make_settings(tmp_path)
+    client = FakeClient(prs=[], issues=[issue()], issue_comments={3: []})
+    watcher, runner = make_watcher(chat, settings, client)
+    watcher.poll_once()  # baseline
+
+    client.issue_comments[3].append(issue_comment())
+    summary = watcher.poll_once()
+
+    assert len(summary["created"]) == 1
+    session = chat.get_session(summary["created"][0])
+    assert session["status"] == sa_chats.OBSERVED
+    assert session["source"] == "github_issue"
+    assert session["issue_number"] == 3
+    assert session["pr_number"] is None
+    assert session["pr_url"] is None
+    assert session["github_repo"] == REPO
+    assert session["title"].startswith("Issue #3:")
+    assert "Work on GitHub issue #3" in session["prompt"]
+    assert "fix the crash" in session["prompt"]
+    assert runner.launches == []  # observe mode never launches
+
+
+def test_the_baseline_covers_issue_comments_too(chat, tmp_path):
+    settings = make_settings(tmp_path)
+    client = FakeClient(
+        prs=[], issues=[issue()], issue_comments={3: [issue_comment(cid=201)]}
+    )
+    watcher, _ = make_watcher(chat, settings, client)
+
+    watcher.poll_once()
+
+    assert chat.is_seen("gh_comment:owner/name:issue:201")
+    assert chat.is_seen(f"gh_baseline:{REPO}")
+    assert watcher.poll_once()["created"] == []
+
+
+def test_issue_watching_can_be_turned_off(chat, tmp_path):
+    settings = make_settings(tmp_path, github_watch_issues=False)
+    client = FakeClient(
+        prs=[pr()], comments={7: []}, issues=[issue()], issue_comments={3: []}
+    )
+    watcher, _ = make_watcher(chat, settings, client)
+    watcher.poll_once()
+
+    assert ("issues", 10) not in client.calls
+
+    client.issue_comments[3].append(issue_comment())
+    client.comments[7].append(comment(cid=2))
+    summary = watcher.poll_once()
+
+    assert len(summary["created"]) == 1
+    assert chat.get_session(summary["created"][0])["source"] == "github_pr"
+
+
+def test_a_broken_issue_list_keeps_pr_work_and_the_baseline_open(chat, tmp_path):
+    settings = make_settings(tmp_path)
+    client = FakeClient(
+        prs=[pr()], comments={7: []}, fail_issues="issue list is down"
+    )
+    watcher, _ = make_watcher(chat, settings, client)
+
+    summary = watcher.poll_once()
+
+    assert summary["polled"] == 1
+    assert any("issue list is down" in item for item in summary["errors"])
+    assert not chat.is_seen(f"gh_baseline:{REPO}")
+
+    client.fail_issues = ""
+    watcher.poll_once()
+    assert chat.is_seen(f"gh_baseline:{REPO}")
+
+
+def test_auto_mode_isolates_an_issue_worker_in_a_worktree(chat, tmp_path, monkeypatch):
+    repo_path = tmp_path / "clone"
+    repo_path.mkdir()
+    worktree_path = tmp_path / "workspaces" / "worker-s-0001"
+    settings = make_settings(tmp_path, github_watch_mode="auto", repo_path=str(repo_path))
+    client = FakeClient(prs=[], issues=[issue()], issue_comments={3: []})
+    watcher, runner = make_watcher(chat, settings, client)
+    watcher.poll_once()
+
+    calls = []
+
+    def fake_worktree(repo, session_id, workspace, title="", **kwargs):
+        calls.append((repo, session_id, workspace, title))
+        return {
+            "path": str(worktree_path),
+            "branch": f"superagent/{str(session_id).lower()}",
+            "reused": False,
+        }
+
+    monkeypatch.setattr(sa_watcher.sa_github, "prepare_worker_worktree", fake_worktree)
+    client.issue_comments[3].append(issue_comment())
+    summary = watcher.poll_once()
+
+    session = chat.get_session(summary["created"][0])
+    assert session["status"] == sa_chats.QUEUED
+    assert session["repo"] == str(worktree_path)
+    assert session["worktree_path"] == str(worktree_path)
+    assert session["branch_name"].startswith("superagent/")
+    assert len(runner.launches) == 1
+    assert runner.launches[0]["repo"] == str(worktree_path)
+    assert str(worktree_path) in runner.launches[0]["prompt"]
+    assert calls and calls[0][0] == str(repo_path)
+    assert calls[0][1] == summary["created"][0]

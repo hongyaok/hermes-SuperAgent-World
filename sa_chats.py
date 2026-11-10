@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     github_repo       TEXT,
     pr_number         INTEGER,
     pr_url            TEXT,
+    issue_number      INTEGER,
     pid               INTEGER,
     tokens            INTEGER,
     duration_ms       INTEGER,
@@ -154,6 +155,7 @@ UPDATABLE = (
     "github_repo",
     "pr_number",
     "pr_url",
+    "issue_number",
     "pid",
     "tokens",
     "duration_ms",
@@ -363,6 +365,9 @@ def session_markdown(session: dict, max_chars: int = MAX_EXPORT_CHARS) -> str:
     if session.get("pr_number"):
         url = str(session.get("pr_url") or "").strip()
         facts.append(("Pull request", f"#{session['pr_number']}" + (f" {url}" if url else "")))
+    if session.get("issue_number"):
+        url = str(session.get("pr_url") or "").strip()
+        facts.append(("Issue", f"#{session['issue_number']}" + (f" {url}" if url else "")))
     if session.get("hermes_session_id"):
         facts.append(("Hermes session", f"`{session['hermes_session_id']}`"))
 
@@ -448,6 +453,9 @@ class ChatStore:
             # NULL means "no harness recorded", which behaves exactly like the
             # old full-toolset worker. New rows normally carry "mini".
             conn.execute("ALTER TABLE chat_sessions ADD COLUMN harness TEXT")
+        if "issue_number" not in columns:
+            # GitHub issue sessions reuse this table; PR rows leave it NULL.
+            conn.execute("ALTER TABLE chat_sessions ADD COLUMN issue_number INTEGER")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS chat_sessions_archived"
             " ON chat_sessions(archived_at)"
@@ -515,6 +523,7 @@ class ChatStore:
         github_repo: Optional[str] = None,
         pr_number: Optional[int] = None,
         pr_url: Optional[str] = None,
+        issue_number: Optional[int] = None,
         status: str = QUEUED,
         parent_session_id: Optional[str] = None,
         avatar_slug: str = "",
@@ -568,6 +577,7 @@ class ChatStore:
             "github_repo": github_repo,
             "pr_number": pr_number,
             "pr_url": pr_url,
+            "issue_number": issue_number,
             "pid": None,
             "tokens": None,
             "duration_ms": None,
@@ -638,13 +648,15 @@ class ChatStore:
             conn.execute(
                 """INSERT INTO chat_sessions
                    (id, title, prompt, status, model, provider, reasoning_effort, repo,
-                    hermes_session_id, source, github_repo, pr_number, pr_url, pid, tokens,
+                    hermes_session_id, source, github_repo, pr_number, pr_url,
+                    issue_number, pid, tokens,
                     duration_ms, error, last_event, parent_session_id, town_slot,
                     avatar_slug, branch_name, worktree_path, harness, created_at,
                     updated_at, started_at, finished_at)
                    VALUES (:id, :title, :prompt, :status, :model, :provider,
                            :reasoning_effort, :repo, :hermes_session_id, :source,
-                           :github_repo, :pr_number, :pr_url, :pid, :tokens,
+                           :github_repo, :pr_number, :pr_url, :issue_number,
+                           :pid, :tokens,
                            :duration_ms, :error, :last_event, :parent_session_id,
                            :town_slot, :avatar_slug, :branch_name, :worktree_path,
                            :harness, :created_at, :updated_at, :started_at,

@@ -137,6 +137,7 @@ SETTINGS_KEYS = (
     "github_allowed_users",
     "github_watch_mode",
     "github_watch_new_prs",
+    "github_watch_issues",
     "github_poll_seconds",
     "github_pr_base_branch",
     "github_pr_draft_by_default",
@@ -2236,6 +2237,8 @@ def _github_settings_patch(data: dict) -> dict[str, Any]:
         patch["github_watch_mode"] = mode
     if "watch_new_prs" in data:
         patch["github_watch_new_prs"] = _github_bool(data.get("watch_new_prs"), "watch_new_prs")
+    if "watch_issues" in data:
+        patch["github_watch_issues"] = _github_bool(data.get("watch_issues"), "watch_issues")
     if "poll_seconds" in data:
         raw = data.get("poll_seconds")
         try:
@@ -2328,7 +2331,7 @@ def github_test(body: dict | None = None) -> dict[str, Any]:
 def github_connect(body: dict) -> dict[str, Any]:
     """Validate a repository/token pair, save it, and start watching.
 
-    Optional `allowed_users`, `watch_mode`, `watch_new_prs`, `poll_seconds` and
+    Optional `allowed_users`, `watch_mode`, `watch_new_prs`, `watch_issues`, `poll_seconds` and
     `agent_login` keys are applied in the same write, so the panel's Connect
     button saves the form in one round-trip.
     """
@@ -2430,7 +2433,13 @@ def github_prs() -> dict[str, Any]:
         status = _get_watcher().status()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=_scrub(str(exc))) from exc
-    return {"configured": bool(status.get("configured")), "prs": status.get("open_prs") or []}
+    # The route keeps its name: it was the only watch list before issues were
+    # added, and three surfaces already call it.
+    return {
+        "configured": bool(status.get("configured")),
+        "prs": status.get("open_prs") or [],
+        "issues": status.get("open_issues") or [],
+    }
 
 
 @router.post("/github/prs/{number}/work")
@@ -2502,6 +2511,100 @@ def github_pr_work(number: int, body: dict | None = None) -> dict[str, Any]:
             model=str(settings.get("default_model") or "") or None,
             provider=str(settings.get("default_provider") or "") or None,
             repo=target,
+        )
+    except Exception as exc:
+        failed = _fail_session(store, session_id, str(exc) or exc.__class__.__name__)
+        failed["checkout"] = checkout
+        failed["warning"] = warning
+        return failed
+    return {
+        "ok": True,
+        "launched": True,
+        "session": store.get_session(session_id, message_limit=0),
+        "checkout": checkout,
+        "warning": warning,
+    }
+
+
+@router.post("/github/issues/{number}/work")
+def github_issue_work(number: int, body: dict | None = None) -> dict[str, Any]:
+    """Start a worker on one issue immediately (an explicit human action)."""
+    if number <= 0:
+        raise HTTPException(status_code=400, detail="invalid issue number")
+    settings = _github_settings()
+    repo = str(settings.get("github_repo") or "").strip()
+    token = str(settings.get("github_token") or "").strip()
+    if not repo or not token:
+        raise HTTPException(status_code=400, detail="GitHub is not connected")
+    client = sa_github.GitHubClient(token, repo)
+    try:
+        issue = client.get_issue(number)
+    except sa_github.GitHubError as exc:
+        code = 404 if exc.status == 404 else 400
+        detail = f"issue #{number} was not found" if code == 404 else _scrub(str(exc))
+        raise HTTPException(status_code=code, detail=detail) from exc
+
+    allow_pr = bool(settings.get("allow_worker_pr_create", False))
+    request_text = _scrub(str((body or {}).get("request") or "").strip())
+    comment = {"author": "you", "body": request_text} if request_text else None
+    repo_path = str(settings.get("repo_path") or "").strip()
+    prompt = sa_github.build_issue_prompt(issue, comment=comment, can_create_pr=allow_pr)
+    session_repo = repo_path if repo_path and Path(repo_path).expanduser().is_dir() else ""
+    effort = _reasoning_effort(settings.get("default_reasoning_effort"))
+    store = _chat_store()
+    session = store.create_session(
+        prompt,
+        title=f"Issue #{number}: {issue.get('title') or ''}".strip(),
+        model=str(settings.get("default_model") or ""),
+        provider=str(settings.get("default_provider") or ""),
+        reasoning_effort=effort,
+        repo=session_repo,
+        source="github_issue",
+        github_repo=repo,
+        issue_number=number,
+        status=sa_chats.QUEUED,
+    )
+    session_id = str(session["id"])
+    store.add_event(session_id, "github", f"manual work on issue #{number}")
+
+    # An issue has no branch to check out, so the worker gets a fresh worktree
+    # off the clone instead of sharing the user's working tree.
+    checkout = ""
+    warning = ""
+    if session_repo:
+        try:
+            worktree = sa_github.prepare_worker_worktree(
+                session_repo,
+                session_id,
+                str(sa_settings.data_dir() / "workspaces"),
+                title=str(issue.get("title") or ""),
+            )
+            checkout = str(worktree.get("path") or "")
+        except sa_github.GitHubError as exc:
+            warning = _scrub(str(exc))
+        if checkout:
+            prompt = sa_github.build_issue_prompt(
+                issue, comment=comment, checkout=checkout, can_create_pr=allow_pr
+            )
+            store.update_session(
+                session_id,
+                prompt=prompt,
+                repo=checkout,
+                worktree_path=checkout,
+                branch_name=str(worktree.get("branch") or ""),
+            )
+            session_repo = checkout
+
+    if warning:
+        store.add_event(session_id, "github", f"checkout failed: {warning}")
+
+    try:
+        _get_runner().launch_turn(
+            session_id,
+            prompt,
+            model=str(settings.get("default_model") or "") or None,
+            provider=str(settings.get("default_provider") or "") or None,
+            repo=session_repo,
         )
     except Exception as exc:
         failed = _fail_session(store, session_id, str(exc) or exc.__class__.__name__)

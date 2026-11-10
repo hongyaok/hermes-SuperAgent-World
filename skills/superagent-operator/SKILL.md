@@ -1,7 +1,7 @@
 ---
 name: superagent-operator
 description: Operate Superagent chats, workers and GitHub watch.
-version: 0.6.4
+version: 0.9.0
 platforms: [linux, macos, windows]
 metadata:
   hermes:
@@ -193,7 +193,7 @@ security:
 
 ---
 
-## 5. GitHub Connect & PR Watch
+## 5. GitHub Connect & Watch
 
 Header → **GitHub**, or the CLI:
 
@@ -204,28 +204,38 @@ hermes superagent github connect --repo owner/name --token <token> --allowed ali
 hermes superagent github prs
 hermes superagent github poll
 hermes superagent github work 7 --request "add a regression test"
+hermes superagent github work 3 --issue --request "it crashes on {}"
 hermes superagent github disconnect
 ```
 
-**What triggers work.** A PR comment that mentions the agent (`@<login>`,
+**What triggers work.** A comment on an open **pull request or issue** that
+mentions the agent (`@<login>`, the short aliases `@sa` and `/sa`,
 `@superagent`, `/superagent`, or a line starting `superagent:`) from an allowed
-user. With `github_watch_new_prs` on, a new head commit starts one review
-session per SHA.
+user. The aliases must stand alone, so `@sample` and `docs/sa.md` do not
+trigger. With `github_watch_new_prs` on, a new PR head commit starts one review
+session per SHA. `github_watch_issues` (on by default) decides whether issues
+are polled at all; issue **bodies**, brand-new issues with no comment, and
+label/assignment events are not watched.
 
 **observe vs auto.**
 
 - `observe` (default) records the request as an `observed` session and launches
-  nothing. A human promotes it or uses **Work on this PR**.
+  nothing. A human promotes it, or uses **Work on this PR** / **Work on this
+  issue** (`github work <n> [--issue]`).
 - `auto` creates the session as `queued` and launches it. With `repo_path` set,
-  the PR is fetched and checked out as a detached `git worktree` under
-  `<data_dir>/workspaces/pr-<n>`, leaving your clone and branch untouched. A
-  checkout failure falls back to `repo_path` with a warning event; no usable
-  repository marks the session `failed`.
+  a PR is fetched and checked out as a detached `git worktree` under
+  `<data_dir>/workspaces/pr-<n>`; an issue has no head to fetch, so it gets a
+  fresh `worker-<session_id>` worktree off the clone. Either way your checkout
+  and branch stay untouched. A checkout failure falls back to `repo_path` with
+  a warning event; no usable repository marks the session `failed`.
 
 **Rules that prevent noise.**
 
-- The first successful poll is a **baseline**: existing comments and PR heads
-  are recorded as seen, so connecting a busy repository does not replay history.
+- The first successful poll is a **baseline**: existing PR and issue comments
+  and every PR head are recorded as seen, so connecting a busy repository does
+  not replay history.
+- `/github/prs` (and `hermes superagent github prs`) returns both lists:
+  `{configured, prs, issues}`.
 - Dedupe lives in `gh_seen`, so restarts do not duplicate work.
 - Bots and the agent's own comments are ignored. Empty allow-list = nobody.
 - Poll interval is `github_poll_seconds` (minimum 5, default 90; the desktop/API
@@ -328,8 +338,9 @@ error, `2` usage.
 | `turn_timeout_seconds` | `1800` | Runaway guard; `0` disables. |
 | `github_repo` | `""` | `owner/name` to watch. |
 | `github_allowed_users` | `[]` | Who may trigger work; empty = nobody. |
-| `github_watch_mode` | `observe` | `observe` or `auto` for PR mentions. |
+| `github_watch_mode` | `observe` | `observe` or `auto` for PR and issue mentions. |
 | `github_watch_new_prs` | `false` | Review every new PR head commit. |
+| `github_watch_issues` | `true` | Poll open issues too; `@sa`/`/sa` mentions in issue comments start work. |
 | `github_poll_seconds` | `90` | Background poll interval. |
 | `allow_worker_git_worktree` | `true` | Isolate each spawned town worker into its own git worktree. |
 | `allow_worker_pr_create` | `false` | Allow workers/Router to commit, push feature branches, and open GitHub PRs. |

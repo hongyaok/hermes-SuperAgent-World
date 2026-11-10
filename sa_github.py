@@ -248,6 +248,62 @@ class GitHubClient:
             "fallback": False,
         }
 
+    # -- issues ----------------------------------------------------------
+
+    def _normalize_issue(self, item: dict) -> dict[str, Any]:
+        user = item.get("user") if isinstance(item.get("user"), dict) else {}
+        labels = [
+            str(label.get("name") or "")
+            for label in (item.get("labels") or [])
+            if isinstance(label, dict)
+        ]
+        return {
+            "number": item.get("number"),
+            "title": str(item.get("title") or ""),
+            "body": str(item.get("body") or ""),
+            "author": str(user.get("login") or ""),
+            "state": str(item.get("state") or ""),
+            "labels": [name for name in labels if name],
+            "comment_count": int(item.get("comments") or 0),
+            "html_url": str(item.get("html_url") or ""),
+            "created_at": str(item.get("created_at") or ""),
+            "updated_at": str(item.get("updated_at") or ""),
+            "repo": self.repo,
+        }
+
+    def list_open_issues(self, limit: int = 10) -> list[dict[str, Any]]:
+        """Open issues only — pull requests never come back from here.
+
+        GitHub has no "issues but not pull requests" filter on this endpoint:
+        every PR *is* an issue and arrives with a `pull_request` key. So the
+        page is fetched slightly larger and the PRs are dropped before the
+        slice, which keeps the caller's `limit` meaning "issues".
+        """
+        limit = max(1, min(int(limit or 10), 100))
+        per_page = min(100, limit * 2 + 20)
+        query = urllib.parse.urlencode(
+            {"state": "open", "sort": "updated", "direction": "desc", "per_page": per_page}
+        )
+        data = self._call("GET", self._repo_path(f"issues?{query}")) or []
+        if not isinstance(data, list):
+            return []
+        issues = [
+            self._normalize_issue(item)
+            for item in data
+            if isinstance(item, dict) and not item.get("pull_request")
+        ]
+        return issues[:limit]
+
+    def get_issue(self, number: int) -> dict[str, Any]:
+        data = self._call("GET", self._repo_path(f"issues/{int(number)}")) or {}
+        if not isinstance(data, dict) or not data:
+            raise GitHubError(f"issue #{number} was not found", 404)
+        if data.get("pull_request"):
+            # "/issues/7" answers for a PR too; refuse rather than let a PR be
+            # handled as an issue with no diff to read.
+            raise GitHubError(f"#{number} is a pull request, not an issue", 422)
+        return self._normalize_issue(data)
+
     # -- comments --------------------------------------------------------
 
     def _normalize_comment(self, item: dict, kind: str) -> dict[str, Any]:
@@ -280,6 +336,24 @@ class GitHubClient:
         items.sort(key=lambda item: (item["created_at"], item["id"] or 0))
         return items
 
+    def list_issue_comments(self, number: int) -> list[dict[str, Any]]:
+        """Conversation comments on an issue, oldest first.
+
+        Deliberately not `list_comments`: that also asks for
+        `/pulls/<n>/comments`, which 404s for an issue. An issue has no diff,
+        so there are no review comments to merge in.
+        """
+        rows = self._call(
+            "GET", self._repo_path(f"issues/{int(number)}/comments?per_page=100")
+        ) or []
+        items = [
+            self._normalize_comment(row, "issue")
+            for row in rows
+            if isinstance(row, dict)
+        ] if isinstance(rows, list) else []
+        items.sort(key=lambda item: (item["created_at"], item["id"] or 0))
+        return items
+
     def post_comment(self, number: int, body: str) -> dict[str, Any]:
         payload = {"body": str(body or "")[:BODY_LIMIT]}
         data = self._call("POST", self._repo_path(f"issues/{int(number)}/comments"), payload) or {}
@@ -292,12 +366,18 @@ class GitHubClient:
 
 # -- triggers ------------------------------------------------------------
 
+# The short aliases, `@sa` and `/sa`, anywhere in a body. Both lookarounds
+# matter: without them `@sample` would trigger, and so would the `/sa` in
+# `docs/sa.md`, because the missing rule is "the alias must stand alone".
+_SHORT_TRIGGER = re.compile(r"(?<![\w-])[@/]sa(?![\w-])", re.IGNORECASE)
+
 
 def is_trigger(body: str, login: str = "") -> bool:
     """True when a comment asks Superagent to do something.
 
-    Accepted forms: `@<login>`, `@superagent`, `/superagent`, or a line that
-    starts with `superagent:`. Case-insensitive; an empty body never triggers.
+    Accepted forms, anywhere in the body: `@<login>`, the short aliases `@sa`
+    and `/sa`, `@superagent`, `/superagent`, or a line that starts with
+    `superagent:`. Case-insensitive; an empty body never triggers.
     """
     text = str(body or "").strip()
     if not text:
@@ -305,6 +385,8 @@ def is_trigger(body: str, login: str = "") -> bool:
     lowered = text.lower()
     login = (login or "").strip().lower()
     if login and f"@{login}" in lowered:
+        return True
+    if _SHORT_TRIGGER.search(text):
         return True
     if "@superagent" in lowered or "/superagent" in lowered:
         return True
@@ -645,6 +727,80 @@ def build_pr_prompt(
             "- When asked to review or approve this pull request, use the superagent_pr_review tool."
         )
     lines += [
+        "- If the request needs a design decision, ask one concrete question rather than guessing.",
+        "- Finish with a summary of at most 200 words: what changed, files touched,"
+        " checks run, and anything unresolved.",
+    ]
+    return "\n".join(lines)
+
+
+def build_issue_prompt(
+    issue: dict[str, Any],
+    comment: Optional[dict[str, Any]] = None,
+    checkout: str = "",
+    *,
+    can_create_pr: bool = False,
+) -> str:
+    """The worker prompt for one issue: context, the ask, and the ground rules.
+
+    An issue has no diff to review, so this asks for the fix the comment
+    requests; `build_pr_prompt` is the reviewing shape.
+    """
+    issue = issue or {}
+    number = issue.get("number")
+    title = str(issue.get("title") or "").strip()
+    repo = str(issue.get("repo") or "").strip()
+    author = str(issue.get("author") or "").strip()
+    labels = [str(name).strip() for name in (issue.get("labels") or []) if str(name).strip()]
+    body = str(issue.get("body") or "").strip()
+
+    lines = [f"Work on GitHub issue #{number}" + (f" in {repo}." if repo else "."), ""]
+    lines.append(f"Issue #{number}: {title}".rstrip())
+    if issue.get("html_url"):
+        lines.append(f"URL: {issue['html_url']}")
+    lines.append(f"Opened by: {author or 'unknown'}")
+    if labels:
+        lines.append(f"Labels: {', '.join(labels)}")
+    if body:
+        clipped = body if len(body) <= MAX_PROMPT_BODY else body[:MAX_PROMPT_BODY] + "…"
+        lines += ["", "Description:", clipped]
+
+    if comment:
+        c_author = str(comment.get("author") or "someone").strip() or "someone"
+        c_body = str(comment.get("body") or "").strip() or "(no text)"
+        if len(c_body) > MAX_PROMPT_COMMENT:
+            c_body = c_body[:MAX_PROMPT_COMMENT] + "…"
+        lines += ["", f"Triggering comment from @{c_author}:", c_body]
+
+    lines += ["", "Checkout:"]
+    if checkout:
+        lines += [
+            f"An isolated git worktree for this issue is at: {checkout}",
+            "Work only inside that directory; do not touch the original clone.",
+        ]
+    else:
+        lines.append("No isolated checkout was prepared; work in the repository you were given.")
+
+    if can_create_pr:
+        commit_rule = (
+            "- Do NOT push to main/master or merge. To publish the change when asked, use the"
+            f" superagent_pr_create tool and mention #{number} in the pull request body;"
+            " otherwise leave the change in the working tree."
+        )
+    else:
+        commit_rule = (
+            "- Do NOT commit, push, merge, or open/update a pull request."
+            " Leave changes in the working tree for a human."
+        )
+
+    lines += [
+        "",
+        "What to do:",
+        "- Read the code the issue points at before changing anything.",
+        "- Make the smallest change that resolves the request; follow the repository's existing style.",
+        "- Add or update a test that would have caught the problem, when the repository has tests.",
+        "- Run the relevant tests or checks. If there are none, say what you checked instead.",
+        commit_rule,
         "- If the request needs a design decision, ask one concrete question rather than guessing.",
         "- Finish with a summary of at most 200 words: what changed, files touched,"
         " checks run, and anything unresolved.",
