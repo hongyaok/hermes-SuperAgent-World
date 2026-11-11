@@ -303,6 +303,16 @@ When the operator explicitly enables `allow_worker_pr_create` (`default: false`)
 When the operator explicitly enables `allow_router_pr_approve` (`default: false`):
 - `GitHubClient.create_review()` (`POST /repos/{repo}/pulls/{n}/reviews`) submits `APPROVE`, `REQUEST_CHANGES`, or `COMMENT` reviews via `superagent_pr_review` or the house dialog. If GitHub returns HTTP 422 because the token owner authored the PR (`"Can not approve your own pull request"`), it automatically falls back to a formal `COMMENT` review prefixed with `✅ **Approved by Superagent**`.
 
+### Development Loop (`sa_devloop.py`, `POST /chats/{id}/dev-loop`)
+
+The Router already had every tool the cycle needs: review a PR, merge it, message the worker. The loop is the **policy** that runs that cycle unattended for a bounded number of rounds, and it is deliberately the smallest possible policy:
+
+- **Pull, not push.** Every finished turn asks one question — "is a worker PR waiting that no round has picked up?" — and starts at most one Router turn. There is no timer, no queue and no second poller. A PR that arrives while the Router is busy is therefore handled by the Router's *own* finish, not by a second queued turn, and a failed launch simply leaves the work for the next one.
+- **Two dedupe keys, both in `gh_seen`.** `dev_loop:<worker>:<turn>` marks a round as started for one finished turn, so two hooks cannot launch it twice. `dev_loop_merged:<worker>:<pr>` is written by `superagent_pr_merge` on success, so a worker turn that only re-reads an already-merged PR does not start another round; a turn after `REQUEST_CHANGES` (nothing merged) does, which is how a rejected PR comes back for a second look.
+- **One worker per loop, not one house per round.** A round messages the worker that opened the PR, so its worktree, branch and Hermes history continue and the town stays inside its twelve plots. That is also why rounds merge with a merge commit: squash and rebase leave the branch's old commits outside the base, and the next PR would show them again.
+- **The loop uses the publishing switches; it never grants them.** Arming requires `allow_router_pr_approve` and `allow_worker_merge_pr` and is a `400` otherwise, with a message naming both. One predicate (`missing_requirements`) feeds the route, the CLI and the turn hook, so a control can never be offered that the tools below it would refuse.
+- **Rounds are a cost ceiling.** A round is one started Router turn (review plus merge plus instruction), whether or not it ends in a merge. When the budget is spent the loop parks itself with a single `dev_loop_done` event instead of repeating the same refusal.
+
 ---
 
 ## 9. Safety Model
@@ -318,6 +328,7 @@ The plugin is designed so that the worst failure is a bad diff a human can disca
 - **Fail closed on GitHub.** Empty allow-list = nobody (enforced in both `GitHubWatcher` and `GitHubSource`); bots and self-comments are ignored; a malformed baseline fetch leaves the baseline open for a retry rather than treating history as new.
 - **Publishing is a ladder of separate switches.** Opening a PR (`allow_worker_pr_create`), resolving an issue into a PR (`allow_issue_pr_create`), merging (`allow_worker_merge_pr`), a formal review verdict (`allow_router_pr_approve`) and replying on the thread (`github_reply_on_finish`) are five decisions that all default to `false`; none implies another. An issue may publish while PR workers stay read-only, and a reviewer may comment without being able to merge.
 - **The reply is the preview body, not a new one.** `sa_replies` calls `sa_diff.default_comment_body`, the same function behind **Comment on PR**, so an automatic comment can never say something the human preview would not have said. A reply is one per session (`gh_reply:<session_id>`), because a follow-up turn would otherwise re-post a near-identical comment.
+- **The development loop automates, it does not authorise.** Arming a town's loop is refused unless `allow_router_pr_approve` and `allow_worker_merge_pr` are already on, and every round still goes through the same `superagent_pr_review` / `superagent_pr_merge` handlers, including their refusals for a draft, a closed PR, a conflicting head or a disabled switch. Turning the loop off takes effect immediately: no round starts from a later turn.
 - **A merge reads the body, not the status.** GitHub answers `200` with `merged: false` for a merge it did not perform, so `merge_pr` returns that flag and `superagent_pr_merge` reports a refusal as `{ok: false}`. The tool posts its verdict comment first — so the reasoning survives a refusal — and re-reads the PR because `mergeable` is only computed by `GET /pulls/{n}`.
 
 ---

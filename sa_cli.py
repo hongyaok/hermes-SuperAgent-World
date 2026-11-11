@@ -17,6 +17,7 @@ from typing import Any
 try:
     from . import (
         sa_chats,
+        sa_devloop,
         sa_diff,
         sa_engine,
         sa_github,
@@ -27,6 +28,7 @@ try:
     )
 except ImportError:  # top-level import (root __init__ loaded as `__init__` by pytest)
     import sa_chats  # type: ignore[no-redef]
+    import sa_devloop  # type: ignore[no-redef]
     import sa_diff  # type: ignore[no-redef]
     import sa_engine  # type: ignore[no-redef]
     import sa_github  # type: ignore[no-redef]
@@ -1142,8 +1144,15 @@ def render_towns(data: dict) -> str:
         town_id = str(town.get("id") or "?")
         town_status = str(town.get("status") or "?")
         town_elapsed = _format_elapsed(town.get("elapsed_seconds"))
+        # An armed development loop is the town's most load-bearing state: it
+        # decides whether a worker PR gets merged without a human.
+        loop_text = (
+            f"  loop {sa_devloop.rounds_used(town)}/{sa_devloop.rounds_of(town)}"
+            if sa_devloop.loop_on(town)
+            else ""
+        )
         lines.append(
-            f"  {town_id:<7} {town_status:<10} {town_elapsed:>8}  {title}  {summary}"
+            f"  {town_id:<7} {town_status:<10} {town_elapsed:>8}  {title}  {summary}{loop_text}"
         )
         for worker in workers:
             slot = worker.get("town_slot")
@@ -1793,6 +1802,101 @@ def _show_session(session_id: str, engine: Any, want_json: bool) -> int:
     return 0
 
 
+LOOP_USAGE = (
+    "usage: hermes superagent loop <session-id> [--on | --off] [--rounds N] [--json]"
+)
+
+
+def render_loop(session: dict, pending: dict | None = None) -> str:
+    """One line: whether the loop is armed, its budget, and what is waiting."""
+    session_id = str(session.get("id") or "")
+    if not sa_devloop.loop_on(session):
+        budget = sa_devloop.rounds_of(session)
+        return f"{session_id}  development loop: off ({budget} round budget)"
+    used = sa_devloop.rounds_used(session)
+    budget = sa_devloop.rounds_of(session)
+    left = max(0, budget - used)
+    line = f"{session_id}  development loop: on — round {used} of {budget} ({left} left)"
+    if pending:
+        worker = str((pending.get("worker") or {}).get("id") or "?")
+        line += f", PR #{pending.get('pr_number')} from {worker} waiting"
+    return line
+
+
+def _loop_session(args: Any, want_json: bool) -> int:
+    """Show, arm, disarm or re-budget one router town's development loop."""
+    session_id = _session_id_arg(getattr(args, "session_id", ""))
+    if not session_id:
+        print(LOOP_USAGE)
+        return 2
+    enable = bool(getattr(args, "enable", False))
+    disable = bool(getattr(args, "disable", False))
+    if enable and disable:
+        print("error: --on and --off are opposites; pass one of them")
+        return 2
+    raw_rounds = getattr(args, "rounds", None)
+    rounds = None
+    if raw_rounds is not None:
+        try:
+            rounds = sa_devloop.normalize_rounds(raw_rounds, strict=True)
+        except ValueError as exc:
+            print(f"error: {exc}")
+            return 2
+    try:
+        store = _session_store()
+        session = store.get_session(session_id, message_limit=0)
+    except Exception as exc:
+        print(f"error: could not read the chat store: {exc}")
+        return 1
+    if session is None:
+        print(f"error: unknown chat session {session_id}")
+        return 1
+    if session.get("parent_session_id") is not None:
+        print(f"error: {session_id} is a worker; only a router town has a development loop")
+        return 2
+
+    changed = enable or disable or rounds is not None
+    if changed:
+        target = True if enable else (False if disable else sa_devloop.loop_on(session))
+        try:
+            session = sa_devloop.arm(store, session_id, enabled=target, rounds=rounds)
+        except ValueError as exc:
+            print(f"error: {exc}")
+            return 2
+        except Exception as exc:
+            print(f"error: could not save the loop: {exc}")
+            return 1
+
+    armed = sa_devloop.loop_on(session)
+    pending = sa_devloop.pending_pr(store, session_id) if armed else None
+    if want_json:
+        print(json.dumps(
+            {
+                "ok": True,
+                "changed": changed,
+                "loop": {
+                    "enabled": armed,
+                    "round": sa_devloop.rounds_used(session),
+                    "rounds": sa_devloop.rounds_of(session),
+                },
+                "pending": (
+                    {
+                        "worker_session_id": str((pending.get("worker") or {}).get("id") or ""),
+                        "pr_number": pending.get("pr_number"),
+                    }
+                    if pending else None
+                ),
+                "session": session,
+            },
+            indent=2, default=str,
+        ))
+        return 0
+    print(render_loop(session, pending))
+    if armed and sa_devloop.rounds_used(session) >= sa_devloop.rounds_of(session):
+        print("  the budget is spent; raise it with --rounds N to continue")
+    return 0
+
+
 def _stop_session(session_id: str, engine: Any, want_json: bool) -> int:
     try:
         store = _chat_store(engine)
@@ -2438,6 +2542,27 @@ def setup_cli(subparser: argparse.ArgumentParser) -> None:
     stop_p = subs.add_parser("stop", help="Cancel a queued or running chat turn")
     stop_p.add_argument("session_id", help="Chat session id (e.g. S-0001)")
     _add_json_flag(stop_p)
+    loop_p = subs.add_parser(
+        "loop", help="Show, arm or disarm a router town's development loop"
+    )
+    loop_p.add_argument("session_id", help="Router session id (e.g. S-0001)")
+    loop_p.add_argument(
+        "--on", dest="enable", action="store_true",
+        help="Arm the loop: when a worker opens a PR the router reviews, merges and asks for the next step",
+    )
+    loop_p.add_argument(
+        "--off", dest="disable", action="store_true",
+        help="Disarm the loop (a round already running still finishes)",
+    )
+    loop_p.add_argument(
+        "--rounds", type=int, default=None,
+        help=(
+            "Round budget in "
+            f"{sa_devloop.MIN_ROUNDS}-{sa_devloop.MAX_ROUNDS}; on its own it changes"
+            " the budget of the stored loop without resetting its progress"
+        ),
+    )
+    _add_json_flag(loop_p)
     retry_p = subs.add_parser(
         "retry", help="Re-run the last prompt of a failed or cancelled chat"
     )
@@ -2554,6 +2679,11 @@ def run(args: argparse.Namespace, ctx: Any) -> int:
 
     if command == "comment":
         return _comment_session(args, want_json)
+
+    # `loop` reads and writes chat rows plus settings; like `diff`/`comment` it
+    # needs no ticket engine, so it works from a plain terminal.
+    if command == "loop":
+        return _loop_session(args, want_json)
 
     try:
         engine = sa_engine.build_engine(ctx)

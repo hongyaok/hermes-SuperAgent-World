@@ -1,7 +1,7 @@
 ---
 name: superagent-operator
 description: Operate Superagent chats, workers and GitHub watch.
-version: 0.10.0
+version: 0.11.0
 platforms: [linux, macos, windows]
 metadata:
   hermes:
@@ -95,6 +95,20 @@ GitHub connection.
 7. A turn that ends in `review` or `failed` raises one desktop toast
    (`<title> finished` / `<title> failed`) while the page is open. Opening the
    page does not replay old completions, and `cancelled` is silent.
+
+**Development loop (Router towns).** A Router's composer carries a **Dev loop**
+switch beside a round budget (1–20, default 3). Armed, the manual cycle becomes
+automatic: when a worker opens a pull request, the Router gets one turn to
+review it, approve and merge it when it is sound, and message the worker the
+next instruction — which starts the worker's next turn and, in time, its next
+PR. The loop stops by itself after the budget is spent or when the switch is
+turned off; each round is one `dev_loop` event on the Router. It needs
+`allow_router_pr_approve` **and** `allow_worker_merge_pr` (it uses them, never
+grants them), and it merges with a merge commit so the worker's branch stays an
+ancestor of the base. `hermes superagent loop S-0001 --on --rounds 3` arms it
+from a terminal, `--off` stops it, `--rounds N` alone raises the budget without
+resetting the count, and `hermes superagent towns` shows `loop k/N` on an armed
+town.
 
 **From the terminal:**
 

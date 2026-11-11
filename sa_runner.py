@@ -23,9 +23,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 try:  # normal: imported as part of the plugin package
-    from . import sa_chats, sa_model_policy, sa_replies
+    from . import sa_chats, sa_devloop, sa_model_policy, sa_replies
 except ImportError:  # top-level import (dashboard backend, pytest)
     import sa_chats  # type: ignore[no-redef]
+    import sa_devloop  # type: ignore[no-redef]
     import sa_model_policy  # type: ignore[no-redef]
     import sa_replies  # type: ignore[no-redef]
 
@@ -973,6 +974,7 @@ class Runner:
         self._finish(session_id, status, error=error, **fields)
         if status == sa_chats.REVIEW:
             self._reply_on_github(session_id)
+            self._continue_dev_loop(session_id)
 
     def _on_system(self, session_id: str, event: dict) -> None:
         fields: dict[str, Any] = {}
@@ -1054,6 +1056,23 @@ class Runner:
         except Exception as exc:  # noqa: BLE001 - a reply cannot fail a turn
             try:
                 self._add_event(session_id, "reply_failed", str(exc)[:MAX_EVENT_CHARS])
+            except Exception:
+                pass
+
+    def _continue_dev_loop(self, session_id: str) -> None:
+        """Best-effort: start this town's next development-loop round.
+
+        Runs after a turn ends in `review`, for workers and the Router alike:
+        a worker's finish is what offers a new PR, and the Router's own finish
+        is what drains a PR that arrived while it was busy. `sa_devloop` owns
+        every decision (armed? budget left? a PR waiting?); a failure here is an
+        event, never a failed turn.
+        """
+        try:
+            sa_devloop.after_turn(self.chat, session_id, runner=self)
+        except Exception as exc:  # noqa: BLE001 - the loop cannot fail a turn
+            try:
+                self._add_event(session_id, "dev_loop_failed", str(exc)[:MAX_EVENT_CHARS])
             except Exception:
                 pass
 

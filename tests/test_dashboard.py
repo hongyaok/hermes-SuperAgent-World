@@ -1336,3 +1336,109 @@ def test_create_chat_allows_a_contributor_model_when_the_host_opts_in(chat_api, 
     assert body["ok"] is True
     assert body["session"]["model"] == "muse-spark-1.3-contributor"
     assert runner.launches[0]["model"] == "muse-spark-1.3-contributor"
+
+
+# -- development loop (router town) ----------------------------------------
+
+
+def _loop_town(api, *, switches=True):
+    """A router row, plus the two publishing switches the loop needs."""
+    if switches:
+        api.update_settings({
+            "allow_router_pr_approve": True,
+            "allow_worker_merge_pr": True,
+        })
+    return api.create_chat({"prompt": "build the parser"})["session"]
+
+
+def test_dev_loop_route_arms_and_disarms_a_router(chat_api):
+    api, _ = chat_api
+    root = _loop_town(api)
+
+    armed = api.set_chat_dev_loop(root["id"], {"enabled": True, "rounds": 4})
+    assert armed["ok"] is True
+    assert armed["session"]["dev_loop"] == 1
+    assert armed["session"]["dev_loop_rounds"] == 4
+    assert armed["session"]["dev_loop_round"] == 0
+    # The panel reads the state back off the chat payload.
+    detail = api.get_chat(root["id"])["session"]
+    assert detail["dev_loop"] == 1
+    assert detail["dev_loop_rounds"] == 4
+    kinds = [event["kind"] for event in detail["events"]]
+    assert "dev_loop" in kinds
+
+    disarmed = api.set_chat_dev_loop(root["id"], {"enabled": False})
+    assert disarmed["session"]["dev_loop"] == 0
+
+
+def test_dev_loop_route_rejects_a_worker(chat_api):
+    api, _ = chat_api
+    root = _loop_town(api)
+    worker = api.create_chat(
+        {"prompt": "fix the parser", "parent_session_id": root["id"]}
+    )["session"]
+
+    with pytest.raises(api.HTTPException) as excinfo:
+        api.set_chat_dev_loop(worker["id"], {"enabled": True})
+
+    assert excinfo.value.status_code == 400
+    assert "router town" in excinfo.value.detail
+
+
+def test_dev_loop_route_rejects_an_archived_town(chat_api):
+    api, _ = chat_api
+    root = _loop_town(api)
+    # FakeRunner leaves the row "running"; archive only accepts a settled turn.
+    api._chat_store().update_session(root["id"], status="idle")
+    api.archive_chat(root["id"], {"archived": True})
+
+    with pytest.raises(api.HTTPException) as excinfo:
+        api.set_chat_dev_loop(root["id"], {"enabled": True})
+
+    assert excinfo.value.status_code == 400
+    assert "archived" in excinfo.value.detail
+
+
+def test_dev_loop_route_needs_the_publishing_switches(chat_api):
+    api, _ = chat_api
+    root = _loop_town(api, switches=False)
+
+    with pytest.raises(api.HTTPException) as excinfo:
+        api.set_chat_dev_loop(root["id"], {"enabled": True})
+
+    assert excinfo.value.status_code == 400
+    assert "Allow Router & workers to review/approve PRs" in excinfo.value.detail
+    assert "Allow workers to comment and merge PRs" in excinfo.value.detail
+    assert api.get_chat(root["id"])["session"]["dev_loop"] is None
+
+
+def test_dev_loop_route_validates_its_body(chat_api):
+    api, _ = chat_api
+    root = _loop_town(api)
+
+    with pytest.raises(api.HTTPException) as missing:
+        api.set_chat_dev_loop(root["id"], {})
+    assert missing.value.status_code == 400
+    assert "enabled" in missing.value.detail
+
+    with pytest.raises(api.HTTPException) as too_many:
+        api.set_chat_dev_loop(root["id"], {"enabled": True, "rounds": 999})
+    assert too_many.value.status_code == 400
+    assert "rounds" in too_many.value.detail
+
+    with pytest.raises(api.HTTPException) as unknown:
+        api.set_chat_dev_loop("S-9999", {"enabled": True})
+    assert unknown.value.status_code == 404
+
+
+def test_dev_loop_can_always_be_disarmed(chat_api):
+    api, _ = chat_api
+    root = _loop_town(api)
+    api.set_chat_dev_loop(root["id"], {"enabled": True, "rounds": 2})
+    # The operator turns the merge switch off again; disarming must still work.
+    api.update_settings({"allow_worker_merge_pr": False})
+
+    off = api.set_chat_dev_loop(root["id"], {"enabled": False})
+
+    assert off["session"]["dev_loop"] == 0
+    assert off["session"]["dev_loop_rounds"] == 2
