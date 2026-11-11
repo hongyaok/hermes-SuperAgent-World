@@ -93,7 +93,8 @@ def resolve_repo_path(repo: str, *, root: str = "") -> str:
             roots.append(Path(os.path.expanduser(text)).resolve(strict=False))
     if roots and not any(resolved == allowed or allowed in resolved.parents for allowed in roots):
         raise RepoPathError(
-            f"repository path escapes the configured root {os.pathsep.join(str(r) for r in roots)}: {raw}"
+            "repository path escapes the allowed roots "
+            f"({', '.join(str(r) for r in roots)}): {raw}"
         )
     return str(resolved)
 
@@ -529,14 +530,28 @@ class Runner:
         if len(prompt) > MAX_PROMPT_CHARS:
             raise ValueError(f"prompt is too long (max {MAX_PROMPT_CHARS} chars)")
         binary = self.binary()
+        session = self.chat.get_session(session_id, message_limit=0) or {}
+        # Allowed roots are the configured root(s) plus the repository this
+        # session was opened on. The stored repo is the operator's own choice
+        # (the desktop composer can pick any clone), it was validated when the
+        # row was created, and no prompt can change it -- so honouring it
+        # cannot widen what a turn may wander into. Without it a town working
+        # outside the configured `repo_path` dies the moment the process-wide
+        # Runner is rebuilt (a settings save, or a gateway restart): every
+        # later turn of that session then fails with "repository path escapes
+        # the configured root" and the row is marked failed.
+        roots = self.repo_root or self.repo
+        session_repo = str(session.get("repo") or "").strip()
+        if roots and session_repo:
+            roots = os.pathsep.join(
+                dict.fromkeys(part for part in (roots, session_repo) if part)
+            )
         # Resolve before anything is persisted or queued: the resolved path is
         # the only one that may reach subprocess argv/cwd.
         repo_path = resolve_repo_path(
             repo if repo is not None else self.repo,
-            root=self.repo_root or self.repo,
+            root=roots,
         )
-
-        session = self.chat.get_session(session_id, message_limit=0) or {}
         # A data-training ("contributor") tier cannot start headless unless the
         # host opted in. Refuse here, before a process or a queue slot exists,
         # so every surface (API, tools, CLI, retry) fails with the same reason
