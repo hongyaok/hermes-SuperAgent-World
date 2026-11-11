@@ -716,3 +716,18 @@ def test_build_pr_prompt_offers_a_merge_only_when_allowed():
     assert "superagent_pr_merge" in allowed
     assert "Never merge a draft" in allowed
     assert "superagent_pr_merge" not in blocked
+
+
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        ("https://github.com/hongyaok/hermes-SuperAgent-World.git", "hongyaok/hermes-SuperAgent-World"),
+        ("https://github.com/hongyaok/hermes-SuperAgent-World", "hongyaok/hermes-SuperAgent-World"),
+        ("git@github.com:hongyaok/hermes-SuperAgent-World.git", "hongyaok/hermes-SuperAgent-World"),
+        ("ssh://git@github.com/hongyaok/hermes-SuperAgent-World.git", "hongyaok/hermes-SuperAgent-World"),
+        ("https://gitlab.com/hongyaok/other.git", ""),
+        ("", ""),
+    ],
+)
+def test_github_repo_from_origin_reads_both_remote_spellings(url, expected):
+    assert sa_github.github_repo_from_origin(url) == expected

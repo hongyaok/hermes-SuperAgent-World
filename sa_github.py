@@ -461,6 +461,59 @@ def _default_git_runner(argv: list[str], cwd: str, timeout: int) -> tuple[int, s
     return proc.returncode, proc.stdout or "", proc.stderr or ""
 
 
+def github_repo_from_origin(url: str) -> str:
+    """``owner/name`` for a GitHub remote URL, or "" when it is not one.
+
+    Both spellings a clone can carry are accepted — ``https://github.com/
+    owner/name.git`` and ``git@github.com:owner/name.git`` — because a worker's
+    worktree is cloned by whichever form the user configured.
+    """
+    text = str(url or "").strip()
+    if text.startswith("git@"):
+        host, _, path = text.partition(":")
+        if host.rsplit("@", 1)[-1].lower() != "github.com":
+            return ""
+    elif "://" in text:
+        parsed = urllib.parse.urlparse(text)
+        if (parsed.hostname or "").lower() != "github.com":
+            return ""
+        path = parsed.path
+    else:
+        return ""
+    parts = [part for part in path.strip("/").split("/") if part]
+    if len(parts) != 2:
+        return ""
+    owner, name = parts
+    if name.endswith(".git"):
+        name = name[: -len(".git")]
+    return f"{owner}/{name}" if owner and name else ""
+
+
+def checkout_github_repo(path: str) -> str:
+    """The GitHub repository a local checkout's ``origin`` names, or "".
+
+    Read straight from the checkout, because that is the only place that knows
+    where a session's branch actually belongs. A missing path, a directory that
+    is not a git checkout, or a checkout without an origin is not an error: the
+    caller falls back to the configured repository.
+    """
+    text = str(path or "").strip()
+    if not text:
+        return ""
+    root = Path(text).expanduser()
+    if not (root / ".git").exists():
+        return ""
+    try:
+        # 10s, not GIT_TIMEOUT: this only reads local metadata, and a stalled
+        # mount must not hold a tool call for two minutes.
+        code, out, _err = _default_git_runner(
+            ["git", "-C", str(root), "remote", "get-url", "origin"], str(root), 10
+        )
+    except Exception:
+        return ""
+    return github_repo_from_origin(out) if code == 0 else ""
+
+
 def prepare_pr_checkout(
     repo_path: str,
     github_repo: str,
