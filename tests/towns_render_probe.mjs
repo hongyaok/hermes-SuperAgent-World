@@ -302,6 +302,58 @@ assert.match(stageTree, /data-town-ground="1"/)
 assert.match(stageTree, /data-town-meadow="1"/)
 assert.doesNotMatch(stageTree, /left:24%/, 'the old percentage pond position is gone')
 
+// -- day/night sky covers the whole pane -----------------------------------
+// The stage tint alone leaves the letterbox margin daylight-bright at night:
+// a dimmed estate inside a green frame, which reads as a zoomed-out picture.
+// The pane backdrop must therefore carry the very same fill, over the very
+// same meadow grid, shifted to where the stage actually sits.
+assert.equal(plugin.townTimePhase(21), 'night')
+assert.equal(plugin.townTimeOverlay('day'), null, 'day paints no tint at all')
+assert.equal(plugin.townTimeOverlay('night'), 'rgba(8, 12, 52, 0.42)')
+
+const TINT = 'var(--superagent-sky-fill, rgba(0, 0, 0, 0))'
+const paneBackdrop = plugin.townViewportBackdrop({
+  grass: 'data:image/png;base64,AA==',
+  scale: 1.25,
+  offsetX: 70.5,
+  offsetY: 0,
+})
+assert.equal(
+  paneBackdrop.backgroundImage,
+  `linear-gradient(${TINT}, ${TINT}), url("data:image/png;base64,AA==")`,
+  'the pane meadow carries a tint layer driven by the sky fill',
+)
+// 1200x700 stage at 1.25 -> 80x40 meadow tiles, painted from the stage origin.
+assert.equal(paneBackdrop.backgroundSize, 'auto, 80px 40px')
+assert.equal(paneBackdrop.backgroundPosition, '0 0, 70.5px 0px')
+assert.equal(paneBackdrop.backgroundRepeat, 'no-repeat, repeat')
+assert.deepEqual(
+  plugin.townViewportBackdrop({ grass: null, scale: 1 }),
+  {
+    backgroundImage: `linear-gradient(${TINT}, ${TINT})`,
+    backgroundSize: 'auto',
+    backgroundPosition: '0 0',
+    backgroundRepeat: 'no-repeat',
+  },
+  'without sprites the pane still dims rather than staying bright',
+)
+
+// Whatever the phase is when this probe runs, the pane and the stage agree:
+// one fill string, read by the stage element and by the pane variable.
+const viewportNode = findElement(sceneNode, 'data-town-road-network', 'contiguous-estate')
+assert.ok(viewportNode, 'the scene renders its scroll viewport')
+assert.match(String(viewportNode.props.className), /superagent-town-pane/, 'the pane owns the sky transition')
+const probePhase = plugin.townTimePhase(new Date().getHours() + new Date().getMinutes() / 60)
+const probeFill = plugin.townTimeOverlay(probePhase)
+const skyNode = findElement(sceneNode, 'data-town-time', probePhase)
+assert.ok(skyNode, 'the stage carries a sky layer for the current phase')
+assert.equal(skyNode.props.style.backgroundColor, probeFill)
+assert.equal(
+  viewportNode.props.style['--superagent-sky-fill'],
+  probeFill || 'rgba(0, 0, 0, 0)',
+  'the pane reads the same fill the stage paints',
+)
+
 const quiet = render(h(plugin.TownScene, {
   town: root,
   assets,

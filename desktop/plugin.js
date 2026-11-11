@@ -5141,13 +5141,50 @@ function townTimeLabel(date) {
   return `${hours}:${minutes}`
 }
 
-/** Sky-overlay fill for one phase. Day is transparent; night dims the town
- *  so lamps read as light sources. */
+/** Sky-overlay fill for one phase. Day has no fill at all (null): the stage
+ *  paints nothing extra and the pane's tint layer stays fully transparent.
+ *  Night dims the town so lamps read as light sources. */
 function townTimeOverlay(phase) {
   if (phase === 'dawn') return 'rgba(255, 170, 120, 0.16)'
   if (phase === 'dusk') return 'rgba(150, 80, 160, 0.22)'
   if (phase === 'night') return 'rgba(8, 12, 52, 0.42)'
-  return 'rgba(0, 0, 0, 0)'
+  return null
+}
+
+/** Backdrop for the scene pane: the pane's own meadow plus the sky tint.
+ *
+ *  The meadow is the same sprite on the same scaled tile grid as the stage
+ *  meadow, offset to the stage's letterbox origin, so a stage that cannot
+ *  fill one axis continues seamlessly into the margin. The tint has to live
+ *  here as well as on the stage: tinting only the stage would leave the
+ *  letterbox margin daylight-bright, which reads as a dark rectangle with a
+ *  green frame — and a frame around an unfilled axis makes the whole estate
+ *  look zoomed out.
+ *
+ *  The fill is read from ``--superagent-sky-fill`` rather than baked into the
+ *  string so the pane and the stage fade together: a registered custom
+ *  property can transition, a gradient layer cannot. */
+function townViewportBackdrop({ grass, scale, offsetX = 0, offsetY = 0 }) {
+  const safeScale = Number(scale) > 0 ? Number(scale) : 1
+  const tile = `${TOWN_MEADOW_TILE.width * safeScale}px ${TOWN_MEADOW_TILE.height * safeScale}px`
+  const origin = `${Number(offsetX) || 0}px ${Number(offsetY) || 0}px`
+  const tint = 'var(--superagent-sky-fill, rgba(0, 0, 0, 0))'
+  if (!grass) {
+    return {
+      backgroundImage: `linear-gradient(${tint}, ${tint})`,
+      backgroundSize: 'auto',
+      backgroundPosition: '0 0',
+      backgroundRepeat: 'no-repeat',
+    }
+  }
+  // Layer order is top-down: one uniform tint, then the meadow tiles. Only the
+  // tiles carry a size, so the tint always covers the whole pane.
+  return {
+    backgroundImage: `linear-gradient(${tint}, ${tint}), url("${grass}")`,
+    backgroundSize: `auto, ${tile}`,
+    backgroundPosition: `0 0, ${origin}`,
+    backgroundRepeat: 'no-repeat, repeat',
+  }
 }
 
 /** Device clock for the town: phase + label, re-checked every 30s so the
@@ -5179,6 +5216,16 @@ const TOWN_CSS = `
  * background-position, never a keyframe: a re-render must not restart them. */
 .superagent-speech-bubble { animation: superagent-speech-float 2200ms ease-in-out infinite; }
 .superagent-town-sky { transition: background-color 800ms linear; }
+/* The pane backdrop paints the same fill as a gradient layer, which cannot be
+ * transitioned directly, so the fill is registered as a color and the pane
+ * animates the property instead. Without @property support the pane switches
+ * instead of fading — the tint itself still renders. */
+@property --superagent-sky-fill {
+  syntax: '<color>';
+  inherits: false;
+  initial-value: rgba(0, 0, 0, 0);
+}
+.superagent-town-pane { transition: --superagent-sky-fill 800ms linear; }
 .superagent-town-clock { font-variant-numeric: tabular-nums; }
 /* Fixed-size bubbles scroll instead of growing the town layout.
  * Clear, high-visibility retro scrollbar for chat windows & speech bubbles. */
@@ -6564,6 +6611,15 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
   // keeps a zero margin, so the top-left corner is never pushed out of reach.
   const fitsWidth = viewport.width - STAGE_VIEWPORT_BORDER >= stageWidth
   const fitsHeight = viewport.height - STAGE_VIEWPORT_BORDER >= stageHeight
+  // Where the stage's own origin sits inside the pane. The pane backdrop
+  // paints its meadow at this offset so the letterbox margin is the same
+  // field as the stage, not a second one at a different scale.
+  const stageOffsetX = fitsWidth ? (viewport.width - STAGE_VIEWPORT_BORDER - stageWidth) / 2 : 0
+  const stageOffsetY = fitsHeight ? (viewport.height - STAGE_VIEWPORT_BORDER - stageHeight) / 2 : 0
+  const skyFill = townTimeOverlay(townTime.phase)
+  const backdrop = townViewportBackdrop({
+    grass, scale: stageScale, offsetX: stageOffsetX, offsetY: stageOffsetY,
+  })
 
   return jsxs('div', {
     className: 'superagent-pixel relative isolate z-0 flex min-h-0 flex-1 flex-col gap-2',
@@ -6641,20 +6697,17 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
         'aria-label': `${sessionTitle(town)} — town`,
         'data-town-workers': workers.length,
         'data-town-road-network': 'contiguous-estate',
-        className: cn('superagent-pixel-scroll relative isolate z-0 flex min-h-[390px] flex-1 overflow-auto rounded-lg border',
+        className: cn('superagent-pixel-scroll superagent-town-pane relative isolate z-0 flex min-h-[390px] flex-1 overflow-auto rounded-lg border',
           'border-(--ui-stroke-secondary)'),
-        style: grass
-          ? {
-              isolation: 'isolate',
-              zIndex: 0,
-              // Same base grass as the meadow, so the letterbox margin around
-              // a capped stage has no visible hard edge.
-              backgroundImage: `url("${grass}")`,
-              backgroundSize: '64px 32px',
-              backgroundRepeat: 'repeat',
-              imageRendering: 'pixelated',
-            }
-          : { isolation: 'isolate', zIndex: 0 },
+        style: {
+          isolation: 'isolate',
+          zIndex: 0,
+          // The pane's own sky fill, read by the backdrop gradient below and
+          // transitioned by the same 800ms rule the stage tint uses.
+          '--superagent-sky-fill': skyFill || 'rgba(0, 0, 0, 0)',
+          ...backdrop,
+          imageRendering: 'pixelated',
+        },
         children: jsx('div', {
           key: 'stage-slot',
           className: 'relative',
@@ -6690,14 +6743,15 @@ function TownScene({ town, assets, pets, buildingIds, onOpen, registerHouse, red
               // entities, so the map is scenery and never a click target.
               ground,
               // Device-clock sky tint: above the ground but below houses (z-4+)
-              // and actors, so it tints the terrain, not the UI.
+              // and actors, so it tints the terrain, not the UI. The pane
+              // backdrop carries the same fill over the letterbox margin.
               jsx('div', {
                 key: 'sky',
                 'aria-hidden': 'true',
                 'data-town-time': townTime.phase,
                 title: `Town time ${townTime.label} (${townTime.phase})`,
                 className: 'superagent-town-sky pointer-events-none absolute inset-0 z-[3]',
-                style: { backgroundColor: townTimeOverlay(townTime.phase) },
+                style: { backgroundColor: skyFill },
               }),
               ...decorations.map((item) => {
                 const art = artFor(item.sprite)
@@ -8498,7 +8552,8 @@ export {
   TOWN_BENCH_WEST_RECT, TOWN_BENCH_EAST_RECT,
   TOWN_LAMP_NW_RECT, TOWN_LAMP_NE_RECT, TOWN_LAMP_SW_RECT, TOWN_LAMP_SE_RECT,
   TOWN_POND_RECT, TOWN_RESERVED_RECTS,
-  rectsOverlap, townPlotRect, townDepth, townStageScale,
+  rectsOverlap, townPlotRect, townDepth, townStageScale, townViewportBackdrop,
+  townTimePhase, townTimeLabel, townTimeOverlay,
   TownGround, TOWN_PLAZA_BANDS, TOWN_POND_PATH, TOWN_DRIVES,
   TOWN_LANE_NORTH_Y, TOWN_LANE_SOUTH_Y, TOWN_LANE_WEST_X, TOWN_LANE_EAST_X,
   TOWN_AVENUE_Y, TOWN_LANE_WIDTH, TOWN_DRIVE_WIDTH, TOWN_LANE_CORNER,
