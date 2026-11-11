@@ -666,3 +666,191 @@ def test_an_issue_session_can_resolve_itself_when_its_switch_is_on(tmp_path, mon
     )
     assert resolved["ok"] is True
     assert resolved["pr"]["number"] == 42
+
+
+# -- repository resolution: the checkout wins over the watch setting --------
+
+
+def _checkout(tmp_path, monkeypatch, sa, url):
+    """A directory that looks like a git checkout whose origin is ``url``."""
+    root = tmp_path / "checkout"
+    (root / ".git").mkdir(parents=True, exist_ok=True)
+
+    def fake_run(argv, cwd, timeout):
+        if url is None:
+            return (2, "", "error: No such remote 'origin'")
+        return (0, url + chr(10), "")
+
+    monkeypatch.setattr(sa.sa_github, "_default_git_runner", fake_run)
+    return root
+
+
+def _record_clients(monkeypatch, sa):
+    """Replace GitHubClient with one that records the repo it was bound to."""
+    seen = []
+
+    class RecordingClient:
+        def __init__(self, token, repo, timeout=20):
+            self.repo = repo
+            seen.append(repo)
+
+        def repo_info(self):
+            return {"default_branch": "main"}
+
+        def create_pr(self, **kwargs):
+            return {"number": 7, "html_url": "https://github.com/x/y/pull/7", **kwargs}
+
+        def create_review(self, number, event="COMMENT", body=""):
+            return {"state": event}
+
+        def get_pr(self, number):
+            return {
+                "number": number,
+                "state": "open",
+                "draft": False,
+                "mergeable": True,
+                "mergeable_state": "clean",
+                "merged": False,
+            }
+
+        def post_comment(self, number, body):
+            return {"id": 1}
+
+        def merge_pr(self, number, *, merge_method="merge", commit_title="", commit_message=""):
+            return {"merged": True, "sha": "abc123", "message": "merged"}
+
+    monkeypatch.setattr(sa.sa_github, "GitHubClient", RecordingClient)
+    return seen
+
+
+def _github_settings(sa, **overrides):
+    return dict(
+        sa.sa_settings.DEFAULTS,
+        allow_worker_pr_create=True,
+        allow_router_pr_approve=True,
+        allow_worker_merge_pr=True,
+        github_pr_base_branch="main",
+        github_token="tok",
+        github_repo="hongyaok/safeworld_harness",
+        **overrides,
+    )
+
+
+def test_pr_tools_target_the_repo_their_checkout_tracks(tmp_path, monkeypatch, sa):
+    monkeypatch.setattr(sa.sa_settings, "data_dir", lambda: tmp_path)
+    store = sa.sa_chats.ChatStore(tmp_path / "superagent.db")
+    checkout = _checkout(
+        tmp_path, monkeypatch, sa, "git@github.com:hongyaok/hermes-SuperAgent-World.git"
+    )
+    worker = store.create_session(
+        "review the plugin",
+        source="worker",
+        repo=str(checkout),
+        worktree_path=str(checkout),
+        # Inherited from the global watch setting when the worker was spawned.
+        github_repo="hongyaok/safeworld_harness",
+    )
+    monkeypatch.setattr(sa.sa_settings, "load_settings", lambda: _github_settings(sa))
+    pushed = []
+    monkeypatch.setattr(
+        sa.sa_github,
+        "commit_and_push_branch",
+        lambda path, repo, token, **kw: pushed.append(repo)
+        or {"branch": kw["branch"], "pushed": True},
+    )
+    seen = _record_clients(monkeypatch, sa)
+
+    created = json.loads(
+        sa.sa_tools.superagent_pr_create(
+            {"session_id": worker["id"], "title": "Fix"}, ctx=FakeCtx()
+        )
+    )
+    reviewed = json.loads(
+        sa.sa_tools.superagent_pr_review(
+            {"session_id": worker["id"], "pr_number": 64, "event": "COMMENT"},
+            ctx=FakeCtx(),
+        )
+    )
+    merged = json.loads(
+        sa.sa_tools.superagent_pr_merge(
+            {"session_id": worker["id"], "body": "LGTM"}, ctx=FakeCtx()
+        )
+    )
+
+    assert created["ok"] is True, created
+    assert reviewed["ok"] is True, reviewed
+    assert merged["ok"] is True, merged
+    assert pushed == ["hongyaok/hermes-SuperAgent-World"]
+    assert seen == ["hongyaok/hermes-SuperAgent-World"] * 3
+
+
+def test_a_bound_issue_session_keeps_its_own_repo(tmp_path, monkeypatch, sa):
+    monkeypatch.setattr(sa.sa_settings, "data_dir", lambda: tmp_path)
+    store = sa.sa_chats.ChatStore(tmp_path / "superagent.db")
+    checkout = _checkout(
+        tmp_path, monkeypatch, sa, "https://github.com/hongyaok/hermes-SuperAgent-World.git"
+    )
+    issue = store.create_session(
+        "resolve the issue",
+        source="github_issue",
+        repo=str(checkout),
+        github_repo="acme/issue-repo",
+        issue_number=5,
+    )
+    monkeypatch.setattr(sa.sa_settings, "load_settings", lambda: _github_settings(sa))
+    seen = _record_clients(monkeypatch, sa)
+
+    reviewed = json.loads(
+        sa.sa_tools.superagent_pr_review(
+            {"session_id": issue["id"], "pr_number": 5, "event": "COMMENT"}, ctx=FakeCtx()
+        )
+    )
+
+    assert reviewed["ok"] is True, reviewed
+    assert seen == ["acme/issue-repo"]
+
+
+def test_a_checkout_without_origin_falls_back_to_the_stored_repo(tmp_path, monkeypatch, sa):
+    monkeypatch.setattr(sa.sa_settings, "data_dir", lambda: tmp_path)
+    store = sa.sa_chats.ChatStore(tmp_path / "superagent.db")
+    checkout = _checkout(tmp_path, monkeypatch, sa, None)
+    session = store.create_session(
+        "review the pull request",
+        repo=str(checkout),
+        github_repo="acme/stored",
+        pr_number=9,
+    )
+    monkeypatch.setattr(sa.sa_settings, "load_settings", lambda: _github_settings(sa))
+    seen = _record_clients(monkeypatch, sa)
+
+    reviewed = json.loads(
+        sa.sa_tools.superagent_pr_review(
+            {"session_id": session["id"], "pr_number": 9, "event": "COMMENT"},
+            ctx=FakeCtx(),
+        )
+    )
+
+    assert reviewed["ok"] is True, reviewed
+    assert seen == ["acme/stored"]
+
+
+def test_a_missing_checkout_falls_back_to_the_watch_setting(tmp_path, monkeypatch, sa):
+    monkeypatch.setattr(sa.sa_settings, "data_dir", lambda: tmp_path)
+    store = sa.sa_chats.ChatStore(tmp_path / "superagent.db")
+    session = store.create_session(
+        "review the pull request",
+        repo=str(tmp_path / "gone"),
+        pr_number=9,
+    )
+    monkeypatch.setattr(sa.sa_settings, "load_settings", lambda: _github_settings(sa))
+    seen = _record_clients(monkeypatch, sa)
+
+    reviewed = json.loads(
+        sa.sa_tools.superagent_pr_review(
+            {"session_id": session["id"], "pr_number": 9, "event": "COMMENT"},
+            ctx=FakeCtx(),
+        )
+    )
+
+    assert reviewed["ok"] is True, reviewed
+    assert seen == ["hongyaok/safeworld_harness"]

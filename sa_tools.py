@@ -45,6 +45,28 @@ def _error(message: Any) -> str:
     return json.dumps({"error": sa_runner.redact_secrets(message)})
 
 
+def _session_github_repo(session: dict, settings: dict, repo_path: str = "") -> str:
+    """The repository this session's GitHub operation targets.
+
+    An issue or PR session is bound to the repository its work arrived from and
+    keeps it. Otherwise the checkout the session works in wins over the stored
+    or global ``github_repo``: the watch setting names what the town watches,
+    not where a worker's branch belongs, and pushing a worker's branch to the
+    watched repository is refused as unrelated history. No checkout means
+    exactly the old answer, never an error.
+    """
+    row = session or {}
+    stored = str(row.get("github_repo") or "").strip()
+    if stored and str(row.get("source") or "").strip() in ("github_issue", "github_pr"):
+        return stored
+    checkout = str(repo_path or row.get("worktree_path") or row.get("repo") or "").strip()
+    return (
+        sa_github.checkout_github_repo(checkout)
+        or stored
+        or str(settings.get("github_repo") or "").strip()
+    )
+
+
 def superagent_ask(args: dict, ctx: Any = None, **kwargs: Any) -> str:
     try:
         if ctx is None:
@@ -537,9 +559,7 @@ def superagent_pr_create(args: dict, ctx: Any = None, **kwargs: Any) -> str:
             or settings.get("repo_path")
             or ""
         ).strip()
-        github_repo = str(
-            session.get("github_repo") or settings.get("github_repo") or ""
-        ).strip()
+        github_repo = _session_github_repo(session, settings, repo_path)
         token = str(settings.get("github_token") or "").strip()
         if not repo_path:
             return json.dumps({"ok": False, "error": "no repository path configured for session"})
@@ -645,9 +665,7 @@ def superagent_pr_review(args: dict, ctx: Any = None, **kwargs: Any) -> str:
         except (TypeError, ValueError):
             return json.dumps({"ok": False, "error": "pr_number is required"})
 
-        github_repo = str(
-            session.get("github_repo") or settings.get("github_repo") or ""
-        ).strip()
+        github_repo = _session_github_repo(session, settings)
         token = str(settings.get("github_token") or "").strip()
         if not github_repo or "/" not in github_repo:
             return json.dumps({"ok": False, "error": "no GitHub repository (owner/name) configured"})
@@ -723,7 +741,7 @@ def superagent_pr_merge(args: dict, ctx: Any = None, **kwargs: Any) -> str:
                 {"ok": False, "error": "this session has no pull request to merge"}
             )
 
-        github_repo = str(session.get("github_repo") or settings.get("github_repo") or "").strip()
+        github_repo = _session_github_repo(session, settings)
         token = str(settings.get("github_token") or "").strip()
         if not github_repo or "/" not in github_repo:
             return json.dumps({"ok": False, "error": "no GitHub repository (owner/name) configured"})
