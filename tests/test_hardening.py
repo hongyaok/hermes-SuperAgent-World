@@ -241,6 +241,17 @@ def test_resolve_repo_path_accepts_subdirectories_and_the_root(tmp_path):
     assert sa_runner.resolve_repo_path(str(root), root=str(root)) == str(root.resolve())
 
 
+def test_resolve_repo_path_accepts_any_of_several_roots(tmp_path):
+    """``root`` may be a pathsep list: the clone plus the PR workspaces."""
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    target = second / "repo"
+    for path in (first, second, target):
+        path.mkdir(parents=True)
+    roots = os.pathsep.join([str(first), str(second)])
+    assert sa_runner.resolve_repo_path(str(target), root=roots) == str(target.resolve())
+
+
 def test_launch_passes_only_the_resolved_repo_to_argv(chat, popen, tmp_path):
     root = tmp_path / "root"
     child = root / "repo"
@@ -269,6 +280,38 @@ def test_launch_rejects_a_repo_outside_the_configured_root(chat, popen, tmp_path
         runner.launch_turn(session["id"], "work", repo=str(outside))
     assert "escapes" in str(excinfo.value)
     assert popen.calls == []  # nothing was ever spawned
+
+
+def test_a_session_resumes_in_its_own_repo_outside_the_configured_root(
+    chat, popen, tmp_path
+):
+    """A town opened on another clone keeps running after the Runner is rebuilt.
+
+    The desktop composer lets an operator point a chat at any repository, while
+    the Runner's containment root is the configured clone. Once the Runner was
+    rebuilt (a settings save, or a gateway restart) every later turn of that
+    session was refused with "repository path escapes the configured root" and
+    the row was marked failed. The stored repo is a fixed operator choice, so
+    it is allowed alongside the configured root; a third repo is still refused.
+    """
+    configured = tmp_path / "configured"
+    configured.mkdir()
+    town_repo = tmp_path / "town-repo"
+    town_repo.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+
+    popen.install(FakeProcess(jsonl({"type": "result", "session_id": "local-r"})))
+    runner = make_runner(chat, repo=str(configured), repo_root=str(configured))
+    session = chat.create_session("work", repo=str(town_repo))
+
+    runner.launch_turn(session["id"], "continue", repo=str(town_repo))
+    assert wait_until(lambda: status_of(chat, session["id"]) == "review")
+    assert popen.calls[0]["kwargs"]["cwd"] == str(town_repo.resolve())
+
+    with pytest.raises(ValueError) as excinfo:
+        runner.launch_turn(session["id"], "continue", repo=str(elsewhere))
+    assert "escapes" in str(excinfo.value)
 
 
 def test_create_chat_maps_bad_repos_to_400(chat_api, tmp_path, monkeypatch):

@@ -319,7 +319,7 @@ The Router already had every tool the cycle needs: review a PR, merge it, messag
 
 The plugin is designed so that the worst failure is a bad diff a human can discard — not a leaked credential or an unapproved published change.
 
-- **Containment.** Every repository path is resolved with `Path.resolve(strict=True)`; paths that do not exist, are not directories, contain `..`, or resolve outside `SUPERAGENT_REPO_ROOT` (default: the configured repo, plus `<data_dir>/workspaces` for PR and worker worktrees) are rejected. Only the resolved path reaches `argv`/`cwd`.
+- **Containment.** Every repository path is resolved with `Path.resolve(strict=True)`; paths that do not exist, are not directories, contain `..`, or resolve outside `SUPERAGENT_REPO_ROOT` (default: the configured repo, plus `<data_dir>/workspaces` for PR and worker worktrees, plus — for a launched turn — the repo stored on its session row) are rejected. Only the resolved path reaches `argv`/`cwd`.
 - **Caps.** Prompts 20 000 chars, stored assistant text 20 000, event detail 2 000, diff patch 60 000, posted comment 20 000. Over-limit prompts are rejected; over-limit output is truncated before the write, so a runaway worker cannot bloat the database.
 - **Secret redaction.** GitHub (`ghp_`, `gho_`, `github_pat_`), OpenAI/Slack-style keys, `Authorization:` values and bare `Bearer` tokens are replaced with `[redacted]` before messages, events, errors, prompts and ticket fields are persisted. The token itself is never returned by a route; `public_settings()` reports `github_token_set` only.
 - **Observe by default.** Both ticket intake and GitHub watch start in observe. Auto is an explicit switch.
