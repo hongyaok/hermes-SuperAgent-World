@@ -61,6 +61,7 @@ try:  # loaded as part of the plugin package
     from .. import (
         sa_assessor,
         sa_chats,
+        sa_devloop,
         sa_diff,
         sa_github,
         sa_model_policy,
@@ -72,6 +73,7 @@ try:  # loaded as part of the plugin package
 except ImportError:  # loaded standalone by the gateway / pytest
     import sa_assessor  # type: ignore[no-redef]
     import sa_chats  # type: ignore[no-redef]
+    import sa_devloop  # type: ignore[no-redef]
     import sa_diff  # type: ignore[no-redef]
     import sa_github  # type: ignore[no-redef]
     import sa_model_policy  # type: ignore[no-redef]
@@ -1805,6 +1807,37 @@ def set_chat_model(session_id: str, body: dict) -> dict[str, Any]:
     # already explains it (same order the runner uses when it finishes a turn).
     store.add_event(session_id, "model", f"next turn uses {label}")
     updated = store.update_session(session_id, **patch)
+    return {"ok": True, "session": updated}
+
+
+@router.post("/chats/{session_id}/dev-loop")
+def set_chat_dev_loop(session_id: str, body: dict | None = None) -> dict[str, Any]:
+    """Arm or disarm one router town's development loop.
+
+    The toggle lives on the Router's own row because the loop is that town's
+    policy. A worker has no loop to flip (400), an archived town is read-only
+    (400), and arming while the two publishing switches are off is refused here
+    rather than starting rounds whose merge tool would only refuse them.
+    """
+    session_id = _check_session_id(session_id)
+    data = body or {}
+    if "enabled" not in data:
+        raise HTTPException(status_code=400, detail="enabled is required")
+    enabled = _settings_bool(data.get("enabled"), "enabled")
+    rounds = None
+    if "rounds" in data:
+        rounds = _settings_int(
+            data.get("rounds"), "rounds", sa_devloop.MIN_ROUNDS, sa_devloop.MAX_ROUNDS
+        )
+
+    store = _chat_store()
+    session = store.get_session(session_id, message_limit=0)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"unknown chat session {session_id}")
+    try:
+        updated = sa_devloop.arm(store, session_id, enabled=enabled, rounds=rounds)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=_scrub(str(exc))) from exc
     return {"ok": True, "session": updated}
 
 

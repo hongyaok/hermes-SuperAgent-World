@@ -290,6 +290,12 @@ hermes superagent diff S-0001
 hermes superagent comment S-0001
 hermes superagent comment S-0001 --body-file review.md
 
+# Router development loop: show it, arm it for N rounds, or switch it off
+hermes superagent loop S-0001
+hermes superagent loop S-0001 --on --rounds 3
+hermes superagent loop S-0001 --rounds 5   # re-budget without resetting
+hermes superagent loop S-0001 --off
+
 # Diagnose the install read-only: version/API, database totals, hermes binary,
 # repository (branch + dirty count), worktrees, model choices and the data-tier
 # gate. Never starts an engine, a worker or a network call.
@@ -297,7 +303,7 @@ hermes superagent doctor
 hermes superagent doctor --json
 ```
 
-`hermes superagent towns` prints the same hierarchy the desktop town view draws: each root town (newest activity first) with its worker and worker-status counts, then one indented line per worker showing the plot slot, session id, status, elapsed time and any linked PR number and URL. The default limit is 50 (`--limit`, clamped to 1–200); archived towns and workers are hidden unless `--show-archived` is passed, and orphaned workers (whose parent town row is gone) are counted at the end.
+`hermes superagent towns` prints the same hierarchy the desktop town view draws: each root town (newest activity first) with its worker and worker-status counts, then one indented line per worker showing the plot slot, session id, status, elapsed time and any linked PR number and URL. A town whose development loop is armed carries a `loop <spent>/<budget>` suffix. The default limit is 50 (`--limit`, clamped to 1–200); archived towns and workers are hidden unless `--show-archived` is passed, and orphaned workers (whose parent town row is gone) are counted at the end.
 
 | Command | Behaviour |
 | :--- | :--- |
@@ -311,6 +317,7 @@ hermes superagent doctor --json
 | `hermes superagent towns` | Router towns with their worker houses: worker/status counts, then slot, session id, status, elapsed time and linked PR per worker. `--limit` (1-200), `--show-archived`, `--json`. |
 | `hermes superagent diff <id>` | `git status` + `git diff --stat` + the (capped) patch for the session's repository; `--json` returns the full dict. `1` for an unknown session or one without a repository. |
 | `hermes superagent comment <id> [--body TEXT \| --body-file PATH]` | Post one summary comment to the session's pull request and print its URL. `1` without a PR/token or when GitHub refuses, `2` for bad usage. |
+| `hermes superagent loop <id> [--on \| --off] [--rounds N]` | Show, arm, disarm or re-budget a router town's development loop: when a worker opens a PR the Router reviews it, merges it and sends the worker the next instruction, up to N rounds (1-20). Arming needs the approve + merge switches; `2` for a worker row, an archived town or a budget out of range. |
 | `hermes superagent models` | Default model/provider plus the preset section (`name -> provider: model`). |
 | `hermes superagent settings [--json]` | Print the merged settings (the GitHub token is masked to `set`/`not set`); read-only. |
 | `hermes superagent github [status\|test\|connect\|disconnect\|prs\|poll\|work <n> [--issue]]` | Connect a repository, manage the watch settings, list open PRs and issues, and start work on one (see [GitHub connect & watch](#9-github-connect--watch)). |
@@ -355,6 +362,7 @@ The plugin ships a unified desktop extension (`desktop/plugin.js`) and a FastAPI
 - `DELETE /api/plugins/superagent/chats/{session_id}` — delete a chat and its transcript (`409` while queued/running). Files, worktrees and PRs are never touched.
 - `POST /api/plugins/superagent/chats/{session_id}/messages` — send a follow-up and resume the Hermes session.
 - `POST /api/plugins/superagent/chats/{session_id}/model` — set model/provider for future turns.
+- `POST /api/plugins/superagent/chats/{session_id}/dev-loop` — arm or disarm the town's development loop and set its round budget (`{enabled, rounds?}`, rounds 1–20).
 - `POST /api/plugins/superagent/chats/{session_id}/stop` — cancel the running turn.
 - `GET /api/plugins/superagent/chats/{session_id}/diff` — git status, stat and a capped patch for the session's repository.
 - `GET /api/plugins/superagent/chats/{session_id}/comment-preview` — the comment body a post would send (no network, no write).
@@ -366,7 +374,7 @@ The plugin ships a unified desktop extension (`desktop/plugin.js`) and a FastAPI
 
 The desktop page at `/superagent` leads with the chat workspace (see [Desktop chat workspace](#7-desktop-chat-workspace)); the ticket surface lives beside it:
 
-- **Chat workspace** — a chat rail, a live transcript, a composer with model picker and optional repo path, and the **Live workers** grid. The first prompt starts a headless `hermes chat` worker; follow-ups resume it; **Stop** cancels it.
+- **Chat workspace** — a chat rail, a live transcript, a composer with model picker and optional repo path, and the **Live workers** grid. The first prompt starts a headless `hermes chat` worker; follow-ups resume it; **Stop** cancels it. A Router's composer also carries the **Dev loop** switch and round budget that automate the review → merge → next-instruction cycle for that town.
 - **Ticket pane** (right dock) — the `"Needs you"` attention list (`observed` / `blocked` / `review` / `failed`) and recent tickets from `GET /tickets`. The status-bar chip only falls back to this list when the chats query has no data.
 - **Settings and GitHub panels** — full-width collapsible panels above the workspace, opened from the header.
 
@@ -471,6 +479,7 @@ they can call `superagent_spawn`, `superagent_town_status`, `superagent_message_
 | `GET` | `/chats/{id}` | Session with `messages` and `events`; `404` for an unknown id. |
 | `POST` | `/chats/{id}/messages` | Append the user message and resume the Hermes session. `409` while a turn is queued/running; `400` when the stored repo is no longer valid; with no `hermes_session_id` a fresh chat is created and `previous_session_id` is returned. |
 | `POST` | `/chats/{id}/model` | Set `{model, provider, reasoning_effort}` for future turns. Any one may be supplied; model/provider still write as a pair (a provider-only change clears the pinned model), while an effort-only change leaves the model alone. `400` when all three are absent or the level is unknown, `409` while queued/running, `404` for an unknown id. |
+| `POST` | `/chats/{id}/dev-loop` | `{enabled, rounds?}` — arm/disarm the Router's development loop and set its round budget (1–20, default 3). Arming resets the round counter; raising the budget of an armed loop keeps its progress. `400` for a worker row, an archived town, a budget out of range, or arming while `allow_router_pr_approve` / `allow_worker_merge_pr` is off (the message names the switches); disarming is always allowed. Returns `{ok, session}`. |
 | `POST` | `/chats/{id}/stop` | Cancel a queued/running turn; `409` when nothing is running. |
 | `POST` | `/chats/{id}/retry` | Re-run the last stored user prompt of a `failed`/`cancelled` chat, resuming its Hermes session when one exists. `409` while a turn is live or for any other status (a `review` chat is a result to read, not to repeat), `400` with no stored user message, `404` unknown. Clears the failed attempt's `error`/`tokens`/`duration_ms` and records one `retry` event; it never appends a second copy of the prompt. |
 | `POST` | `/chats/{id}/pr` | `{title, body?, branch?, base?, draft?, commit_message?}` — commit changes in the session's repository/worktree, push a `superagent/<session_id>` branch, and open or update a GitHub PR. This is a human action from the panel, so it is not gated by a setting; the agent-facing `superagent_pr_create` tool is. Updates `pr_number`/`pr_url` on the session. |
@@ -581,6 +590,8 @@ A new user should be able to choose models and get started without reading the d
 
 By default, closing the loop does not need a push: a finished session leaves its changes in the working tree (or its isolated worker worktree); the plugin can show them and post a comment on the pull request. When you explicitly enable `allow_worker_pr_create` or `allow_router_pr_approve` in **⚙ Settings**, you and your agents can also create feature-branch PRs and submit formal PR reviews (`APPROVE` / `REQUEST_CHANGES`).
 
+**Development loop (Router only).** The Router's chat window carries a **Dev loop** switch next to a round budget (1–20, default 3). Armed, it turns the manual cycle into an automatic one: when a worker opens a pull request, the Router gets one turn to review that PR, approve and merge it when it is sound, and send the worker the next instruction — which starts the worker's next turn and, in time, its next PR. The loop stops by itself after N rounds, or when the switch is turned off; every round is recorded as a `dev_loop` event on the Router, and one that cannot start (missing switches, budget spent) says so once instead of repeating. Arming needs `allow_router_pr_approve` **and** `allow_worker_merge_pr`: the loop uses those permissions, it never grants them. Rounds merge with a merge commit (not squash or rebase), so the worker's branch stays an ancestor of the base and its next PR shows only new work. A PR the Router rejects is not left spinning either: the round ends with the correction as the next instruction, and the same PR comes back for review after the worker's next turn finishes. A PR the loop already merged is never reviewed a second time.
+
 **Diff button (chat header).** Visible whenever the session has a repository. The diff is *lazy*: nothing is fetched until the panel is open, and it is refetched every 4 s only while the turn is `queued`/`running` (a finished session stays still until **Refresh**). The collapsible panel sits between the transcript and the composer (`max-h-22rem`, scrolls) and shows:
 
 - the file count, the repository and a *patch truncated* note when the cap hit;
@@ -622,6 +633,8 @@ hermes superagent comment S-0001 --body-file review.md
 ## Known limitations
 
 - **Workers never commit, push, merge, or post a comment unless the matching switch is explicitly enabled.** By default they edit the working tree (or isolated worker worktree) and the session ends in `review`; publishing (`allow_worker_pr_create` / `allow_issue_pr_create`), merging (`allow_worker_merge_pr`) and replying (`github_reply_on_finish`) are separate opt-in decisions.
+- **The development loop reuses the worker that opened the PR.** Each round messages the same worker with its own worktree and branch rather than spawning a new house, so the town stays inside its twelve plots and the worker keeps its history. That is why rounds merge with a merge commit: squash and rebase would leave the branch's old commits outside the base and the next PR would repeat them. A worker whose worktree was deleted mid-loop fails its next turn instead of silently forking a new one.
+- **A loop round costs one Router turn.** Rounds are counted per started Router turn (not per PR merged), so a review that ends in `REQUEST_CHANGES` also spends one. The budget is a cost ceiling, not a merge counter.
 - **`mini` is the mini-swe-agent architecture, not the `mini-swe-agent` package.** There is no extra Python dependency, `mini` binary or model client: Hermes still owns the model loop, and the worker's step cap is the ordinary `chat_max_turns` / `--max-turns` limit. The toolset guarantees bash is the only action tool; the "exactly one command per step" rule is enforced by the prompt, and the completion marker is a convention recorded as a `submitted` event, not a hard process-level submit.
 - **Contributor-tier models need a host opt-in.** Meta's `…-contributor` (data-training) ids are refused by Hermes in any unattended run unless `config.yaml` has `security.allow_data_training_tiers_noninteractive: true`. Superagent reports that state in `hermes superagent settings` and the panel, refuses the model early with the reason, and can flip the key for you — it does not silently enable a tier that lets the vendor train on your prompts. The opt-in is global to Hermes, not per-Superagent.
 - **The GitHub allow-list is the security boundary.** Empty `github_allowed_users` means **nobody** can trigger work (both for `GitHubWatcher` and `GitHubSource`), and the agent ignores comments from its own login — testing with the account that owns the token produces no sessions.

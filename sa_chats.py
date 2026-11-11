@@ -79,6 +79,9 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     branch_name       TEXT,
     worktree_path     TEXT,
     harness           TEXT,
+    dev_loop          INTEGER,
+    dev_loop_rounds   INTEGER,
+    dev_loop_round    INTEGER,
     created_at        REAL NOT NULL,
     updated_at        REAL NOT NULL,
     started_at        REAL,
@@ -169,6 +172,12 @@ UPDATABLE = (
     # set_archived() is the normal door; the column stays writable so a
     # migration or a repair script can move a whole set in one call.
     "archived_at",
+    # The router's development loop (see sa_devloop): armed flag, round budget
+    # and rounds already spent. They live on the root row because the loop is
+    # one town's policy, not a process-wide setting.
+    "dev_loop",
+    "dev_loop_rounds",
+    "dev_loop_round",
 )
 
 MAX_MESSAGE_CHARS = 20000
@@ -456,6 +465,11 @@ class ChatStore:
         if "issue_number" not in columns:
             # GitHub issue sessions reuse this table; PR rows leave it NULL.
             conn.execute("ALTER TABLE chat_sessions ADD COLUMN issue_number INTEGER")
+        # The development loop is additive too: NULL means "never armed", which
+        # is exactly what every pre-loop row should behave like.
+        for column in ("dev_loop", "dev_loop_rounds", "dev_loop_round"):
+            if column not in columns:
+                conn.execute(f"ALTER TABLE chat_sessions ADD COLUMN {column} INTEGER")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS chat_sessions_archived"
             " ON chat_sessions(archived_at)"
@@ -878,6 +892,28 @@ class ChatStore:
             "running": counts.get(RUNNING, 0),
             "archived_count": archived_count,
         }
+
+    def list_children(self, parent_id: str, *, include_archived: bool = False) -> list[dict]:
+        """Every worker row under one root, oldest first.
+
+        ``list_towns`` answers the same question for a whole board; this is the
+        single-town read the development loop needs, so it does not pull 200
+        towns to inspect one. Archived workers are hidden by default: an
+        archived house is out of play, and neither the loop nor a status line
+        should count it as live work.
+        """
+        root_id = str(parent_id or "").strip()
+        if not root_id:
+            return []
+        clause = " WHERE parent_session_id = ?"
+        if not include_archived:
+            clause += " AND archived_at IS NULL"
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM chat_sessions" + clause + " ORDER BY created_at, id",
+                (root_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def list_towns(self, limit: int = 200, archived: str = "hide") -> dict:
         """Root sessions as towns, each with the workers that belong to it.

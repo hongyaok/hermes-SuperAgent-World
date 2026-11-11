@@ -9,6 +9,7 @@ from typing import Any
 try:
     from . import (
         sa_chats,
+        sa_devloop,
         sa_diff,
         sa_engine,
         sa_github,
@@ -20,6 +21,7 @@ try:
     )
 except ImportError:  # top-level import (root __init__ loaded as `__init__` by pytest)
     import sa_chats  # type: ignore[no-redef]
+    import sa_devloop  # type: ignore[no-redef]
     import sa_diff  # type: ignore[no-redef]
     import sa_engine  # type: ignore[no-redef]
     import sa_github  # type: ignore[no-redef]
@@ -733,6 +735,9 @@ def superagent_pr_merge(args: dict, ctx: Any = None, **kwargs: Any) -> str:
         # the list endpoint and GitHub computes it on demand.
         pr = client.get_pr(pr_number)
         if pr.get("merged"):
+            # Also record it for the town's development loop: an already-merged
+            # PR is finished work, and a later worker turn must not re-review it.
+            sa_devloop.record_merge(store, session_id, pr_number)
             return json.dumps(
                 {"ok": True, "merged": True, "already": True, "pr_number": pr_number}
             )
@@ -769,6 +774,9 @@ def superagent_pr_merge(args: dict, ctx: Any = None, **kwargs: Any) -> str:
 
         detail = f"PR #{pr_number} merged ({merge_method}) {(merged.get('sha') or '').strip()}".strip()
         store.add_event(session_id, "pr_merged", detail)
+        # A landed PR is finished work: the town's development loop must not
+        # spend another round reviewing it after the next worker turn.
+        sa_devloop.record_merge(store, session_id, pr_number)
         if session.get("parent_session_id"):
             store.add_event(str(session["parent_session_id"]), "pr_merged", f"{session_id}: {detail}")
 

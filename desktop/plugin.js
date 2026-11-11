@@ -2968,6 +2968,124 @@ function PresetControl({ presets, active, disabled, onPick, onClear }) {
   })
 }
 
+// The development loop is a per-town policy, so the panel's control lives on
+// the Router's row. These mirror sa_devloop.DEFAULT/MAX_ROUNDS: the backend is
+// the authority, the bounds here only shape the number input.
+const DEV_LOOP_DEFAULT_ROUNDS = 3
+const DEV_LOOP_MIN_ROUNDS = 1
+const DEV_LOOP_MAX_ROUNDS = 20
+
+/** Clamp a typed round budget to what the backend accepts. */
+function clampDevRounds(value) {
+  const number = Math.round(Number(value))
+  if (!Number.isFinite(number)) return DEV_LOOP_DEFAULT_ROUNDS
+  return Math.min(DEV_LOOP_MAX_ROUNDS, Math.max(DEV_LOOP_MIN_ROUNDS, number))
+}
+
+/** Router-only control: arm the town's development loop and set its budget.
+ *
+ *  Armed means: when a worker opens a pull request, the Router gets one turn to
+ *  review it, merge it, and send the worker the next instruction — at most N
+ *  rounds. The two publishing switches in Settings stay the permission; this
+ *  only decides whether the cycle runs by itself. */
+function DevLoopControl({ session }) {
+  const queryClient = useQueryClient()
+  const stored = Number(session.dev_loop_rounds) || DEV_LOOP_DEFAULT_ROUNDS
+  const [rounds, setRounds] = useState(() => stored)
+  const [notice, setNotice] = useState('')
+  const armed = !!session.dev_loop
+  const used = Number(session.dev_loop_round) || 0
+  const total = stored
+
+  // The row is the truth: a poll spends a round and a CLI call can arm the
+  // loop, so the field follows the session instead of a stale local copy.
+  useEffect(() => {
+    setRounds(Number(session.dev_loop_rounds) || DEV_LOOP_DEFAULT_ROUNDS)
+  }, [session.id, session.dev_loop_rounds])
+
+  const save = useMutation({
+    mutationFn: (body) => rest(`/chats/${session.id}/dev-loop`, { method: 'POST', body }),
+    onSuccess: (result) => {
+      // The route always answers `{ok: true}`; anything else (a body-carried
+      // refusal on an older gateway) is shown, not swallowed.
+      if (!result || result.ok !== true) {
+        setNotice(String((result && (result.error || result.detail)) || 'could not save the loop'))
+        return
+      }
+      setNotice('')
+      queryClient.invalidateQueries({ queryKey: [ID, 'chat', session.id] })
+      queryClient.invalidateQueries({ queryKey: [ID, 'chats'] })
+      queryClient.invalidateQueries({ queryKey: [ID, 'towns'] })
+    },
+    onError: (err) => setNotice(errorText(err) || 'could not save the loop'),
+  })
+
+  const write = (enabled, budget) => save.mutate({
+    enabled: !!enabled,
+    rounds: clampDevRounds(budget == null ? rounds : budget),
+  })
+  // The budget is written by the switch or by Enter — never by a blur. A blur
+  // that fired on the way to the checkbox would race the switch's own request,
+  // and the loop could end up armed after the user disarmed it.
+  const commitRounds = () => {
+    const value = clampDevRounds(rounds)
+    setRounds(value)
+    if (value !== stored) write(armed, value)
+  }
+
+  return jsxs('div', {
+    'data-dev-loop': armed ? 'on' : 'off',
+    className: 'flex min-w-0 flex-wrap items-center gap-1 text-[0.6875rem] text-(--ui-text-quaternary)',
+    children: [
+      jsxs('label', {
+        key: 'switch',
+        title: armed
+          ? 'Armed: a worker PR is reviewed, merged and followed by the next instruction'
+          : 'When a worker opens a PR, let the Router review it, merge it and ask for the next step',
+        className: 'flex shrink-0 items-center gap-1',
+        children: [
+          jsx('input', {
+            key: 'i', type: 'checkbox', checked: armed, disabled: save.isPending,
+            'aria-label': 'Development loop',
+            onChange: () => write(!armed),
+            className: 'accent-(--ui-accent)',
+          }),
+          jsx('span', { key: 'l', children: 'Dev loop' }),
+        ],
+      }),
+      jsx('input', {
+        key: 'rounds', type: 'number', min: DEV_LOOP_MIN_ROUNDS, max: DEV_LOOP_MAX_ROUNDS,
+        value: rounds, disabled: save.isPending,
+        'aria-label': 'Development loop rounds',
+        title: `Round budget ${DEV_LOOP_MIN_ROUNDS}-${DEV_LOOP_MAX_ROUNDS} — press Enter to save`,
+        onChange: (event) => setRounds(event.target.value),
+        onBlur: () => setRounds((value) => clampDevRounds(value)),
+        onKeyDown: (event) => { if (event.key === 'Enter') commitRounds() },
+        className: cn('w-10 shrink-0 rounded border border-(--ui-stroke-secondary)',
+          'bg-transparent px-1 py-0.5 text-[0.6875rem] text-(--ui-text-secondary)',
+          'focus:outline-none disabled:opacity-60'),
+      }),
+      jsx('span', { key: 'unit', children: 'rounds' }),
+      armed
+        ? jsx('span', {
+            key: 'progress',
+            title: used >= total
+              ? 'Budget spent: raise it to keep the loop going'
+              : 'Rounds spent of the budget',
+            className: 'shrink-0 tabular-nums text-(--ui-text-tertiary)',
+            children: used >= total ? `· ${used}/${total} spent` : `· ${used}/${total}`,
+          })
+        : null,
+      notice
+        ? jsx('span', {
+            key: 'notice', role: 'status', className: 'basis-full text-(--ui-text-tertiary)',
+            children: notice,
+          })
+        : null,
+    ],
+  })
+}
+
 /** One calm box: the textarea, then a meta row that carries the model/preset,
  *  the repo (new chats only) and the send/stop action. Nothing else is
  *  bordered — an empty composer is one 64px field plus one 30px row. */
@@ -3034,6 +3152,11 @@ function Composer(props) {
           : jsx(SessionModelControl, {
               key: 'model', session, models, pending: modelPending, onChange: onSessionModel,
             }),
+        // The Router owns the town's development loop; a worker row has none
+        // to flip, and an archived chat must not arm it from a read-only box.
+        session && !session.parent_session_id && !archived
+          ? jsx(DevLoopControl, { key: 'devloop', session })
+          : null,
       ]
     : [
         jsx(PresetControl, {
