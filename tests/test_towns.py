@@ -70,7 +70,25 @@ def api(tmp_path, monkeypatch, sa):
     runner = FakeRunner()
     monkeypatch.setattr(module, "_db_path", lambda: db)
     monkeypatch.setattr(module, "_get_runner", lambda: runner)
-    return module, db, runner
+    # Same hermetic HERMES_HOME as settings_api in test_dashboard.py: a
+    # developer's real config.yaml/settings.json must not leak worker_model
+    # into these assertions.
+    home = tmp_path / "hermes"
+    home.mkdir()
+    monkeypatch.setattr(module.sa_settings, "_hermes_home", lambda: home)
+    monkeypatch.setattr(module.sa_settings, "config_path", lambda: home / "config.yaml")
+    for name in module.sa_settings.ENV_VARS.values():
+        monkeypatch.delenv(name, raising=False)
+    module.sa_settings.clear_cache()
+    yield module, db, runner
+    module.sa_settings.clear_cache()
+
+
+def write_settings(tmp_path, **values):
+    """Write settings.json into the api fixture's throwaway Hermes home."""
+    data_dir = tmp_path / "hermes" / "plugin-data" / "superagent"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / "settings.json").write_text(json.dumps(values), encoding="utf-8")
 
 
 # -- migration -------------------------------------------------------------
@@ -292,6 +310,36 @@ def test_towns_endpoint_groups_and_reports_orphans(api):
     body = module.list_towns()
     assert body["towns"] == []
     assert body["orphaned_count"] == 1
+
+
+def test_worker_model_setting_beats_the_router_session(tmp_path, api):
+    module, _db, _runner = api
+    write_settings(
+        tmp_path, worker_model="worker-set-model", worker_provider="worker-set-provider"
+    )
+    module.sa_settings.clear_cache()
+
+    root = module.create_chat(
+        {"prompt": "root", "model": "router-model", "provider": "router-provider"}
+    )["session"]
+    worker = module.create_chat(
+        {"prompt": "worker", "parent_session_id": root["id"]}
+    )["session"]
+    explicit = module.create_chat(
+        {
+            "prompt": "worker with a model",
+            "parent_session_id": root["id"],
+            "model": "requested-model",
+            "provider": "requested-provider",
+        }
+    )["session"]
+
+    # Documented order: explicit request, then worker_model, then the router.
+    assert root["model"] == "router-model"
+    assert worker["model"] == "worker-set-model"
+    assert worker["provider"] == "worker-set-provider"
+    assert explicit["model"] == "requested-model"
+    assert explicit["provider"] == "requested-provider"
 
 
 def test_api_rejects_invalid_parent_relationships(api):
